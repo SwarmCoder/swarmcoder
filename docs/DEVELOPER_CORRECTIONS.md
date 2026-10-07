@@ -6091,3 +6091,102 @@ read by the store's own handling of an added field, as `purpose` and `hard` were
 no test opens such a store. The Guidelines screen does not show or edit a rule's part. A rule
 written by hand or proposed by a model has no part. The tool definitions (about 30) are not
 measured in the opening figure.
+
+## 66. A task planned before the type it uses, and four things the run cost for (run 90, 2026-10-07)
+
+Run 90: local models, HamBook, one story ("start and end of a contact are typed as a UTC date
+and time"). PARKED and stopped: 4,613,245 input and 249,501 output tokens, nothing delivered.
+The assessment of the model as architect and planner is not kept in this repository. Nothing
+below was measured in a live run.
+
+**1. The plan ran "use `UtcDateTime` in two screens" before "create `UtcDateTime`".** The
+planner wrote both edges the wrong way round (`{"from":"task-3","to":"task-1"}`), while the same
+task's read set named `UtcDateTime.java`. `TypeDependencyOrder` logged "read as describing what
+a later task builds on its work, which is normal" and kept the order.
+
+- That reading is now taken only when it can be true: the type is in the start tree
+  (`TypeDependencyOrder.StartTree`: a write-set file on disk, or a type `ProjectTypes` reads), or
+  the later task itself uses a new type of the naming task (run 40's shape). Otherwise it is an
+  objection with the pair and the edge to write.
+- A read set entry that is the file of a type another task creates counts like a contract: the
+  edge is added when nothing orders the two, and it is an objection when the plan orders them
+  the other way.
+- **Sent back, not turned round.** With no order between the two the edge is added, as before.
+  Where the planner ordered them the other way it said two things that cannot both hold, and
+  which one is wrong is not a mechanical fact; `check_plan` shows it inside the session.
+- The plan's answer format said `"edges":[{"from","to"}]`. It now says which is the task that
+  must finish first and which waits.
+- The write-set side needed nothing: two tasks that name one file and have no order between
+  them are already refused (`checkWriteSetDisjointness`); a test now says so.
+- Cost: a prose mention of a type to come, in a task planned first, with nothing the later task
+  uses of it, now costs the planner a turn. `PlanObjectionsSayHowTest` had exactly that fixture
+  as "left as planned"; it now has both tasks name each other.
+
+**2. Every first candidate failed for writing a file of a task not yet run, and a repair round
+followed.** First round 1,970,345 input / 44,758 output tokens; repair round 640,071 / 52,320.
+`FileOfATaskNotYetRun` (before the repair round, after `RepairCannotHelp`): every verified
+candidate wrote the same source file outside the write set, and a task beside or after this one
+owns it - no repair round, BLOCKED with a message that names the pair. One candidate alone
+counts only when the task's read set names the file. Not built: reordering at run time or going
+back to the planner from EXECUTING. The waves are fixed at the start and the tests are already
+claimed by task, so the run still parks; item 1 is what prevents it.
+
+**3. 29 of 29 rules had no part of the project.** Established: the analyst was given the three
+module folders (`ProjectParts.of` on the run's start tree gives exactly them; now tested on a
+real graph, it had only been tested on a list of file names); the field travels from reply to
+stored rule; nothing dropped it. The stored proposals have no `AppliesTo` line: the model left an
+optional field out every time. It also left out the required `purpose` on 28 of 29 (run 89: on
+none of 38).
+
+- The prompt now asks for the field on every rule, with `[]` for the whole project; an empty
+  list is shown and stored as `AppliesTo: the whole project`.
+- `RequirementsIntake.askWhichPart`: when the project has two or more module folders and no
+  rule of the batch has an `AppliesTo` line, the analyst is asked once, by rule number. Only a
+  folder that is exactly one of those given is recorded; anything else stays the whole project.
+  One analyst call (about 9,000 input tokens in run 90's size).
+- Left: whether this model then answers with parts is not known without a run. No re-ask for a
+  missing `purpose`.
+
+**4. The worker's knowledge brief: 4,787 tokens on each of 110 calls.** 19,150 characters:
+libraries 760, documentation map 4,804, worked example 13,586 - four files of a reference chat
+client, shown as "how to build" two screens the project already had. `Librarian.createsNoFile`:
+a task whose write set is only files the tree already holds is shown no example; a short note
+names `body_of` and `find_example` in its place (not blank, or the documentation slice, primer
+and sources the example displaces would come back). On run 90's task about 13,100 characters
+less: about 3,300 tokens a call, 360,000 input tokens over 110 calls (estimate).
+
+- **Needs the owner.** A task that creates a new type still gets its example pasted (2,406
+  characters for run 90's first task, up to 16,000). `AWorkerIsShownHowThisCodebaseDoesItTest`
+  records why: without the code in front of it a model spent 467 turns disassembling jars and
+  wrote nothing. Moving that example behind `find_example` is the rule of CLAUDE.md section 1
+  against that measurement; not done.
+
+**5. The architect: 45,697 input tokens a call.** Worked out from the log (lookup size times the
+calls that followed it, 4 characters a token), of 1,279,519 input tokens: 12 whole files about
+395,000; tree and language-server queries about 150,000; document sections and searches about
+204,000; the opening about 183,000; the rest its own replies and the tool definitions. The 12:
+both contact screens and the logbook screen (38,332 characters, 214,000 tokens), three
+acceptance tests (21,763, 122,000), `AGENTS.md` (8,151), three classes of text constants
+(9,110), the service interface (2,062), the verification contract (4,837).
+
+- Tool gaps, fixed: `texts_of` was offered to the test author of a screen task only; every role
+  has it now. `outline_of` refused a path from the repository root, which `read_file` takes
+  (the test author then read an 11,485-character file whole); it takes both now.
+- Not a tool gap: the screens, the tests and the interface are in the tree and `body_of`
+  returns them; the expert, the same model, read the same code that way. The architect read
+  four files whole in its second and third turn, against its instructions.
+- No query: the verification contract (a YAML file at the root). Left.
+- **Needs the owner.** Nothing in the architect's conversation was ever shortened: on a server
+  that reports cache hits old results are left alone until they fill a quarter of the room
+  (65,536 tokens here; section 53), and 88% of its input was cache hits. Counted as raw tokens
+  that is the 45,697; counted as a cloud bill it is small. Which to count decides the mark.
+
+**Tests.** `APlanDoesNotRunATaskBeforeTheTypeItUsesExistsTest`,
+`NoRepairRoundWhenEveryCandidateWroteAFileOfATaskNotYetRunTest`,
+`WhatRun90sRolesCouldNotAskTheTreeTest`; cases in `StatedRulesBecomeGuidelinesTest`,
+`ExamplesReachEveryRoleTest`, `AWorkerIsShownHowThisCodebaseDoesItTest`; fixtures in
+`PlanObjectionsSayHowTest`, `TheExpertLooksThingsUpItselfTest`.
+
+**Seen in passing, not touched.** Both first candidates' browser stage "could not be attempted:
+port 8080 is already in use on this machine". The design's descriptor and service method are
+used by no screen; the reachability check cannot see an uncalled member (section 62).

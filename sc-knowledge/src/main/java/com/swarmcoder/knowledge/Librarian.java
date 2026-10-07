@@ -615,6 +615,12 @@ public class Librarian {
     private String workedExample(Path repoRoot, Task task, int budgetChars, ChangeRequest change) {
         List<ApiContract> contracts = task.deliveredContracts();
         Set<String> writeSet = task.writeSet() == null ? Set.<String>of() : task.writeSet();
+        if (change == null && createsNoFile(repoRoot, writeSet)) {
+            log.info("no worked example for task '{}': every file it may write already exists, "
+                + "so it changes code and builds no new type; the code it changes is its example",
+                task.title());
+            return CHANGES_EXISTING_CODE;
+        }
         try {
             Set<String> words = TaskBrief.taskWords(task.title(), task.instructions());
             WorkedExamples.Selection selection = contracts == null || contracts.isEmpty()
@@ -676,6 +682,50 @@ public class Librarian {
             log.warn("worked-example selection failed for task '{}': {}", task.title(),
                 e.getMessage());
             return "";
+        }
+    }
+
+    /**
+     * What stands in a brief where the worked example would be, for a task that creates no file.
+     *
+     * <p>Live run 90, 2026-10-07 (section 66). "Use UtcDateTime in add/edit contact screens"
+     * might write two screens the project already had. Its brief carried "the nearest working
+     * example, in full" of how to BUILD such a screen: four files of a chat example from the
+     * reference material, 13,586 characters, 71% of the brief, sent again on each of 110 worker
+     * calls. A task that creates nothing is not shown how to create something: the code it
+     * changes is in its own checkout, one {@code body_of} away, and that is the example.
+     *
+     * <p>It is not blank on purpose. A blank answer means "no example was found" and brings
+     * back the documentation slice, the primer and the reference sources the example displaces
+     * - more pasted text, for a task that needs less.
+     */
+    static final String CHANGES_EXISTING_CODE = "\n### The code this task changes is its own "
+        + "example\nEvery file this task may write is already in your checkout, so no example "
+        + "of how to build one is pasted here. body_of <Type>, or body_of <Type>#<member>, "
+        + "returns the code you are changing. When you want to see how something is written in "
+        + "this project or its library, call find_example with the types you are working with: "
+        + "it returns one whole file of real code that uses them.\n";
+
+    /**
+     * True when every entry of the write set is a file the tree already holds: read from the
+     * tree, never from the task's wording. A folder, a file that is not there yet, an empty
+     * write set (unrestricted) or a tree that cannot be read all answer false, and the task is
+     * then shown an example as before.
+     */
+    static boolean createsNoFile(Path repoRoot, Set<String> writeSet) {
+        if (repoRoot == null || writeSet == null || writeSet.isEmpty()) {
+            return false;
+        }
+        try {
+            for (String entry : writeSet) {
+                if (entry == null || entry.isBlank()
+                        || !Files.isRegularFile(repoRoot.resolve(entry.strip()))) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (RuntimeException unreadable) {                             // noqa
+            return false;
         }
     }
 

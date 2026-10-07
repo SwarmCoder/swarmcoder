@@ -958,6 +958,16 @@ public final class ExpertTools {
                 + "the whole type as code - no comments, no imports. This is how you read code: "
                 + "ask for the members you need, not for the file they are in.",
             this, method("bodyOf", String.class)));
+        // Every role, not only the test author of a screen (live run 90, section 66): the
+        // architect read three classes of text constants whole, 9,110 characters, to learn four
+        // labels, because public_shape gives a constant's name and not its value and no query it
+        // had gave the value.
+        all.add(new ToolBinding("texts_of",
+            "The texts a type holds - every string literal in it, by member, with its "
+                + "annotations' arguments - and no code: what a screen shows, what a class of "
+                + "text constants holds, what a route or a message is called. Give a type name. "
+                + "Use it instead of reading the file when what you need is the wording.",
+            this, method("textsOf", String.class)));
         all.add(new ToolBinding("doc_outline",
             "The project's written documents by their structure. An empty string: every "
                 + "document with its sections. A document's address: each of its headings with "
@@ -1001,7 +1011,8 @@ public final class ExpertTools {
         List<String> order = List.of("public_shape", "types_in", "body_of", "find_usages",
             "find_implementations", "supertypes_of", "callers_of", "callees_of", "find_symbol",
             "outline_of", "doc_of", "files_using", "types_annotated_with", "call_chain",
-            "build_of", "resources_of", "dependency_declaring", "doc_outline", "doc_section", "doc_search",
+            "build_of", "resources_of", "texts_of", "dependency_declaring", "doc_outline", "doc_section",
+            "doc_search",
             "search");
         List<ToolBinding> ordered = new ArrayList<>();
         for (String name : order) {
@@ -1160,9 +1171,9 @@ public final class ExpertTools {
     }
 
     /**
-     * The string literals of a type, by member (section 63). Not in every session's list: the
-     * test author is offered it when its task changes a screen, to learn what the application
-     * shows and how its screens are named without reading the code that draws them.
+     * The string literals of a type, by member (section 63): what the application shows and how
+     * its screens are named, without the code that draws them. In every session's list since
+     * section 66; the test author of a screen task is told what to use it for.
      */
     public String textsOf(String type) {
         return run("texts_of", type, () -> new TreeQueries(curator).textsOf(type));

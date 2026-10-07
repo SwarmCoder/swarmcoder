@@ -213,11 +213,22 @@ class AWorkerIsShownHowThisCodebaseDoesItTest {
         // A task with no fixed types whose own file resembles nothing in the reference material
         // either. (A task with no contract that writes an OrderServiceImpl is now shown the
         // PayslipServiceImpl — see ExamplesReachEveryRoleTest — so it no longer stands for this.)
+        // The file is one the task creates. A task that may write only files the project
+        // already has is shown no example and none of these channels (live run 90, section 66):
+        // the code it changes is its example - asserted last.
         Task nothingLikeIt = taskWithNoContracts();
         nothingLikeIt.setWriteSet(
-            Set.of("orders-app-service/src/main/java/com/acme/orders/service/Startup.java"));
+            Set.of("orders-app-service/src/main/java/com/acme/orders/service/Housekeeping.java"));
         String withoutExample = librarian.assembleBrief(project, nothingLikeIt)
             .renderedMarkdown();
+        Task changesWhatIsThere = taskWithNoContracts();
+        changesWhatIsThere.setWriteSet(
+            Set.of("orders-app-service/src/main/java/com/acme/orders/service/Startup.java"));
+        assertThat(librarian.assembleBrief(project, changesWhatIsThere).renderedMarkdown())
+            .contains("The code this task changes is its own example")
+            .doesNotContain("How this codebase does this")
+            .doesNotContain("Reference sources relevant to this task")
+            .contains("Reference documentation you can read");
 
         assertThat(withoutExample)
             .as("a task that resembles nothing still gets the old guessed-at channels")

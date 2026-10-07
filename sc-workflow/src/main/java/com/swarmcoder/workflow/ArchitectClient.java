@@ -1300,7 +1300,8 @@ public class ArchitectClient {
         + "JSON: {\"tasks\":[{\"id\",\"title\",\"instructions\",\"writeSet\":[],"
         + "\"readSet\":[],\"criteria\":[{\"text\",\"testClassOrFile\"}],"
         + "\"criterionRefs\":[\"R7:C1\"],\"deliversContracts\":[\"<contract name>\"]}],"
-        + "\"edges\":[{\"from\",\"to\"}]}";
+        + "\"edges\":[{\"from\":\"<id of the task that must FINISH FIRST>\","
+        + "\"to\":\"<id of the task that WAITS for it>\"}]}";
 
     /**
      * One PLAN attempt, real by construction: it never invents a plan by itself, and whatever it
@@ -1585,7 +1586,8 @@ public class ArchitectClient {
                 + "there. Output JSON: "
                 + "{\"tasks\":[{\"id\",\"title\",\"instructions\",\"writeSet\":[],\"readSet\":[],"
                 + "\"criteria\":[{\"text\",\"testClassOrFile\"}],\"requirementRefs\":[\"R1\"]}],"
-                + "\"edges\":[{\"from\",\"to\"}]}",
+                + "\"edges\":[{\"from\":\"<id of the task that must FINISH FIRST>\","
+                + "\"to\":\"<id of the task that WAITS for it>\"}]}",
                 constraintPreamble(constraintBrief) + "Goal: " + goal + nullSafe(repoLayoutBrief)
                     + (design == null ? "" : "\n\nDesign:\n" + designSummary(design))
                     + exampleBlock(design, goal),

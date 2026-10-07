@@ -9,6 +9,20 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ## [Unreleased]
 
+### Changed
+
+- **A plan that orders a task before the task that creates a type it needs is refused.** The plan
+  check names the two tasks and the edge to write, so the plan is sent back instead of running a
+  task against a type that does not exist yet.
+- **No repair round when every candidate wrote a file that belongs to another task.** The task is
+  blocked with the pair named, rather than repeating a round that cannot succeed.
+- **The analyst is asked which part of the project each rule applies to** (a module or the whole
+  project), when the project has parts and no rule of a batch says anything about its part.
+- **A worker that changes only existing files is no longer shown a pasted example** of how the
+  codebase does it; the files it changes are the example.
+- **`texts_of` is available to every role**, and **`outline_of` accepts a path from the
+  repository root.**
+
 ## [0.1.0] - 2026-10-07
 
 The first public release, under the Apache License 2.0.

@@ -478,7 +478,11 @@ public final class LookupAgent {
                 Math.max(0, ask.limits().maxExpertQuestions()),
                 Math.max(0, ask.limits().maxRepeats())));
         List<ToolBinding> bindings = new ArrayList<>(tools.lookupBindings());
-        bindings.addAll(ask.ownTools().apply(tools));
+        // One tool of a name: a role's own tool replaces the session's (the test author of a
+        // screen task says what texts_of is for there).
+        List<ToolBinding> own = ask.ownTools().apply(tools);
+        bindings.removeIf(tool -> own.stream().anyMatch(o -> o.name().equals(tool.name())));
+        bindings.addAll(own);
         String system = ask.system()
             + toolGuide(bindings.stream().map(ToolBinding::name).toList());
 

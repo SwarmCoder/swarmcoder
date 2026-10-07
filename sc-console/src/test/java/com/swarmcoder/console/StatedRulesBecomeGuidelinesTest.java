@@ -267,6 +267,90 @@ class StatedRulesBecomeGuidelinesTest {
         RecordingRules.Stated frameworks = rules.stated.stream()
             .filter(s -> s.title().equals("No frameworks")).findFirst().orElseThrow();
         assertThat(frameworks.appliesTo()).as("no part given: the whole project").isEmpty();
+        assertThat(analyst.seen).as("the analyst used the field, so it is not asked again")
+            .noneMatch(m -> m.contains("THE RULES YOU STATED"));
+    }
+
+    /**
+     * Live run 90 (section 66): the analyst was given the module folders and stated 29 rules,
+     * none with a part, so every worker was sent all of them. A batch in which no rule says
+     * anything of its part is asked about once; only a folder that is in the list is recorded.
+     */
+    @Test
+    void rulesThatSayNothingOfTheirPartAreAskedAboutOnce() throws Exception {
+        rules = new RecordingRules();
+        rules.modules = List.of("client", "server");
+        ScriptedAnalyst analyst = new ScriptedAnalyst("{\"questions\":[]}", """
+            {"proposals":[\
+            {"kind":"ADD","ref":"N1","title":"Screens are descriptors",\
+            "rationale":"the document says so","priority":"HIGH","requirementKind":"CONSTRAINT",\
+            "text":"A screen is drawn from a descriptor.","criteria":[]},\
+            {"kind":"ADD","ref":"N2","title":"No frameworks",\
+            "rationale":"the document says so","priority":"HIGH","requirementKind":"CONSTRAINT",\
+            "text":"Do not use Spring anywhere.","criteria":[]},\
+            {"kind":"ADD","ref":"N3","title":"Stores save each level",\
+            "rationale":"the document says so","priority":"HIGH","requirementKind":"CONSTRAINT",\
+            "text":"Every changed level needs its own save.","criteria":[]},\
+            {"kind":"ADD","ref":"N4","title":"Pages are plain",\
+            "rationale":"the document says so","priority":"HIGH","requirementKind":"CONSTRAINT",\
+            "text":"No hand-written CSS.","criteria":[]}\
+            ]}""", """
+            {"appliesTo":[{"rule":1,"folders":["client"]},{"rule":2,"folders":[]},\
+            {"rule":4,"folders":["frontend"]},{"rule":9,"folders":["server"]}]}""");
+        applyTheDocument(analyst, "Screens are descriptors. No Spring. Stores save each level. "
+            + "No hand-written CSS.");
+
+        List<String> asked = analyst.seen.stream()
+            .filter(m -> m.contains("THE RULES YOU STATED")).toList();
+        assertThat(asked).as("asked once, with the folders and the rules by number").hasSize(1);
+        assertThat(asked.get(0)).contains(RequirementsIntake.PARTS_HEADING)
+            .contains("client\nserver")
+            .contains("1. Screens are descriptors").contains("4. Pages are plain");
+        assertThat(partOf("Screens are descriptors")).containsExactly("client");
+        assertThat(partOf("No frameworks")).as("answered: the whole project").isEmpty();
+        assertThat(partOf("Stores save each level")).as("not answered: the whole project").isEmpty();
+        assertThat(partOf("Pages are plain"))
+            .as("a folder that is not in the list is never recorded").isEmpty();
+    }
+
+    @Test
+    void anAnalystThatAnsweredTheWholeProjectForEveryRuleIsNotAskedAgain() throws Exception {
+        rules = new RecordingRules();
+        rules.modules = List.of("client", "server");
+        ScriptedAnalyst analyst = new ScriptedAnalyst("{\"questions\":[]}", """
+            {"proposals":[\
+            {"kind":"ADD","ref":"N1","title":"No frameworks",\
+            "rationale":"the document says so","priority":"HIGH","requirementKind":"CONSTRAINT",\
+            "text":"Do not use Spring anywhere.","appliesTo":[],"criteria":[]}\
+            ]}""");
+        applyTheDocument(analyst, "No Spring.");
+
+        assertThat(analyst.seen).noneMatch(m -> m.contains("THE RULES YOU STATED"));
+        assertThat(partOf("No frameworks")).isEmpty();
+    }
+
+    private List<String> partOf(String title) {
+        return rules.stated.stream().filter(s -> s.title().equals(title)).findFirst()
+            .orElseThrow().appliesTo();
+    }
+
+    /** One technical document through the real intake, every proposal applied. */
+    private void applyTheDocument(ScriptedAnalyst analyst, String text) throws Exception {
+        ConsoleContext.set(new ConsoleContext(store, new TraceHub(null),
+            (goal, kind) -> null, r -> { }, r -> { })
+            .withProjects(List::of, () -> projectId, (n, p, c) -> null, id -> { })
+            .withChat(analyst)
+            .withGuidelineControl(rules));
+        DocumentIngest.Result result = DocumentIngest.ingest(store, null, projectId,
+            "tech-notes.md", "text/markdown", text.getBytes(StandardCharsets.UTF_8));
+        assertThat(result.failed()).describedAs(result.error()).isFalse();
+        String flowId = flows.intake().flow().id().toString();
+        assertThat(flows.addDocument(flowId, result.document().id().toString(), null)).isEmpty();
+        assertThat(flows.setDocumentTechnical(flowId, result.document().id().toString(), true))
+            .isEmpty();
+        assertThat(flows.start(flowId)).isEmpty();
+        await(flowId, GuidedFlowState.REVIEW);
+        assertThat(flows.apply(flowId)).isEmpty();
     }
 
     // --- fixtures ---------------------------------------------------------------------------
