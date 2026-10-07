@@ -245,6 +245,42 @@ class ExamplesReachEveryRoleTest {
             .doesNotContain("KitchenServiceImpl");
     }
 
+    /**
+     * Live run 90 (section 66): a task that might write only two screens the project already
+     * had was sent four files of a reference example, 13,586 characters, on each of 110 calls.
+     */
+    @Test
+    void aTaskThatCreatesNoFileIsNotShownHowToBuildOne() {
+        String existing =
+            "orders-service/src/main/java/com/acme/orders/service/LegacyServiceImpl.java";
+        Task change = new Task(UUID.fromString("00000000-0000-0000-0000-0000000000b3"), 1L,
+            "Use the node in the legacy service",
+            "In LegacyServiceImpl reach the data through the injected LedgerNode.",
+            Set.of(existing, "orders-service/pom.xml"), Set.of(), List.of(),
+            "src/test/java/swarm/accept", null, null,
+            new SwarmPolicy(4, false, 0.1, 0.8, List.of()), TaskState.PENDING);
+
+        String brief = librarian.assembleBrief(project, change).renderedMarkdown();
+
+        assertThat(brief)
+            .contains("The code this task changes is its own example")
+            .contains("body_of").contains("find_example")
+            .as("no example of how to build a type, from anywhere")
+            .doesNotContain("How this codebase does this")
+            .doesNotContain("node.append(new PayslipRecorded(payslip));")
+            .as("and what an example displaces does not come back in its place")
+            .doesNotContain("Documentation relevant to this task")
+            .doesNotContain("Reference sources relevant to this task");
+        assertThat(Librarian.createsNoFile(project, Set.of(existing))).isTrue();
+        assertThat(Librarian.createsNoFile(project, Set.of(existing,
+            "orders-service/src/main/java/com/acme/orders/service/OrderServiceImpl.java")))
+            .as("one file that is not there yet: the task builds something").isFalse();
+        assertThat(Librarian.createsNoFile(project, Set.of("orders-service/src/main/java")))
+            .as("a folder may hold a new file").isFalse();
+        assertThat(Librarian.createsNoFile(project, Set.of()))
+            .as("an empty write set is unrestricted").isFalse();
+    }
+
     @Test
     void theTypeMayBeNamedOnlyByTheProjectsRules() {
         librarian.setProjectRules(() -> RULES);

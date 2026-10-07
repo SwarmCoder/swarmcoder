@@ -1561,6 +1561,23 @@ public class SwarmEngineImpl implements SwarmEngine {
                     widenOrBlameThePlan(task, runId, outside, archivePool);
                     return null;
                 }
+                // Every candidate wrote the same source file of a task that has not run yet
+                // (live run 90, 2026-10-07): the plan ran the two in the wrong order, and a
+                // repair round with the same order cannot succeed. See FileOfATaskNotYetRun.
+                FileOfATaskNotYetRun.Finding wrongOrder =
+                    FileOfATaskNotYetRun.find(task, verified, wavesOf(runId));
+                if (wrongOrder != null) {
+                    log.warn("Task '{}': every verified candidate ({}) wrote {}, outside the "
+                        + "task's write set and owned by {}, which the plan runs beside or after "
+                        + "it. No repair round - it could not succeed. BLOCKED: the plan is at "
+                        + "fault, not the candidates.", task.title(), wrongOrder.candidates(),
+                        wrongOrder.files().keySet(), wrongOrder.owners());
+                    markTaskState(task, TaskState.BLOCKED);
+                    queueBlockedDecision(task, runId, archivePool,
+                        FileOfATaskNotYetRun.planBlame(task, wrongOrder));
+                    archiveCandidates(archivePool, null);
+                    return null;
+                }
                 final long repairStarted = System.currentTimeMillis();
                 List<CandidateSolution> repaired = repairRound(task, runId, verified, allResults,
                     knowledgeBrief, guidelines, guidelineChecks);
@@ -2690,6 +2707,17 @@ public class SwarmEngineImpl implements SwarmEngine {
         log.warn("Task '{}': it may now also edit {} and is built again once", task.title(),
             files);
         return true;
+    }
+
+    /** The plan's waves for a run, or null when the plan cannot be read. */
+    private List<List<Task>> wavesOf(UUID runId) {
+        Run run = runsInFlight.get(runId);
+        if (run == null) {
+            run = artifactStore.root().runs.get(runId);
+        }
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        return graph == null ? null : topologicalWaves(graph);
     }
 
     /**

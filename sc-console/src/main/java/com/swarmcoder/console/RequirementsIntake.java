@@ -618,6 +618,16 @@ final class RequirementsIntake {
                 }
             }
         }
+        // WHICH PART OF THE PROJECT EACH RULE IS ABOUT (live run 90, 2026-10-07, section 66): the
+        // analyst was given the three module folders and stated 29 rules, none with a part, so
+        // every worker of every task was sent all 29 on every call. A batch in which no rule
+        // says anything about its part is asked once. See askWhichPart.
+        if (containsConstraint(proposals)) {
+            askWhichPart(context, flowId, brief, moduleFolders(context), proposals);
+            if (cancelled.get()) {
+                return;
+            }
+        }
         // Relationships are validated HERE — once the batch is final, after every reask merge above
         // has had its say, and before anything is written or even saved for review. A dangling
         // handle caught this early is dropped from the one proposal that named it; the batch's other
@@ -1166,15 +1176,147 @@ final class RequirementsIntake {
      * when the project has no tree yet or one module, where there is nothing to choose between.
      */
     static String partsOfTheProject(ConsoleContext context) {
-        ConsoleContext.GuidelineControl rules =
-            context == null ? null : context.guidelineControl();
-        List<String> modules = rules == null ? List.of() : rules.ruleScopes();
-        if (modules == null || modules.size() < 2) {
+        List<String> modules = moduleFolders(context);
+        if (modules.isEmpty()) {
             return "";
         }
         return "\n\n=== " + PARTS_HEADING + " (its module folders, from the project's tree) "
             + "===\n" + String.join("\n", modules) + "\n";
     }
+
+    /** The module folders a rule may be recorded for; empty when there are fewer than two. */
+    private static List<String> moduleFolders(ConsoleContext context) {
+        ConsoleContext.GuidelineControl rules =
+            context == null ? null : context.guidelineControl();
+        List<String> modules = rules == null ? List.of() : rules.ruleScopes();
+        return modules == null || modules.size() < 2 ? List.of() : List.copyOf(modules);
+    }
+
+    /**
+     * Asks the analyst, once, which part of the project each stated rule is about - when the
+     * project has parts to choose between and NO rule of the batch says anything about its part.
+     *
+     * <p><b>The run this exists because of.</b> Live run 90, 2026-10-07: the analyst was given
+     * {@code hambook-client}, {@code hambook-server} and {@code hambook-shared} under
+     * {@link #PARTS_HEADING} (checked afterwards against the run's start tree: the object graph
+     * gives exactly those three), the field travelled from its reply to the stored rule, nothing
+     * dropped it - and not one of its 29 proposals carried it, though the document states its
+     * screen rules under "The browser screen" and its storage rules under "Storage is an object
+     * graph". The field was optional and the prompt said leaving it out is always safe, so a
+     * model that skips what it may skip left it out every time. Every worker of the run was then
+     * sent all 29 rules on each of 110 calls (2,725 tokens a call).
+     *
+     * <p><b>What decides that it is asked.</b> Not the wording of any rule: only that the
+     * project has two or more module folders and that no rule proposal of the batch has an
+     * {@code AppliesTo} line - neither folders nor "the whole project". A batch where the
+     * analyst used the field on some rules has answered the question for the others.
+     *
+     * <p><b>What is taken from the answer.</b> A folder is recorded only when it is, character
+     * for character, one of the folders given; an empty list is recorded as the whole project; a
+     * rule the answer leaves out, or answers only with folders that are not in the list, stays
+     * as it was - a rule of the whole project, which is always safe. The line is added to the
+     * proposal the operator reviews, so the part is something they can see and change.
+     */
+    private static void askWhichPart(ConsoleContext context, UUID flowId, String documents,
+                                     List<String> folders, List<FlowProposal> proposals)
+            throws Exception {
+        if (folders.isEmpty()) {
+            return;
+        }
+        List<FlowProposal> rules = new ArrayList<>();
+        for (FlowProposal proposal : proposals) {
+            if (!isConstraint(proposal)) {
+                continue;
+            }
+            if (Draft.statesItsPart(proposal.after())) {
+                return; // the analyst used the field: the question has been answered
+            }
+            rules.add(proposal);
+        }
+        if (rules.isEmpty()) {
+            return;
+        }
+        log.info("Intake {}: none of the {} rule(s) stated says which part of the project it is "
+            + "about, and the project has {} - asking once", flowId, rules.size(), folders);
+        StringBuilder listed = new StringBuilder();
+        for (int i = 0; i < rules.size(); i++) {
+            Draft draft = Draft.parse(rules.get(i).after());
+            String said = draft.excerpt() == null || draft.excerpt().isBlank()
+                ? draft.text() : draft.excerpt();
+            listed.append(i + 1).append(". ").append(rules.get(i).title()).append(" - ")
+                .append(said == null ? "" : said).append('\n');
+        }
+        String reply = call(context, List.of(
+            Map.of("role", "system", "content", WHICH_PART_PROMPT),
+            Map.of("role", "user", "content", documents + "\n\n=== " + PARTS_HEADING + " ===\n"
+                + String.join("\n", folders) + "\n\n=== THE RULES YOU STATED ===\n" + listed)));
+        JsonNode root;
+        try {
+            root = LlmJson.readTree(JSON, reply);
+        } catch (IOException unreadable) {
+            log.warn("Intake {}: the answer to which part each rule is about was not JSON ({}); "
+                + "every rule stays a rule of the whole project", flowId, unreadable.getMessage());
+            return;
+        }
+        int part = 0;
+        int whole = 0;
+        Set<Integer> answered = new HashSet<>();
+        for (JsonNode entry : root.path("appliesTo")) {
+            int number = entry.path("rule").asInt(0);
+            if (number < 1 || number > rules.size() || !answered.add(number)
+                    || !entry.path("folders").isArray()) {
+                continue;
+            }
+            List<String> named = new ArrayList<>();
+            boolean unknown = false;
+            for (JsonNode folder : entry.path("folders")) {
+                String asked = folder.asText("").strip();
+                if (folders.contains(asked)) {
+                    if (!named.contains(asked)) {
+                        named.add(asked);
+                    }
+                } else if (!asked.isEmpty()) {
+                    unknown = true;
+                }
+            }
+            if (unknown) {
+                // A folder that is not in the list: narrowing to the rest could leave the rule
+                // told to nobody who needs it. It stays a rule of the whole project (section 65).
+                continue;
+            }
+            FlowProposal rule = rules.get(number - 1);
+            String block = rule.after() == null ? "" : rule.after();
+            rule.setAfter(block + (block.isEmpty() || block.endsWith("\n") ? "" : "\n")
+                + Draft.APPLIES_TO_KEY + ": "
+                + (named.isEmpty() ? Draft.WHOLE_PROJECT : String.join(", ", named)) + "\n");
+            if (named.isEmpty()) {
+                whole++;
+            } else {
+                part++;
+            }
+        }
+        log.info("Intake {}: of {} rule(s) asked about, {} recorded for a part of the project, {} "
+            + "for the whole project, {} left as rules of the whole project because the answer "
+            + "did not say", flowId, rules.size(), part, whole, rules.size() - part - whole);
+    }
+
+    /** What the analyst is asked when it stated rules and said of none which part it is about. */
+    private static final String WHICH_PART_PROMPT = """
+        You stated the rules listed at the end from the documents below, and said of none of them \
+        which part of the project it is about. A rule is sent to everyone who works on the part \
+        it is recorded for, on every call they make, so a rule about one part that is recorded \
+        for the whole project is paid for by all the work it does not govern.
+
+        For EVERY rule in the list, answer with the folders whose code the rule governs, copied \
+        exactly from the list of parts. The documents say which part a rule is about when the \
+        rule stands under a heading about that part, when it names that part or one of its \
+        packages, or when it is about a kind of code the documents place in that part. Answer \
+        with an empty list for a rule about the whole project, for a rule about how the parts \
+        fit together, and whenever the documents do not say: an empty list is always safe. \
+        Never write a folder that is not in the list of parts.
+
+        Reply with JSON ONLY, no prose and no code fence, one entry per rule, by its number:
+        {"appliesTo":[{"rule":1,"folders":["a folder from the list"]},{"rule":2,"folders":[]}]}""";
 
     /**
      * Records one stated rule through the seam that owns the project's rules.
@@ -1797,13 +1939,16 @@ final class RequirementsIntake {
             of, is "preference". A hard rule stops the work when it is broken; a preference only \
             costs quality.
 
-            GIVE A CONSTRAINT AN "appliesTo" ONLY WHEN THE DOCUMENT SAYS WHICH PART IT IS ABOUT. \
-            Where a heading "PARTS OF THIS PROJECT A RULE MAY BE RECORDED FOR" is given below, \
-            "appliesTo" is a list of folders copied exactly from it: the parts whose code the rule \
-            governs. A rule is then sent only to work on those parts. Leave it out for a rule \
-            about the whole project, for a rule about how parts fit together, and whenever the \
-            document does not say or you are unsure: a rule with no "appliesTo" goes to everyone, \
-            which is always safe. Never write a folder that is not in the list.
+            WHERE A HEADING "PARTS OF THIS PROJECT A RULE MAY BE RECORDED FOR" IS GIVEN BELOW, \
+            GIVE EVERY CONSTRAINT AN "appliesTo": the folders, copied exactly from that list, \
+            whose code the rule governs. A rule is then sent only to work on those parts, and a \
+            rule recorded for the whole project is paid for by all the work it does not govern. \
+            The document says which part a rule is about when the rule stands under a heading \
+            about that part, when it names that part or one of its packages, or when it is about \
+            a kind of code the document places in that part. Write an EMPTY list, "appliesTo":[], \
+            for a rule about the whole project, for a rule about how parts fit together, and \
+            whenever the document does not say: an empty list goes to everyone, which is always \
+            safe. Never write a folder that is not in the list.
 
             One rule per proposal, not one per document. "Do not use Spring, JPA, Flyway, SQL, \
             REST, JSON, JavaScript or Vaadin" is one constraint about what is forbidden; the module \
@@ -1882,7 +2027,8 @@ final class RequirementsIntake {
             line","excerpt":"for a CONSTRAINT only: the document's own sentence(s), verbatim",\
             "purpose":"for a CONSTRAINT only: why the rule exists, one line",\
             "strength":"for a CONSTRAINT only: hard|preference",\
-            "appliesTo":["for a CONSTRAINT only, and optional: a folder from the list of parts"],\
+            "appliesTo":["for a CONSTRAINT only: a folder from the list of parts; [] for the \
+            whole project"],\
             "criteria":[{"text":"observable criterion",\
             "test":"swarm.accept.AreaTest#methodName"}],\
             "relationships":[{"relation":"DEPENDS_ON","target":"R3"}]}]}
@@ -2215,6 +2361,23 @@ final class RequirementsIntake {
         private static final String APPLIES_TO_KEY = "AppliesTo";
 
         /**
+         * What the {@code AppliesTo} line says for a rule the analyst stated is about the whole
+         * project: written by {@link #render} for an empty list, read back by {@link #parse} as
+         * no folder. It tells "decided: everyone" from "said nothing" (section 66).
+         */
+        private static final String WHOLE_PROJECT = "the whole project";
+
+        /** Whether a proposal block says anything about the part the rule is about. */
+        static boolean statesItsPart(String block) {
+            for (String line : (block == null ? "" : block).split("\n")) {
+                if (line.strip().startsWith(APPLIES_TO_KEY + ":")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
          * One proposed check: what must be observably true, and the name of the test that will
          * prove it.
          *
@@ -2352,6 +2515,10 @@ final class RequirementsIntake {
                 sb.append(APPLIES_TO_KEY).append(": ").append(String.join(", ",
                     parts.stream().map(part -> part.replace("\n", " ").strip()).toList()))
                     .append('\n');
+            } else if (appliesTo.isArray()
+                    && "CONSTRAINT".equalsIgnoreCase(str(node, "requirementKind").strip())) {
+                // An empty list is an answer: the analyst says the rule is about everything.
+                sb.append(APPLIES_TO_KEY).append(": ").append(WHOLE_PROJECT).append('\n');
             }
             // A criterion may arrive as a bare string (the shape before test references) or as an
             // object carrying the proposed test name. Both are accepted: the model is asked for the
@@ -2414,6 +2581,9 @@ final class RequirementsIntake {
                     case PURPOSE_KEY -> purpose = value;
                     case STRENGTH_KEY -> strength = value;
                     case APPLIES_TO_KEY -> {
+                        if (value.equalsIgnoreCase(WHOLE_PROJECT)) {
+                            break; // stated, and it is no folder
+                        }
                         for (String part : value.split(",")) {
                             if (!part.isBlank()) {
                                 appliesTo.add(part.strip());

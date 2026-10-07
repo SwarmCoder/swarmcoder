@@ -220,12 +220,14 @@ public final class LanguageQueries {
         if (colon > 1 && path.substring(colon + 1).matches("[0-9]+(-[0-9]+)?")) {
             path = path.substring(0, colon); // an address with a line, as the other tools print it
         }
-        if (!prefix.isEmpty()) {
-            if (!path.startsWith(prefix)) {
-                return null;
-            }
+        if (!prefix.isEmpty() && path.startsWith(prefix)) {
             path = path.substring(prefix.length());
         }
+        // Without the root in front it is a path from the repository root, as read_file takes
+        // it and as the project map prints it (live run 90, section 66: outline_of answered
+        // "give its path as the other tools print it" to exactly such a path, and the test
+        // author read the 11,485-character file whole instead). A path that is not in the
+        // project is answered by the server: "There is no file ... in this workspace."
         try {
             return path.isEmpty() ? null : Path.of(path);
         } catch (RuntimeException e) {

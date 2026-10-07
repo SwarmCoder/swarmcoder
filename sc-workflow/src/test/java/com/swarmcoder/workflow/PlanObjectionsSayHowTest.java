@@ -232,10 +232,14 @@ class PlanObjectionsSayHowTest {
             "Keep books in EclipseStore; register StoreHooks on startup.",
             Set.of(SERVER + "BookshelfStore.java"));
         checked.setCriterionIds(Set.of(scope.criteria().get(0).id()));
-        Task orphan = task("Write the startup hooks", "Write the StoreHooks class.",
+        Task orphan = task("Write the startup hooks",
+            "Write the StoreHooks class, which opens BookshelfStore.",
             Set.of(SERVER + "StoreHooks.java"));
-        // Planned the wrong way round: the orphan after the task that uses its type. Instructions'
-        // wording alone does not reverse the planner's order, so it stays an orphan in name only.
+        // Planned the wrong way round: the orphan after the task that uses its type. Each task's
+        // wording names the other's new type, which cannot say which way round the dependency
+        // runs, so the planner's order stands and it stays an orphan in name only. (With the
+        // hooks task naming nothing of the store's, the order itself is objected to since live
+        // run 90 - APlanDoesNotRunATaskBeforeTheTypeItUsesExistsTest.)
         TaskGraph graph = new TaskGraph(UUID.randomUUID(), 1, null,
             new ArrayList<>(List.of(checked, orphan)),
             new ArrayList<>(List.of(new TaskEdge(checked.id(), orphan.id()))));

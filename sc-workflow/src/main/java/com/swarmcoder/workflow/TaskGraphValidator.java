@@ -201,7 +201,8 @@ public final class TaskGraphValidator {
             // edge is added and said out loud; only what cannot be ordered goes back to the
             // planner. See TypeDependencyOrder for when it adds, when it objects, and when it
             // leaves a plan alone.
-            TypeDependencyOrder.Outcome typeOrder = TypeDependencyOrder.apply(graph, design);
+            TypeDependencyOrder.Outcome typeOrder =
+                TypeDependencyOrder.apply(graph, design, repoRoot);
             typeOrder.added().forEach(line -> warnings.add("added dependency: " + line));
             typeOrder.notes().forEach(line -> warnings.add("dependency not added: " + line));
             violations.addAll(typeOrder.violations());

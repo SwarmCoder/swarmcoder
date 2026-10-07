@@ -22,7 +22,11 @@ import com.swarmcoder.domain.DesignDocument;
 import com.swarmcoder.domain.Task;
 import com.swarmcoder.domain.TaskEdge;
 import com.swarmcoder.domain.TaskGraph;
+import com.swarmcoder.knowledge.ProjectTypes;
 import com.swarmcoder.verify.TypeDeliverability;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -92,9 +96,25 @@ import java.util.regex.Pattern;
  *       instructions does not mean A needs {@code BooksService}. So prose evidence adds an edge
  *       only when nothing points the other way: never against contract evidence, never when the two
  *       tasks' prose names each other's types (it cannot say which is the real direction), and
- *       never when it would close a cycle. Skipping is logged, never silent; it is never a
- *       violation, because a false positive sending a good plan back would be worse than the
- *       fault.</li>
+ *       never when it would close a cycle. Skipping is logged, never silent.
+ *       <b>One case is no longer skipped (live run 90, 2026-10-07, section 66).</b> A task told
+ *       to use {@code UtcDateTime} was planned BEFORE the task that creates it: the planner had
+ *       written both its edges the wrong way round. The line "read as describing what a later
+ *       task builds on its work" was logged, the order was kept, six workers had to create the
+ *       type outside their write set and every candidate failed for it: 2,610,416 input and
+ *       97,078 output tokens. That reading is now taken only when it can be true: the type
+ *       already exists in the tree the run starts from (the task compiles against it as it is),
+ *       or the later task in turn uses a NEW type the naming task creates (the planner's order
+ *       has evidence of its own - run 40's shape). Otherwise the task names a type that will not
+ *       be in its checkout and nothing says why the plan runs it first: the plan goes back with
+ *       the pair and the edge to write. It is sent back and not turned round here because the
+ *       planner said two things that cannot both hold - its edge and its instructions - and
+ *       which one is wrong is not a mechanical fact.</li>
+ *   <li><b>A read set that names a file another task creates</b> (the same run: the task's
+ *       {@code readSet} was {@code .../UtcDateTime.java}) is the planner's own statement that
+ *       the task reads that file, and a file that does not exist cannot be read. It counts like
+ *       a contract: the edge is added when nothing orders the two, and the plan goes back when
+ *       it orders them the other way.</li>
  *   <li><b>The contracts do not say enough.</b> A contract with no members and no signature
  *       sketch, and a task whose instructions never name the type, leave nothing to read. Nothing is
  *       invented: the plan is left as the planner wrote it. {@code
@@ -140,7 +160,14 @@ public final class TypeDependencyOrder {
     public record Outcome(List<String> added, List<String> violations, List<String> notes) {}
 
     /** One task's code naming a type another task writes. */
-    record Use(Task user, Task writer, String typeName, ApiContract contract, boolean fromContract) {}
+    record Use(Task user, Task writer, String typeName, ApiContract contract, boolean fromContract,
+               boolean fromReadSet, boolean newType) {
+
+        /** A fact rather than wording: a contract's Java, or a read set naming a file to come. */
+        boolean hard() {
+            return fromContract || fromReadSet;
+        }
+    }
 
     private TypeDependencyOrder() {}
 
@@ -156,6 +183,17 @@ public final class TypeDependencyOrder {
      *               {@code deliversContracts}; null is fine — the tasks' own contracts are read
      */
     public static Outcome apply(TaskGraph graph, DesignDocument design) {
+        return apply(graph, design, null);
+    }
+
+    /**
+     * The same, told which checkout the plan is layered onto, so that a type the checkout already
+     * has is told apart from one that exists only once its task has run (live run 90).
+     *
+     * @param repoRoot the tree the run starts from; null when there is none, and then every
+     *                 type a task of the plan writes is new
+     */
+    public static Outcome apply(TaskGraph graph, DesignDocument design, Path repoRoot) {
         List<String> added = new ArrayList<>();
         List<String> violations = new ArrayList<>();
         List<String> notes = new ArrayList<>();
@@ -169,7 +207,7 @@ public final class TypeDependencyOrder {
             return new Outcome(added, violations, notes); // cyclic: the validator says so
         }
 
-        List<Use> uses = uses(graph.tasks(), design, notes);
+        List<Use> uses = uses(graph.tasks(), design, notes, repoRoot);
         // (writer, user) -> the uses behind that pair, contract evidence first in each list
         Map<List<UUID>, List<Use>> byPair = new LinkedHashMap<>();
         for (Use use : uses) {
@@ -181,7 +219,7 @@ public final class TypeDependencyOrder {
         // by taking the other direction first.
         List<List<UUID>> order = new ArrayList<>();
         byPair.forEach((pair, list) -> {
-            if (list.stream().anyMatch(Use::fromContract)) {
+            if (list.stream().anyMatch(Use::hard)) {
                 order.add(pair);
             }
         });
@@ -201,7 +239,22 @@ public final class TypeDependencyOrder {
             }
             List<Use> reverse = byPair.getOrDefault(List.of(user.id(), writer.id()), List.of());
             boolean reverseContract = reverse.stream().anyMatch(Use::fromContract);
-            if (!reverse.isEmpty() && contract == reverseContract) {
+            boolean readSet = list.stream().anyMatch(Use::fromReadSet);
+            // What the wording names that is not in the start tree, each way (run 90).
+            boolean namesNew = list.stream().anyMatch(Use::newType);
+            boolean reverseNamesNew = reverse.stream().anyMatch(Use::newType);
+            boolean wordingBothWays = !reverse.isEmpty() && !contract && !reverseContract
+                && !readSet && reverse.stream().noneMatch(Use::fromReadSet);
+            if (wordingBothWays && namesNew != reverseNamesNew && !namesNew) {
+                // This task names a type that is already there; the other names one that is
+                // not. Only the other can be in want of an order, and its own pair says so.
+                continue;
+            }
+            // Wording both ways counts as "cannot say which way round" only when both sides
+            // name a type to come, or neither does: wording about a type that already exists is
+            // no evidence against a type that does not.
+            boolean oneSided = wordingBothWays && namesNew && !reverseNamesNew;
+            if (!reverse.isEmpty() && contract == reverseContract && !readSet && !oneSided) {
                 if (!reported.add(canonical(pair))) {
                     continue;
                 }
@@ -227,6 +280,28 @@ public final class TypeDependencyOrder {
                         + user.title() + "' would be written against types that do not exist "
                         + "yet. '" + user.title() + "' must depend on '" + writer.title()
                         + "', not the other way round.");
+                } else if (readSet) {
+                    boolean one = list.size() == 1;
+                    violations.add("task '" + user.title() + "' has " + types + " in its read "
+                        + "set, " + (one ? "a file that does" : "files that do") + " not exist "
+                        + "until task '" + writer.title() + "' creates " + (one ? "it" : "them")
+                        + " — but the plan makes '" + writer.title() + "' wait for '"
+                        + user.title() + "'. " + howToOrder(writer, user));
+                } else if (namesNew && !reverseNamesNew) {
+                    // Live run 90: see the class javadoc. The type is not in the start tree, the
+                    // task that creates it runs later, and nothing the later task uses of this
+                    // one's says why.
+                    String named = newTypesOf(list);
+                    boolean one = !named.contains(",");
+                    violations.add("task '" + user.title() + "' is told to use " + named
+                        + ", which " + (one ? "does" : "do") + " not exist in the project yet "
+                        + "and which task '" + writer.title() + "' creates — but the plan runs '"
+                        + user.title() + "' BEFORE '" + writer.title() + "', so its workers "
+                        + "would have to create " + (one ? "it" : "them") + " outside their "
+                        + "write set and every candidate would fail (live run 90). "
+                        + howToOrder(writer, user) + " If '" + user.title() + "' does not use "
+                        + (one ? "it" : "them") + " after all, take the name out of its "
+                        + "instructions instead.");
                 } else {
                     // Harness run 40, 2026-09-26: "Create shared @DataModel classes Book, Rating
                     // and the BookshelfService interface" mentioned BookshelfStore in its prose,
@@ -249,7 +324,8 @@ public final class TypeDependencyOrder {
             changed = true;
             addReach(reach, writer.id(), user.id());
             added.add("task '" + user.title() + "' now depends on '" + writer.title() + "': "
-                + (contract ? "the contract it delivers uses " : "its instructions name ")
+                + (contract ? "the contract it delivers uses "
+                    : readSet ? "its read set names " : "its instructions name ")
                 + types + ", which '" + writer.title() + "' writes, and the plan had nothing "
                 + "making it wait — its code could not have compiled until that task's work was "
                 + "merged (harness run 39)");
@@ -322,6 +398,15 @@ public final class TypeDependencyOrder {
 
     /** Every (user, writer, type) the plan's own text shows, contract evidence first per user. */
     static List<Use> uses(List<Task> tasks, DesignDocument design, List<String> notes) {
+        return uses(tasks, design, notes, null);
+    }
+
+    /**
+     * @param repoRoot the tree the run starts from, to tell a type it already has from one that
+     *                 exists only once its task has run; null: every planned type is new
+     */
+    static List<Use> uses(List<Task> tasks, DesignDocument design, List<String> notes,
+                          Path repoRoot) {
         // fully-qualified type -> the tasks that write it, and the contract when there is one
         Map<String, Set<Task>> writers = new LinkedHashMap<>();
         Map<String, ApiContract> contractOf = new HashMap<>();
@@ -363,6 +448,7 @@ public final class TypeDependencyOrder {
             bySimpleName.computeIfAbsent(simpleName(type), k -> new TreeSet<>()).add(type);
         }
 
+        StartTree existing = new StartTree(repoRoot, tasks);
         List<Use> uses = new ArrayList<>();
         for (Task user : tasks) {
             Set<String> own = typesWritten.get(user.id());
@@ -383,15 +469,31 @@ public final class TypeDependencyOrder {
                 bySimpleName, writers, user, notes);
             Set<String> fromProse = typesNamed(user.instructions(), own, ownPackages,
                 bySimpleName, writers, user, notes);
+            // A read set entry that is the file of a type another task creates (run 90): the
+            // planner's own word that this task reads a file that is not there yet.
+            Set<String> fromReadSet = new LinkedHashSet<>();
+            if (user.readSet() != null) {
+                for (String entry : user.readSet()) {
+                    String type = TypeDeliverability.typeNamed(entry);
+                    if (type != null && !own.contains(type) && writers.containsKey(type)
+                            && existing.isNew(type)) {
+                        fromReadSet.add(type);
+                    }
+                }
+            }
+            fromReadSet.removeAll(fromContract);
             fromProse.removeAll(fromContract);
-            addUses(uses, user, fromContract, true, writers, contractOf);
-            addUses(uses, user, fromProse, false, writers, contractOf);
+            fromProse.removeAll(fromReadSet);
+            addUses(uses, user, fromContract, true, false, writers, contractOf, existing);
+            addUses(uses, user, fromReadSet, false, true, writers, contractOf, existing);
+            addUses(uses, user, fromProse, false, false, writers, contractOf, existing);
         }
         return uses;
     }
 
     private static void addUses(List<Use> uses, Task user, Set<String> types, boolean fromContract,
-                                Map<String, Set<Task>> writers, Map<String, ApiContract> contractOf) {
+                                boolean fromReadSet, Map<String, Set<Task>> writers,
+                                Map<String, ApiContract> contractOf, StartTree existing) {
         for (String type : types) {
             Set<Task> by = writers.get(type);
             if (by == null || by.size() != 1) {
@@ -399,8 +501,58 @@ public final class TypeDependencyOrder {
             }
             Task writer = by.iterator().next();
             if (writer != user) {
-                uses.add(new Use(user, writer, type, contractOf.get(type), fromContract));
+                uses.add(new Use(user, writer, type, contractOf.get(type), fromContract,
+                    fromReadSet, existing.isNew(type)));
             }
+        }
+    }
+
+    /**
+     * Which planned types the tree the run starts from already has. Read from the tree, never
+     * from the plan's wording: a write-set file that is on disk, or a type the project's own
+     * sources declare. With no tree every planned type is new.
+     */
+    private static final class StartTree {
+        private final Path root;
+        private final Set<String> filesThere = new HashSet<>();
+        private ProjectTypes types;
+        private boolean typesRead;
+
+        StartTree(Path root, List<Task> tasks) {
+            this.root = root;
+            if (root == null) {
+                return;
+            }
+            for (Task task : tasks) {
+                for (String entry : task.writeSet() == null ? Set.<String>of() : task.writeSet()) {
+                    String type = TypeDeliverability.typeNamed(entry);
+                    try {
+                        if (type != null && Files.isRegularFile(root.resolve(entry.strip()))) {
+                            filesThere.add(type);
+                        }
+                    } catch (RuntimeException unreadable) {                 // noqa
+                        // a path the file system will not take names no file that is there
+                    }
+                }
+            }
+        }
+
+        boolean isNew(String type) {
+            if (root == null) {
+                return true;
+            }
+            if (filesThere.contains(type)) {
+                return false;
+            }
+            if (!typesRead) {
+                typesRead = true;
+                try {
+                    types = ProjectTypes.of(root);
+                } catch (RuntimeException unreadable) {                     // noqa
+                    types = null;
+                }
+            }
+            return types == null || !types.declares(type);
         }
     }
 
@@ -495,6 +647,19 @@ public final class TypeDependencyOrder {
     }
 
     // --- small helpers -----------------------------------------------------------------------------
+
+    /** The remedy every ordering objection ends with: which way round an edge is written. */
+    private static String howToOrder(Task first, Task then) {
+        return "An edge is written FROM the task that must finish first TO the task that waits "
+            + "for it: make '" + then.title() + "' depend on '" + first.title() + "' with the "
+            + "edge {\"from\": <id of '" + first.title() + "'>, \"to\": <id of '" + then.title()
+            + "'>}, and remove the edge that runs the other way.";
+    }
+
+    /** The simple names of the uses whose type is not in the start tree. */
+    private static String newTypesOf(List<Use> uses) {
+        return typesOf(uses.stream().filter(Use::newType).toList());
+    }
 
     private static String typesOf(List<Use> uses) {
         Set<String> names = new TreeSet<>();

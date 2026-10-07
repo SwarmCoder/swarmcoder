@@ -325,7 +325,7 @@ class TheExpertLooksThingsUpItselfTest {
             .as("everything else is always there, whatever is configured")
             .containsExactly("public_shape", "types_in", "body_of", "find_usages",
                 "find_implementations", "files_using", "types_annotated_with", "call_chain",
-                "build_of", "resources_of", "dependency_declaring", "doc_outline", "doc_section",
+                "build_of", "resources_of", "texts_of", "dependency_declaring", "doc_outline", "doc_section",
                 "doc_search",
                 "search", "lookup_docs", "list_files", "read_file", "skeleton_for", "report_done");
     }
