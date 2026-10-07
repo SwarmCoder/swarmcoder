@@ -257,11 +257,14 @@ class ARoleLearnsTheProjectFromItsObjectGraphTest {
     }
 
     @Test
-    void onAServerThatCachesThePromptHeadOldResultsAreLeftAloneForAQuarterOfTheRoom() {
+    void onAServerThatReportsCacheHitsOldResultsAreShortenedAtTheOrdinaryThreshold() {
         AgentRuntime.SessionOptions options = LookupAgent.sessionOptions(null, 983_040);
 
-        assertThat(options.tidyAboveTokens()).isEqualTo(LookupAgent.TIDY_ABOVE_TOKENS);
-        assertThat(options.tidyAboveWhenCachedTokens()).isEqualTo(983_040 / 4);
+        // Section 67: a cache-reporting server no longer gets a larger mark, because the owner
+        // judges a run by raw input tokens. The session options carry one threshold only.
+        assertThat(options.tidyAboveTokens()).isEqualTo(LookupAgent.TIDY_ABOVE_TOKENS)
+            .isEqualTo(20_000);
+        assertThat(options.tidyToTokens()).isEqualTo(LookupAgent.TIDY_TO_TOKENS);
         assertThat(LookupAgent.toolGuide(List.of("search")))
             .contains("OBJECT GRAPH FIRST")
             .contains("SEVERAL AT ONCE")

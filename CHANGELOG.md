@@ -11,6 +11,10 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Changed
 
+- **A planning role's old lookup results are shortened at the same mark on every server.** They
+  used to be left whole until a quarter of the model's room when the server reports prompt-cache
+  hits (an architect averaged 45,697 input tokens a call); now the mark is 20,000 tokens (was
+  24,000) either way. `swarmcoder.roles.tidyAboveTokens` still overrides it.
 - **A plan that orders a task before the task that creates a type it needs is refused.** The plan
   check names the two tasks and the edge to write, so the plan is sent back instead of running a
   task against a type that does not exist yet.

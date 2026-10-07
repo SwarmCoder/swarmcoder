@@ -94,7 +94,7 @@ public final class LookupAgent {
      * {@link #TIDY_TO_TOKENS} are left whole. Not a limit: nothing is stopped, and one lookup
      * gets a cut result back. {@code -Dswarmcoder.roles.tidyAboveTokens=0} switches it off.
      */
-    static final int TIDY_ABOVE_TOKENS = Integer.getInteger("swarmcoder.roles.tidyAboveTokens", 24_000);
+    static final int TIDY_ABOVE_TOKENS = Integer.getInteger("swarmcoder.roles.tidyAboveTokens", 20_000);
     static final int TIDY_TO_TOKENS = Integer.getInteger("swarmcoder.roles.tidyToTokens", 8_000);
     static final int DIGEST_CHARS = 600;
 
@@ -133,12 +133,9 @@ public final class LookupAgent {
             // results whole - two files - and the planner read the others again after every tidy.
             to = Math.min(to, above / 2);
         }
-        // On a server that bills a repeated prompt head at the cached price (run 80, section 53)
-        // every tidy makes the rest of the conversation full price once more, so there the old
-        // results are left alone until they fill a quarter of the room.
-        int whenCached = above == 0 ? 0 : Math.max(0, workingContextTokens / TIDY_SHARE_OF_ROOM);
-        return new AgentRuntime.SessionOptions(above, above == 0 ? 0 : to, DIGEST_CHARS, upcoming,
-            whenCached);
+        // The same mark on a server that reports prompt-cache hits (section 67, reversing the
+        // cache exception of section 53): the owner judges a run by raw input tokens.
+        return new AgentRuntime.SessionOptions(above, above == 0 ? 0 : to, DIGEST_CHARS, upcoming);
     }
 
     /** How much of what the lookups returned {@link Outcome#material} holds, at the baseline room. */

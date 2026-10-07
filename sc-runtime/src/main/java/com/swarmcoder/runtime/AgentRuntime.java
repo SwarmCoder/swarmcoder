@@ -176,20 +176,9 @@ public interface AgentRuntime {
      *                        The calls themselves are still run in order, one at a time, exactly
      *                        as before; a toolbox that started one early answers it from that
      *                        when its turn comes. Null tells nobody.
-     * @param tidyAboveWhenCachedTokens the mark used instead of {@code tidyAboveTokens} once the
-     *                        session's server has reported prompt tokens taken from its prefix
-     *                        cache, when it is the larger of the two: a tidy rewrites history, and
-     *                        everything after the rewrite is billed in full again. Half of it is
-     *                        then left whole. 0 keeps the one mark.
      */
     record SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
-                          java.util.function.BiConsumer<String, String> upcoming,
-                          int tidyAboveWhenCachedTokens) {
-
-        public SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
-                              java.util.function.BiConsumer<String, String> upcoming) {
-            this(tidyAboveTokens, tidyToTokens, digestChars, upcoming, 0);
-        }
+                          java.util.function.BiConsumer<String, String> upcoming) {
 
         public static final SessionOptions NONE = new SessionOptions(0, 0, 0, null);
 

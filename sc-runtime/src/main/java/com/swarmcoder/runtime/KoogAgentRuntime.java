@@ -815,14 +815,10 @@ public final class KoogAgentRuntime implements AgentRuntime {
             if (options.tidyAboveTokens() <= 0) {
                 return;
             }
-            // A tidy rewrites old results, and a server that bills a repeated prompt head at a
-            // fraction of the price bills everything after the first rewritten result in full
-            // again. Once this session's server has reported a cache hit, the tidy waits for
-            // the larger mark the session named for that case.
-            boolean later = tap.serverCaches()
-                && options.tidyAboveWhenCachedTokens() > options.tidyAboveTokens();
-            int above = later ? options.tidyAboveWhenCachedTokens() : options.tidyAboveTokens();
-            int to = later ? above / 2 : options.tidyToTokens();
+            // The same mark whether or not the server caches the prompt head: input tokens are
+            // counted raw (section 67).
+            int above = options.tidyAboveTokens();
+            int to = options.tidyToTokens();
             HistoryTrim.Result result = ctx.llm().writeSession(session -> {
                 Prompt current = session.getPrompt();
                 HistoryTrim.Result tidied = HistoryTrim.tidy(current.getMessages(),
