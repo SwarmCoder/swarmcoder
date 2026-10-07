@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SwarmCoder">
+  <rect width="512" height="512" fill="#2A8078"/>
+  <g fill="#FFFFFF">
+    <g fill-opacity="0.27">
+      <rect x="93.5" y="93.5" width="90" height="90" rx="24"/><rect x="211" y="93.5" width="90" height="90" rx="24"/><rect x="328.5" y="93.5" width="90" height="90" rx="24"/>
+      <rect x="93.5" y="211" width="90" height="90" rx="24"/><rect x="328.5" y="211" width="90" height="90" rx="24"/>
+      <rect x="93.5" y="328.5" width="90" height="90" rx="24"/><rect x="211" y="328.5" width="90" height="90" rx="24"/><rect x="328.5" y="328.5" width="90" height="90" rx="24"/>
+    </g>
+    <rect x="211" y="211" width="90" height="90" rx="24"/>
+  </g>
+</svg>

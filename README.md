@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/brand/swarmcoder-logo.svg" width="96" alt="SwarmCoder logo">
+
 # SwarmCoder
 
 ### Agentic software development that your organization can actually account for
