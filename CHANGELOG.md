@@ -9,11 +9,6 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ## [Unreleased]
 
-### Fixed
-
-- The build no longer fails on newer Maven versions with "dependency must be unique": `sc-swarm`
-  declared `sc-domain` twice.
-
 ## [0.1.0] - 2026-10-07
 
 The first public release, under the Apache License 2.0.
