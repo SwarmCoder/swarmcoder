@@ -44,6 +44,12 @@ class ARolesSessionTidiesItsOldLookupResultsTest {
     }
 
     @Test
+    void theOrdinaryThresholdIsTwentyThousandTokensUnlessConfigured() {
+        assertThat(LookupAgent.TIDY_ABOVE_TOKENS).isEqualTo(
+            Integer.getInteger("swarmcoder.roles.tidyAboveTokens", 20_000));
+    }
+
+    @Test
     void aRoleKeepsMoreOfWhatItReadThanTheExpertDoes() {
         assertThat(LookupAgent.TIDY_ABOVE_TOKENS)
             .isGreaterThan(ExpertEscalation.TIDY_ABOVE_TOKENS);

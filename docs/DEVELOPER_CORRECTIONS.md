@@ -6190,3 +6190,28 @@ acceptance tests (21,763, 122,000), `AGENTS.md` (8,151), three classes of text c
 **Seen in passing, not touched.** Both first candidates' browser stage "could not be attempted:
 port 8080 is already in use on this machine". The design's descriptor and service method are
 used by no screen; the reachability check cannot see an uncalled member (section 62).
+
+## 67. Old lookup results are shortened at the ordinary threshold on every server (owner's decision, 2026-10-07)
+
+**Reverses the cache exception of section 53.** There, on a server that reports prompt-cache hits,
+a role's old lookup results were left whole until they filled a quarter of the model's room
+(65,536 tokens in run 90), because a tidy makes the cached head of the conversation full price
+again. The owner judges runs by raw input tokens, not by what a cache discounts.
+
+**Measured (run 90).** The architect averaged 45,697 input tokens a call over 28 calls,
+1,279,519 input tokens in all; 88% were cache hits, and nothing in its conversation was ever
+shortened.
+
+**Changed.**
+- `LookupAgent.TIDY_ABOVE_TOKENS` is 20,000 (was 24,000). `swarmcoder.roles.tidyAboveTokens` still
+  overrides it; set it to a large value for the old behaviour. `0` switches tidying off.
+- `AgentRuntime.SessionOptions` lost `tidyAboveWhenCachedTokens`, and `KoogAgentRuntime.tidyIfAsked`
+  no longer looks at `UsageTap.serverCaches()`: one mark for every server.
+- The small-room rule stays (a quarter of a room under about 80,000 tokens, section 51); it is
+  not about caching.
+- Workers never had the cache rule: `WorkerLoop` passes the plain 12,000 mark. Unchanged.
+
+Run reports keep input and output tokens separate.
+
+**Tests.** `ARoleLearnsTheProjectFromItsObjectGraphTest` (the cache case: the options carry the
+ordinary 20,000 mark on a server reporting cache hits), `ARolesSessionTidiesItsOldLookupResultsTest`.
