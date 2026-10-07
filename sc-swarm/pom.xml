@@ -35,11 +35,6 @@
     </dependency>
     <dependency>
       <groupId>com.swarmcoder</groupId>
-      <artifactId>sc-domain</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.swarmcoder</groupId>
       <artifactId>sc-inference</artifactId>
       <version>${project.version}</version>
     </dependency>
