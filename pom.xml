@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.swarmcoder</groupId>
+  <artifactId>swarmcoder</artifactId>
+  <version>${revision}</version>
+  <packaging>pom</packaging>
+  <name>SwarmCoder</name>
+  <description>An opinionated coding agent that runs a swarm of local models through one fixed
+    software development lifecycle: requirements, plan, tests first, many parallel attempts in
+    containers, mechanical selection of the winner.</description>
+  <url>https://github.com/SwarmCoder/swarmcoder</url>
+
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>fschoning</id>
+      <name>Franz Schöning</name>
+      <url>https://www.franzschoning.com</url>
+      <organizationUrl>https://www.franzschoning.com</organizationUrl>
+      <roles>
+        <role>Principal Enterprise Architect</role>
+      </roles>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/SwarmCoder/swarmcoder.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/SwarmCoder/swarmcoder.git</developerConnection>
+    <url>https://github.com/SwarmCoder/swarmcoder</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <issueManagement>
+    <system>GitHub Issues</system>
+    <url>https://github.com/SwarmCoder/swarmcoder/issues</url>
+  </issueManagement>
+
+  <properties>
+    <!-- The one place the version is stated. Every module's parent reference says ${revision},
+         and flatten-maven-plugin writes the real number into the POMs a build installs. -->
+    <revision>0.1.0</revision>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Dependency Versions -->
+    <koog.version>1.2.0</koog.version>
+    <eclipse.store.version>4.1.0</eclipse.store.version>
+    <jgit.version>6.9.0.202403050737-r</jgit.version>
+    <treesitter.version>0.26.6</treesitter.version>
+    <treesitter.html.version>0.23.2</treesitter.html.version>
+    <treesitter.java.version>0.23.5</treesitter.java.version>
+    <treesitter.python.version>0.25.0</treesitter.python.version>
+    <treesitter.javascript.version>0.25.0</treesitter.javascript.version>
+    <treesitter.typescript.version>0.23.2</treesitter.typescript.version>
+    <treesitter.css.version>0.25.0</treesitter.css.version>
+    <treesitter.rust.version>0.24.0</treesitter.rust.version>
+    <lsp4j.version>0.23.1</lsp4j.version>
+    <!-- Unit tests act as if no Java language server were installed, so no test's outcome
+         depends on what the machine has; -Dswarmcoder.jdtLs=on lets a run use the installed one. -->
+    <swarmcoder.jdtLs>off</swarmcoder.jdtLs>
+    <docker.java.version>3.3.4</docker.java.version>
+    <mcp.sdk.version>0.7.0</mcp.sdk.version>
+    <playwright.version>1.44.0</playwright.version>
+    <lucene.version>9.10.0</lucene.version>
+    <onnxruntime.version>1.18.0</onnxruntime.version>
+    <lanterna.version>3.1.2</lanterna.version>
+    <pdfbox.version>3.0.3</pdfbox.version>
+    <poi.version>5.3.0</poi.version>
+    <jackson.version>2.17.1</jackson.version>
+    <slf4j.version>2.0.13</slf4j.version>
+    <logback.version>1.5.6</logback.version>
+    <opentelemetry.version>1.38.0</opentelemetry.version>
+    <junit.version>5.10.2</junit.version>
+    <assertj.version>3.25.3</assertj.version>
+    <testcontainers.version>1.19.7</testcontainers.version>
+    <archunit.version>1.3.0</archunit.version>
+    <zerozstack.version>0.9.1</zerozstack.version>
+    <rewrite.version>8.90.4</rewrite.version>
+    <teavm.version>0.15.0</teavm.version>
+  </properties>
+
+  <modules>
+    <!-- Test harness for every other module: the tool probes and the
+         loud-skip reporting behind @RunsWhen. Test scope everywhere it is used. -->
+    <module>sc-testsupport</module>
+    <module>sc-domain</module>
+    <module>sc-store</module>
+    <module>sc-runtime</module>
+    <module>sc-inference</module>
+    <module>sc-knowledge</module>
+    <module>sc-swarm</module>
+    <module>sc-workflow</module>
+    <module>sc-syntax</module>
+    <module>sc-lsp</module>
+    <module>sc-git</module>
+    <module>sc-sandbox</module>
+    <module>sc-sandbox-action-server</module>
+    <module>sc-verify</module>
+    <module>sc-server</module>
+    <module>sc-app</module>
+    <module>sc-console-api</module>
+    <module>sc-console-ui</module>
+    <module>sc-console</module>
+    <module>sc-evals</module>
+  </modules>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- ZeroZ Stack BOM: the single place the framework version is stated. Every
+           zerozstack-* dependency below and in the modules omits <version>. -->
+      <dependency>
+        <groupId>com.zeroz4j</groupId>
+        <artifactId>zerozstack-bom</artifactId>
+        <version>${zerozstack.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Koog -->
+      <dependency>
+        <groupId>ai.koog</groupId>
+        <artifactId>koog-agents-jvm</artifactId>
+        <version>${koog.version}</version>
+      </dependency>
+
+      <!-- EclipseStore -->
+      <dependency>
+        <groupId>org.eclipse.store</groupId>
+        <artifactId>storage-embedded</artifactId>
+        <version>${eclipse.store.version}</version>
+      </dependency>
+
+      <!-- JGit -->
+      <dependency>
+        <groupId>org.eclipse.jgit</groupId>
+        <artifactId>org.eclipse.jgit</artifactId>
+        <version>${jgit.version}</version>
+      </dependency>
+
+      <!-- Tree-Sitter -->
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter</artifactId>
+        <version>${treesitter.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-html</artifactId>
+        <version>${treesitter.html.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-java</artifactId>
+        <version>${treesitter.java.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-python</artifactId>
+        <version>${treesitter.python.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-javascript</artifactId>
+        <version>${treesitter.javascript.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-typescript</artifactId>
+        <version>${treesitter.typescript.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-css</artifactId>
+        <version>${treesitter.css.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.bonede</groupId>
+        <artifactId>tree-sitter-rust</artifactId>
+        <version>${treesitter.rust.version}</version>
+      </dependency>
+
+      <!-- LSP4J: Eclipse JDT LS client (confined to sc-lsp behind the LspService facade) -->
+      <dependency>
+        <groupId>org.eclipse.lsp4j</groupId>
+        <artifactId>org.eclipse.lsp4j</artifactId>
+        <version>${lsp4j.version}</version>
+      </dependency>
+
+      <!-- HttpClient 5: pinned because docker-java pulls an old 5.x while Koog's
+           ktor-apache5 engine needs >=5.5 (ClientTlsStrategyBuilder.setHostVerificationPolicy).
+           Nearest-wins resolution otherwise breaks the agent runtime at runtime, not compile
+           time. httpcore5 pinned to match. -->
+      <dependency>
+        <groupId>org.apache.httpcomponents.client5</groupId>
+        <artifactId>httpclient5</artifactId>
+        <version>5.5.2</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.httpcomponents.core5</groupId>
+        <artifactId>httpcore5</artifactId>
+        <version>5.4.2</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.httpcomponents.core5</groupId>
+        <artifactId>httpcore5-h2</artifactId>
+        <version>5.4.2</version>
+      </dependency>
+
+      <!-- Docker -->
+      <dependency>
+        <groupId>com.github.docker-java</groupId>
+        <artifactId>docker-java</artifactId>
+        <version>${docker.java.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.docker-java</groupId>
+        <artifactId>docker-java-transport-httpclient5</artifactId>
+        <version>${docker.java.version}</version>
+      </dependency>
+
+      <!-- OpenRewrite: the Apache-2.0 library only (Moderne's hosted platform is commercial).
+           The BOM pins every rewrite-* artifact, including the language parsers, at one version. -->
+      <dependency>
+        <groupId>org.openrewrite</groupId>
+        <artifactId>rewrite-bom</artifactId>
+        <version>${rewrite.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- MCP -->
+      <dependency>
+        <groupId>io.modelcontextprotocol.sdk</groupId>
+        <artifactId>mcp</artifactId>
+        <version>${mcp.sdk.version}</version>
+      </dependency>
+
+
+
+
+      <!-- Playwright -->
+      <dependency>
+        <groupId>com.microsoft.playwright</groupId>
+        <artifactId>playwright</artifactId>
+        <version>${playwright.version}</version>
+      </dependency>
+
+      <!-- Lucene -->
+      <dependency>
+        <groupId>org.apache.lucene</groupId>
+        <artifactId>lucene-core</artifactId>
+        <version>${lucene.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.lucene</groupId>
+        <artifactId>lucene-codecs</artifactId>
+        <version>${lucene.version}</version>
+      </dependency>
+      <!-- English tokenising and stemming (RequirementSimilarity). Lucene's ANALYSIS only: the
+           requirement graph is scanned in memory and never indexed, because an index over a
+           document edited this often goes stale and answers confidently wrong. -->
+      <dependency>
+        <groupId>org.apache.lucene</groupId>
+        <artifactId>lucene-analysis-common</artifactId>
+        <version>${lucene.version}</version>
+      </dependency>
+
+      <!-- ONNX -->
+      <dependency>
+        <groupId>com.microsoft.onnxruntime</groupId>
+        <artifactId>onnxruntime</artifactId>
+        <version>${onnxruntime.version}</version>
+      </dependency>
+
+      <!-- Lanterna -->
+      <dependency>
+        <groupId>com.googlecode.lanterna</groupId>
+        <artifactId>lanterna</artifactId>
+        <version>${lanterna.version}</version>
+      </dependency>
+
+      <!-- Document text extraction (BRD intake pipeline, see docs/REQUIREMENTS_AND_BACKLOG_DESIGN.md §4) -->
+      <dependency>
+        <groupId>org.apache.pdfbox</groupId>
+        <artifactId>pdfbox</artifactId>
+        <version>${pdfbox.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.poi</groupId>
+        <artifactId>poi-ooxml</artifactId>
+        <version>${poi.version}</version>
+      </dependency>
+
+      <!-- Jackson -->
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Logging -->
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>${logback.version}</version>
+      </dependency>
+
+      <!-- OpenTelemetry -->
+      <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-bom</artifactId>
+        <version>${opentelemetry.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- Testing -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-core</artifactId>
+        <version>${assertj.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>${archunit.version}</version>
+        <scope>test</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Common dependencies for all modules -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <!-- Resolves ${revision} in installed POMs so the modules are usable outside the reactor. -->
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>flatten-maven-plugin</artifactId>
+        <version>1.6.0</version>
+        <configuration>
+          <updatePomFile>true</updatePomFile>
+          <flattenMode>resolveCiFriendliesOnly</flattenMode>
+        </configuration>
+        <executions>
+          <execution>
+            <id>flatten</id>
+            <phase>process-resources</phase>
+            <goals>
+              <goal>flatten</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>flatten.clean</id>
+            <phase>clean</phase>
+            <goals>
+              <goal>clean</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+          <parameters>true</parameters>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <!-- EclipseStore (eclipse-serializer) needs JDK internals on 17+; the same flags
+               must be present in any launcher script that runs the orchestrator. -->
+          <argLine>--add-exports java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.time=ALL-UNNAMED</argLine>
+          <systemPropertyVariables>
+            <swarmcoder.jdtLs>${swarmcoder.jdtLs}</swarmcoder.jdtLs>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

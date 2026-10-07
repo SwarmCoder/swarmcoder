@@ -1,0 +1,115 @@
+{
+  "target": "jsoup",
+  "cloneUrl": "https://github.com/jhy/jsoup",
+  "existingCorrection": {
+    "commands": [
+      "mvn -B test \"-Dtest=!org/jsoup/integration/**\" -Dsurefire.failIfNoSpecifiedTests=false"
+    ],
+    "reason": "jsoup's own network tests in org.jsoup.integration (ProxyTest, ConnectTest) start a local Jetty server and an HTTP proxy, and on the pre-change trees of these cases they fail before anything is changed: measured 2026-09-05 on JDK 25, six of them fail on the untouched tree of issue 2187, and ProxyTest fails there even when it is the only test running, while the same class passes on a recent jsoup master. They are red because of the age of the tree and the JDK it is built with, not because of anything a candidate could do, so leaving them in the gate would fail every candidate of every case for a reason that has nothing to do with the candidate. Nothing in these five cases touches networking. Excluding them leaves 1,162 tests that are green on the untouched tree and really do gate a change."
+  },
+  "cases": [
+    {
+      "target": "jsoup",
+      "issue": 2197,
+      "title": "Should parse in Quirks Mode if doctype not set",
+      "kind": "BUGFIX",
+      "issueText": "Input:\r\n```\r\n<html>\r\n    <head></head>\r\n    <body>\r\n        <p>\r\n            <span>\r\n                <table>\r\n                    <tbody>\r\n                        <tr>\r\n                            <td><span>Hello table data</span></td>\r\n                        </tr>\r\n                    </tbody>\r\n                </table>\r\n            </span>\r\n        </p>\r\n    </body>\r\n</html>\r\n\r\n```\r\n\r\nJsoup output:\r\n```\r\n<html>\r\n    <head></head>\r\n    <body>\r\n        <p>\r\n            <span>\r\n                </span></p><table>\r\n                    <tbody>\r\n                        <tr>\r\n                            <td><span>Hello table data</span></td>\r\n                        </tr>\r\n                    </tbody>\r\n                </table>\r\n            \r\n        <p></p>\r\n    </body>\r\n</html>\r\n```\r\n\r\nRef link: https://try.jsoup.org/~PNrKdofSo_QE8KX2IbZKZ-xxyq0\r\n\r\nThe table tag inside span of p tag is unwrapped as next sibling of p tag. Additionally an empty p tag is created as the next sibling of the unwrapped table tag. This output is not seen in Chrome and Firefox browsers",
+      "fixCommit": "8601e85f96a67f8548216eec5e27737085d54488",
+      "fixCommitDate": "2024-09-10",
+      "parentCommit": "d3104a0307ce6c46a1ed99d0c5af672751209d9e",
+      "humanSourceFiles": [
+        "src/main/java/org/jsoup/parser/HtmlTreeBuilderState.java"
+      ],
+      "humanTestFiles": [
+        "src/test/java/org/jsoup/parser/HtmlParserTest.java"
+      ],
+      "humanTests": [
+        "org.jsoup.parser.HtmlParserTest#tableInPInQuirksMode"
+      ],
+      "why": "The issue body carries the whole reproduction: the input HTML, the exact wrong output, and the note that Chrome and Firefox do not do this. One parser-state change, one new parser test, and no new public method name."
+    },
+    {
+      "target": "jsoup",
+      "issue": 2187,
+      "title": "jsoup :has() bug ( v1.18.1 )",
+      "kind": "BUGFIX",
+      "issueText": "Hello.\r\n\r\n```\r\nString html = \"<div><span>abc</span><a>def</a></div>\";\r\nDocument doc = Jsoup.parseBodyFragment(html);\r\nSystem.out.println(doc.select(\"div:has(span + a)\").size()); // expected = 1, fact = 0\r\n\r\n```\r\njsoup 1.17.2 = everything ok",
+      "fixCommit": "7e2d5038b2a435aef5400c7f04dd14080a24132e",
+      "fixCommitDate": "2024-09-10",
+      "parentCommit": "7def06d87e5f07105bc4fca44a7e7d96b81edf30",
+      "humanSourceFiles": [
+        "src/main/java/org/jsoup/select/StructuralEvaluator.java"
+      ],
+      "humanTestFiles": [
+        "src/test/java/org/jsoup/select/SelectorTest.java"
+      ],
+      "humanTests": [
+        "org.jsoup.select.SelectorTest#divHasSpanPreceding",
+        "org.jsoup.select.SelectorTest#divHasDivPreceding"
+      ],
+      "why": "Four lines of Java with a literal expected-versus-actual number ('expected = 1, fact = 0') and the note that 1.17.2 was right. A regression with an unambiguous oracle, and no new public method name."
+    },
+    {
+      "target": "jsoup",
+      "issue": 2266,
+      "title": "Setting `charset` on an empty XML doc throws and index out of bounds exception",
+      "kind": "BUGFIX",
+      "issueText": "```java\nDocument xml = new Document(Parser.NamespaceXml, \"https://example.com\"); // no child nodes yet\nxml.outputSettings().syntax(Syntax.xml);\nxml.charset(StandardCharsets.UTF_8);\n```\n\n```text\nCaused by: java.lang.IndexOutOfBoundsException: Index 0 out of bounds for length 0\n\tat java.base/jdk.internal.util.Preconditions.outOfBounds(Preconditions.java:64)\n\tat java.base/jdk.internal.util.Preconditions.outOfBoundsCheckIndex(Preconditions.java:70)\n\tat java.base/jdk.internal.util.Preconditions.checkIndex(Preconditions.java:266)\n\tat java.base/java.util.Objects.checkIndex(Objects.java:361)\n\tat java.base/java.util.ArrayList.get(ArrayList.java:427)\n\tat org.jsoup.nodes.Document.ensureMetaCharsetElement(Document.java:366)\n\tat org.jsoup.nodes.Document.charset(Document.java:274)\n\tat suds.Feed.generateFeed(Feed.java:35)\n\tat suds.Suds.processEverything(Suds.java:120)\n\t... 1 more\n````",
+      "fixCommit": "5d31cac5888b872daa54e09238feeaa8e4e435e7",
+      "fixCommitDate": "2025-01-28",
+      "parentCommit": "8086b1e4088eb586e0abf939af18cf2d4beb4acb",
+      "humanSourceFiles": [
+        "src/main/java/org/jsoup/nodes/Document.java"
+      ],
+      "humanTestFiles": [
+        "src/test/java/org/jsoup/nodes/DocumentTest.java"
+      ],
+      "humanTests": [
+        "org.jsoup.nodes.DocumentTest#charsetOnEmptyDoc"
+      ],
+      "why": "Three lines of Java plus the full stack trace naming the method that throws. A guard in one method, one new test, and no new public method name."
+    },
+    {
+      "target": "jsoup",
+      "issue": 2476,
+      "title": "Cleaner may duplicate enforced attrs with preserve-case input",
+      "kind": "BUGFIX",
+      "issueText": "As a follow-up to #2475, I noticed another small `Cleaner` issue when working with a parsed `Document` that preserves attribute case.\n\nIf an element already has an attribute that matches an enforced attribute, but with different key case, the cleaned output can contain both versions of the attribute instead of a single enforced one.\n\nFor example:\n\n```java\nDocument dirty = Jsoup.parse(\"<a REL='external'>One</a>\", \"\",\n    Parser.htmlParser().settings(ParseSettings.preserveCase));\nCleaner cleaner = new Cleaner(Safelist.none()\n    .addTags(\"a\")\n    .addEnforcedAttribute(\"a\", \"rel\", \"external\"));\n\ncleaner.clean(dirty).body().html();\n// was:    <a REL=\"external\" rel=\"external\">One</a>\n// should: <a rel=\"external\">One</a>\n```\n\nThe same thing can happen with the standard `Safelist.basic()` handling of `rel=\"nofollow\"` on external links.\n\nThe intended behavior is that when an enforced attribute applies, the cleaned output should contain that attribute once, using the enforced key and value. A case-variant source attribute should be replaced, not duplicated.\n",
+      "fixCommit": "7c32b7e105184ee2e2027b2dd25bec8dac85f934",
+      "fixCommitDate": "2026-03-08",
+      "parentCommit": "e640ca8a72415e305227175c6289cca994502727",
+      "humanSourceFiles": [
+        "src/main/java/org/jsoup/safety/Cleaner.java"
+      ],
+      "humanTestFiles": [
+        "src/test/java/org/jsoup/safety/CleanerTest.java"
+      ],
+      "humanTests": [
+        "org.jsoup.safety.CleanerTest#canonicalizesEnforcedAttributes",
+        "org.jsoup.safety.CleanerTest#canonicalizesNofollowEnforcedAttribute",
+        "org.jsoup.safety.CleanerTest#preservesMatchingSourceNofollowWhenEnforcementSuppressed"
+      ],
+      "why": "The issue gives the Java snippet and writes both HTML strings out, was and should. Three new tests including the suppressed-enforcement edge case, and no new public method name."
+    },
+    {
+      "target": "jsoup",
+      "issue": 2105,
+      "title": "text() is missing a separator space between <button> text nodes",
+      "kind": "ENHANCEMENT",
+      "issueText": "Hello,\r\n\r\n```\r\nJsoup.parse(\"<html><button>Reply</button><button>ReplyToAll</button></html>\").text();\r\n```\r\nWhen trying to grab `text()` from this test case, we get `\"ReplyReplyToAll\"` (expecting `\"Reply ReplyToAll\"`). Notice that a separator space is missing between the two text nodes `Reply` and `ReplyToAll`. Would it be possible to get a fix for this?\r\n\r\nThank you.",
+      "fixCommit": "c7db66ea66c0558395b6cf2ef5ad3f59da36c88d",
+      "fixCommitDate": "2024-07-01",
+      "parentCommit": "1f1f72d1e89821c630dcfc35e1a0a7f653cc877b",
+      "humanSourceFiles": [
+        "src/main/java/org/jsoup/parser/Tag.java"
+      ],
+      "humanTestFiles": [
+        "src/test/java/org/jsoup/nodes/ElementTest.java"
+      ],
+      "humanTests": [
+        "org.jsoup.nodes.ElementTest#buttonTextHasSpace"
+      ],
+      "why": "One line of Java, actual 'ReplyReplyToAll', expected 'Reply ReplyToAll'. Labelled an improvement rather than a defect; the fix is a two-token tag-configuration change and names no new public method, so the maintainer's test cannot fail on a naming difference."
+    }
+  ]
+}

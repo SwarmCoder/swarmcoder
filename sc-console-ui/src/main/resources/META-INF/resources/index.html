@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+        <meta name="viewport" content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, viewport-fit=cover"/>
+        <title>SwarmCoder Console</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script>
+            tailwind.config = { corePlugins: { preflight: false } }
+        </script>
+        <link href="https://cdn.jsdelivr.net/npm/daisyui@5.6.14/daisyui.css" rel="stylesheet" type="text/css" />
+        <style>
+            /*
+              The dark theme's elevation, widened so it can be seen.
+
+              MEASURED, not guessed. daisyUI 5's stock dark theme sets base-100 to 25.33% lightness,
+              base-200 to 23.26% and base-300 to 21.15% — two points of lightness per step. The
+              Console paints a card with bg-base-100 and the page it sits on with bg-base-100 too, so
+              a card was EXACTLY the colour of the page behind it, separated only by a border two
+              steps down. On a pipeline board of five columns that is one flat dark field: the author
+              reported it as "the colour difference between cards and background is hardly visible",
+              and the browser agreed — card oklch(0.2533 0.016 252.42), page oklch(0.2533 0.016
+              252.42), identical.
+
+              The three colours below say what each one is FOR, which is the thing the ramp was
+              missing:
+
+                base-200 — the page. The deepest surface; nothing is behind it.
+                base-100 — anything that floats on the page: a card, a dialog, the header bar.
+                base-300 — every edge. Borders, dividers, hover, the track of a progress bar.
+
+              So base-300 is now LIGHTER than the surfaces rather than darker, because a line drawn
+              on a dark screen reads by being lighter than what it separates. Eight points of
+              lightness between the page and a card, ten between a card and its border.
+
+              Why here and not in the component library: ZeroZ Stack 0.8.0 has TextStyle for how big
+              text is, Emphasis for how loud it is and Layer for what floats above what, but no name
+              at all for how high a SURFACE sits. There is nothing to ask for, so every screen asks
+              for a colour instead, and the colours have to be made to mean something somewhere. This
+              is that somewhere: the Console's one stylesheet, applied to the whole theme rather than
+              typed into a screen.
+
+              The light theme is left as daisyUI ships it; the complaint and the measurement are both
+              about the dark one.
+            */
+            [data-theme="dark"] {
+                --color-base-100: oklch(28% 0.018 252.4);
+                --color-base-200: oklch(20% 0.016 253.1);
+                --color-base-300: oklch(38% 0.020 254.1);
+            }
+        </style>
+    </head>
+    <!--
+      bg-base-200: the page is the DEEPEST surface, so everything drawn on it with bg-base-100 —
+      cards, dialogs, the header — is lifted off it. It used to be bg-base-100, the same token the
+      cards use, which is why no ramp could have separated them.
+    -->
+    <body class="bg-base-200 min-h-screen m-0 p-0 text-base-content" data-theme="dark">
+        <div id="app-root"></div>
+        <script type="text/javascript" charset="utf-8" src="js/classes.js"></script>
+        <script>
+            main();
+        </script>
+    </body>
+</html>

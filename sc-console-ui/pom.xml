@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-console-ui</artifactId>
+  <name>sc-console-ui</name>
+  <description>SwarmCoder Console browser client (TeaVM JS + zeroz4j ui-components). The
+    compiled app is packaged under META-INF/resources so the embedded server serves it.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-console-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.zeroz4j</groupId>
+      <artifactId>zerozstack-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.zeroz4j</groupId>
+      <artifactId>zerozstack-ui-components</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-classlib</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-jso-apis</artifactId>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.teavm</groupId>
+        <artifactId>teavm-maven-plugin</artifactId>
+        <version>${teavm.version}</version>
+        <executions>
+          <execution>
+            <id>compile-js</id>
+            <goals>
+              <goal>compile</goal>
+            </goals>
+            <configuration>
+              <!-- Straight into the jar's servable resources. -->
+              <targetDirectory>${project.build.outputDirectory}/META-INF/resources/js</targetDirectory>
+              <mainClass>com.swarmcoder.console.ui.ConsoleApp</mainClass>
+              <targetType>JAVASCRIPT</targetType>
+              <minifying>false</minifying>
+              <optimizationLevel>SIMPLE</optimizationLevel>
+              <debugInformationGenerated>true</debugInformationGenerated>
+              <sourceMapsGenerated>true</sourceMapsGenerated>
+              <strict>false</strict>
+              <properties>
+                <java.util.ServiceLoader.parseServiceConfiguration>true</java.util.ServiceLoader.parseServiceConfiguration>
+              </properties>
+              <compileScopes>
+                <scope>compile</scope>
+                <scope>provided</scope>
+                <scope>system</scope>
+                <scope>runtime</scope>
+              </compileScopes>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

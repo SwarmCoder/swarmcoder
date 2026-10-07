@@ -1,0 +1,44 @@
+// The source that produced TEST-swarm.accept.SpellingsTest.xml in this folder.
+// Kept as a .txt so it is not compiled into this module — it is an input to a real Maven run,
+// not one of our own tests. Regenerate the XML with:
+//   mvn test -pl sc-workflow -am -Dtest=RealJUnitCriterionMatchingTest \
+//     -Dsurefire.failIfNoSpecifiedTests=false      (with SWARMCODER_REAL_JUNIT=true set)
+package swarm.accept;
+
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class SpellingsTest {
+
+    @Test
+    void plainPasses() { assertTrue(true); }
+
+    @Test
+    void plainFails() { fail("deliberate assertion failure"); }
+
+    @Test
+    void plainErrors() { throw new IllegalStateException("deliberate error, not an assertion"); }
+
+    @Test
+    @DisplayName("multiplies two positive numbers")
+    void multipliesPositives() { fail("display-name test failing"); }
+
+    @Test
+    @Disabled("never runs")
+    void neverRuns() { fail("should not execute"); }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void parameterised(int n) { if (n == 2) fail("param 2 fails"); }
+
+    @Nested
+    class Inner {
+        @Test
+        void nestedFails() { fail("nested failure"); }
+        @Test
+        void nestedPasses() { assertTrue(true); }
+    }
+}

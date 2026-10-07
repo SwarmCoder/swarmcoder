@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-knowledge</artifactId>
+  <name>sc-knowledge</name>
+  <description>Librarian, Context7/web adapters, docs index, Context Ledger.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.lucene</groupId>
+      <artifactId>lucene-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.lucene</groupId>
+      <artifactId>lucene-codecs</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.lucene</groupId>
+      <artifactId>lucene-queryparser</artifactId>
+      <version>${lucene.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-syntax</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-store</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-inference</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The LspService facade only: LSP4J stays confined to sc-lsp (LspBoundaryTest). -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-lsp</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-runtime</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- OpenRewrite: the structural index. Apache-2.0; the parsers are type-attributing for
+         Java and the Maven parser reads a pom's resolved dependency model. rewrite-java-25 is the
+         parser backend for the JDK this build runs on; rewrite-java-21 comes with it so a JDK 21
+         runtime still resolves a backend. Versions come from rewrite-bom in the parent. -->
+    <!-- Reads the members of a class file the build produced (BuiltTypes), for a contract type an
+         annotation processor generates. Already on the runtime classpath through OpenRewrite at
+         this same version, but not visible at compile time, so it is declared here. -->
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-tree</artifactId>
+      <version>9.10.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.openrewrite</groupId>
+      <artifactId>rewrite-java</artifactId>
+      <exclusions>
+        <!-- OpenRewrite's gizmo brings the old org.jboss:jandex 2.x; Weld needs io.smallrye:jandex 3.x,
+             which keeps the same org.jboss.jandex package. Two jars, one package: Weld loaded the old
+             one and failed to start (NoSuchMethodError ClassInfo.annotationsMap, 2026-09-05). -->
+        <exclusion>
+          <groupId>org.jboss</groupId>
+          <artifactId>jandex</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.openrewrite</groupId>
+      <artifactId>rewrite-java-25</artifactId>
+      <scope>runtime</scope>
+      <exclusions>
+        <!-- OpenRewrite's gizmo brings the old org.jboss:jandex 2.x; Weld needs io.smallrye:jandex 3.x,
+             which keeps the same org.jboss.jandex package. Two jars, one package: Weld loaded the old
+             one and failed to start (NoSuchMethodError ClassInfo.annotationsMap, 2026-09-05). -->
+        <exclusion>
+          <groupId>org.jboss</groupId>
+          <artifactId>jandex</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.openrewrite</groupId>
+      <artifactId>rewrite-java-21</artifactId>
+      <scope>runtime</scope>
+      <exclusions>
+        <!-- OpenRewrite's gizmo brings the old org.jboss:jandex 2.x; Weld needs io.smallrye:jandex 3.x,
+             which keeps the same org.jboss.jandex package. Two jars, one package: Weld loaded the old
+             one and failed to start (NoSuchMethodError ClassInfo.annotationsMap, 2026-09-05). -->
+        <exclusion>
+          <groupId>org.jboss</groupId>
+          <artifactId>jandex</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.openrewrite</groupId>
+      <artifactId>rewrite-maven</artifactId>
+      <exclusions>
+        <!-- OpenRewrite's gizmo brings the old org.jboss:jandex 2.x; Weld needs io.smallrye:jandex 3.x,
+             which keeps the same org.jboss.jandex package. Two jars, one package: Weld loaded the old
+             one and failed to start (NoSuchMethodError ClassInfo.annotationsMap, 2026-09-05). -->
+        <exclusion>
+          <groupId>org.jboss</groupId>
+          <artifactId>jandex</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.openrewrite</groupId>
+      <artifactId>rewrite-xml</artifactId>
+      <exclusions>
+        <!-- OpenRewrite's gizmo brings the old org.jboss:jandex 2.x; Weld needs io.smallrye:jandex 3.x,
+             which keeps the same org.jboss.jandex package. Two jars, one package: Weld loaded the old
+             one and failed to start (NoSuchMethodError ClassInfo.annotationsMap, 2026-09-05). -->
+        <exclusion>
+          <groupId>org.jboss</groupId>
+          <artifactId>jandex</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-testsupport</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,68 @@
+{
+  "title": "Add, edit, and remove books in the personal list",
+  "instructions": "Build the single-user book list feature end to end: each book stores a title, an author, a publication year, and a reading status chosen from 'haven't started', 'currently reading', or 'finished', with an add form, editable fields, a remove action, and a list that shows the latest value of every field. The list must survive a restart. Write a JUnit 5 acceptance test that proves adding, editing and removing through the service.",
+  "targetRoot": "C:/work/swarmcoder/dev/bookshelf-demo",
+  "referenceRoots": [
+    {
+      "label": "zeroz4j",
+      "path": "C:/work/zeroz4j"
+    }
+  ],
+  "contracts": [
+    {
+      "typeName": "com.swarmcoder.demo.bookshelf.model.ReadingStatus",
+      "purpose": "Where the reader is with a book.",
+      "members": [
+        "NOT_STARTED",
+        "CURRENTLY_READING",
+        "FINISHED"
+      ]
+    },
+    {
+      "typeName": "com.swarmcoder.demo.bookshelf.model.Book",
+      "purpose": "One book on the shelf.",
+      "members": [
+        "long id",
+        "String title",
+        "String author",
+        "int year",
+        "ReadingStatus status"
+      ]
+    },
+    {
+      "typeName": "com.swarmcoder.demo.bookshelf.api.BookService",
+      "purpose": "What the browser calls to work with the list.",
+      "members": [
+        "List<Book> list()",
+        "Book save(Book book)",
+        "void delete(long id)"
+      ]
+    },
+    {
+      "typeName": "com.swarmcoder.demo.bookshelf.server.BookServiceImpl",
+      "purpose": "The server side of the book list, persisting to the object store.",
+      "members": [
+        "List<Book> list()",
+        "Book save(Book book)",
+        "void delete(long id)"
+      ]
+    },
+    {
+      "typeName": "com.swarmcoder.demo.bookshelf.client.BookshelfView",
+      "purpose": "The screen: an add form, an editable list, and a remove action.",
+      "members": [
+        "void render()"
+      ]
+    },
+    {
+      "typeName": "swarm.accept.BookListTest",
+      "purpose": "Proves the three acceptance criteria through the service.",
+      "members": [
+        "void addingABookMakesItAppearInTheList()",
+        "void editingABookChangesWhatTheListShows()",
+        "void removingABookDeletesIt()"
+      ]
+    }
+  ],
+  "constraints": "# Bookshelf — how it must be built\n\nThis is the technical side of the Bookshelf app. The other document says what the\napp must do for the person using it. This one says what it must be made of.\n\nNone of the rules below is a feature. Nothing here is ever \"finished\" — every one\nof them applies to every piece of work on this project, for as long as the project\nexists.\n\n## The stack is fixed and it is not the usual one\n\nThis app is built on **ZeroZ Stack**, version 0.8.0-SNAPSHOT, on **Java 21** with\n**Maven**. That is not a preference. The whole point of the stack is that there is\none language from the browser down to the disk, so anything that reintroduces a\nsecond language or a translation layer defeats it.\n\nThe most important thing to understand: **this looks like an ordinary Java web app\nand is not one.** Almost every habit from Spring, JPA and REST is wrong here. If\nyou find yourself reaching for something familiar, that is the moment to check.\n\n## Explicitly forbidden\n\nDo not use, add, import, or write tests against any of these. None of them is\npresent in this project and none of them will be added:\n\n- **Spring or Spring Boot** in any form\n- **JPA, Hibernate, or any ORM**, and the `jakarta.persistence` annotations\n- **Flyway, Liquibase, or SQL migrations** — there is no SQL and no schema\n- **A relational database** of any kind\n- **REST endpoints, HTTP controllers, or JSON** as the way the browser talks to\n  the server\n- **JavaScript or TypeScript** source files\n- **Vaadin**, or any other web UI framework\n\nIf a piece of work seems to need one of these, the design is wrong. Say so rather\nthan adding it.\n\n## The three modules, and what belongs in each\n\nThe repository is a Maven aggregator with three modules. There is no source code\nat the top level and there never should be.\n\n- `bookshelf-demo-shared` — the data model, and the service interfaces the browser\n  calls. Both sides depend on it.\n- `bookshelf-demo-client` — everything the browser runs.\n- `bookshelf-demo-server` — everything the server runs.\n\nExisting package root: `com.swarmcoder.demo.bookshelf`. Stay inside it.\n\n## The browser runs Java\n\nThe client module is compiled from Java to JavaScript by **TeaVM**. You write Java;\nthe build produces the browser code. This means the client can only use classes\nTeaVM can compile, which is a subset of the Java library — not everything on the\nserver side is available.\n\nThe user interface is built from the stack's own components in `com.zeroz4j.ui.*`\n— for example `Div`, `Component`, `TextStyle`. Build screens by composing those in\nJava. Do not write HTML templates and do not hand-write CSS-in-Java where a\ncomponent already exists.\n\n## The browser talks to the server by calling Java methods\n\nThere are no REST calls and no JSON. A service interface lives in the shared\nmodule; the client calls it as if it were local, and the stack carries the call\nover a binary WebSocket connection. The client connects with\n`Zeroz4jClient.connect(...)`.\n\nObjects that cross that boundary are plain Java classes annotated `@DataModel`,\nwith public fields and a no-argument constructor. `Message` in the shared module is\nthe working example — copy its shape. An annotation processor (`zerozstack-apt`)\ngenerates what the transport needs, so a data class that does not compile cleanly\nthrough the processor will fail in ways that look unrelated.\n\n## Storage is an object graph, not a database\n\nPersistence uses **EclipseStore** through `zerozstack-store-eclipsestore`. The\nserver keeps the live Java objects in memory and writes that object graph to disk.\nThere is no SQL, no schema, no mapping layer, and no queries in the database sense\n— you hold a root object and walk it with ordinary Java.\n\n**The one rule that catches everybody:** saving an object does **not** automatically\nsave the objects inside it. Storing a list does not store a book that was already\nin it and has since been edited. Every level of nesting you changed needs its own\nexplicit save call. Getting this wrong loses data silently — the app looks correct\nuntil it is restarted, and then the edit is simply gone. This has caused real data\nloss before and it is the single most likely way to get this project wrong.\n\n## Packaging\n\nThe server jar is deliberately **not** a shaded or fat jar, and must not become\none. The CDI container treats each jar as a separate bean archive, and merging them\nbreaks discovery in ways that surface a long way from the cause. Keep the module\njars separate on a plain classpath.\n\n## Building and checking your work\n\nThe build is offline. `mvn -o` — the sandbox has no network, and a build that tries\nto reach the internet fails in a way that looks like a mistake in the code.\n\nCompile from the repository root so the three modules build in the right order.\nCode that compiles is the minimum bar, not the goal; the app has to actually run.\n\n## Where to find the real answers\n\nThe full ZeroZ Stack documentation is available to you as reference material —\n43 documents, searchable. **Look things up there before working an API out from\ncompiled classes.** Reading class files to guess at a method signature is slow,\nusually wrong, and has repeatedly exhausted an entire work budget without producing\na single line of code. If the documentation genuinely does not answer it, say so.\n"
+}

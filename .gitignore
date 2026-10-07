@@ -1,0 +1,21 @@
+/.idea/
+target/
+dev/demo-repo/
+/dist/
+swarmcoder.log
+
+# Stray compiled classes and root-level scratch/debug artifacts
+*.class
+/org/
+/TestClassLoad*
+/PrintClasspath.java
+/test.java
+/*.log
+dev/bookshelf-demo/
+dev/e2e-loop-last-run.log
+
+# Written by flatten-maven-plugin on every build
+.flattened-pom.xml
+
+# Shell crash dumps
+*.stackdump

@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-console</artifactId>
+  <name>sc-console</name>
+  <description>SwarmCoder Console server: zeroz4j RMI backend embedded in the orchestrator JVM
+    (TomEE embedded — servlet + WebSocket + CDI in-process, because EclipseStore is
+    single-process). See docs/OBSERVABILITY_DESIGN.md.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-console-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The compiled browser client (META-INF/resources) — runtime only, served as statics. -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-console-ui</artifactId>
+      <version>${project.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-store</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-runtime</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.zeroz4j</groupId>
+      <artifactId>zerozstack-shared-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.zeroz4j</groupId>
+      <artifactId>zerozstack-server-helidon</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.zeroz4j</groupId>
+      <artifactId>zerozstack-store-eclipsestore</artifactId>
+    </dependency>
+
+    <!-- The guided-flow engine parses the model's structured replies (RequirementsIntake). -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- LlmJson only (BacklogPlanning, RequirementsIntake, AutonomousAnswers): the same tolerant
+         extraction that TestAuthorClient and ArchitectClient rely on for a malformed reply, so a
+         planner/analyst reply wrapped in prose, fenced, or double-encoded is read the same way
+         everywhere it happens rather than by a second, drifting implementation in here. sc-console
+         still does not depend on inference for TALKING to a model — that stays entirely behind
+         ConsoleContext.ChatModel, and sc-inference is lightweight enough (sc-domain + Jackson,
+         nothing else) that pulling in this one parsing class costs nothing else. -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-inference</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- English tokenising and stemming for near-duplicate detection over the requirement graph
+         (RequirementSimilarity). Analysis only - nothing here builds or reads a Lucene index. -->
+    <dependency>
+      <groupId>org.apache.lucene</groupId>
+      <artifactId>lucene-analysis-common</artifactId>
+    </dependency>
+
+    <!-- Document text extraction for the BRD intake pipeline (DocumentExtractor). -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+    </dependency>
+    <!-- POI logs through log4j-api. Without this bridge it finds no implementation and prints
+         "Log4j2 could not find a logging implementation" at Console startup, and any POI warning
+         during a .docx extraction would be dropped instead of reaching the logback file appender. -->
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-to-slf4j</artifactId>
+      <version>2.23.1</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.microsoft.playwright</groupId>
+      <artifactId>playwright</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-testsupport</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- A fresh JVM per test class. The browser tests each boot an embedded Console, and
+               the framework's Signals.shared(...) binds to the FIRST server engine started in a
+               JVM: a second server in the same JVM serves pages but its signal set() never
+               reaches the client, so signal-driven assertions time out. This is a hard
+               constraint, not a preference.
+
+               RE-MEASURED against ZeroZ Stack 0.7.0 on 2026-08-27, because 0.7.0 made the
+               engine's set of open connections static and that looked like it might have been
+               the cause. It is not. With reuseForks=true all four browser tests ran in one JVM:
+               the first passed, the last passed because it asserts on the shell rather than on
+               data, and the two in between failed waiting for content that only arrives over a
+               signal — the requirements tree, and the project name in the header. The clients
+               connected and authenticated normally ("Authenticated as: admin ... protocol v2"),
+               with no page errors at all; the data simply never came. So the workaround stays,
+               and this comment now records that it was tested rather than assumed. -->
+          <reuseForks>false</reuseForks>
+          <!-- Repeated from the parent because a module-level <configuration> replaces the
+               inherited <argLine>. EclipseStore (eclipse-serializer) needs these JDK internals
+               on 17+; without them every store-touching test in this module fails. -->
+          <argLine>--add-exports java.base/jdk.internal.misc=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.time=ALL-UNNAMED</argLine>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

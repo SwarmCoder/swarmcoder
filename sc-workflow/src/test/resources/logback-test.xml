@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test logging config. Keeps third-party noise at WARN but surfaces SwarmCoder's own INFO logs
+  (workflow transitions, sandbox launches, verification, fallbacks) so live/E2E tests are
+  observable. Raise com.swarmcoder to DEBUG when diagnosing a specific run.
+-->
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{28} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.swarmcoder" level="INFO"/>
+
+  <root level="WARN">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-app</artifactId>
+  <name>sc-app</name>
+  <description>Main entrypoint, config loading, wiring.</description>
+
+  <dependencies>
+    <!-- Depends on all other modules to wire them up -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-store</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-runtime</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-inference</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-syntax</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-git</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-sandbox</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-verify</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-knowledge</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-swarm</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-workflow</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-server</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-console</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
+    </dependency>
+    <!-- The one SLF4J binding in the product: file appender only (logback.xml), so the
+         legacy TUI's terminal stays clean and the launched app actually emits logs
+         (without this, every log statement in the codebase went to the NOP provider). -->
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+    </dependency>
+    <!-- FakeVllm, the scripted OpenAI-compatible endpoint. sc-app is the only module that can
+         see both the Console and the workflow engine, so the full-product end-to-end test lives
+         here and needs the double from sc-swarm's test classes. -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-swarm</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-testsupport</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.6.1</version>
+        <executions>
+          <execution>
+            <id>copy-libs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/libs</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>libs/</classpathPrefix>
+              <mainClass>com.swarmcoder.app.Main</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

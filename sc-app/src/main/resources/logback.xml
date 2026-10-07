@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Terminal AND file. The old rule was file-only, because the Lanterna TUI owned the terminal and
+  anything written to it corrupted the display. That TUI is gone — the Console is the interface now
+  (docs/OBSERVABILITY_DESIGN.md) — and the rule outlived it: the app could fail to start and say
+  nothing at all, with the reason sitting in a file nobody knew to look in.
+
+  CONSOLE carries what an operator watching the process needs; FILE keeps everything for afterwards.
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <!-- Terser than the file: someone reading this is watching it go past, not searching it. -->
+      <pattern>%d{HH:mm:ss} %-5level %logger{20} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/.swarmcoder/logs/swarmcoder.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/.swarmcoder/logs/swarmcoder.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>14</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{30} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.swarmcoder" level="INFO"/>
+
+  <!-- Errors reported by the BROWSER, forwarded over ./api/clientlog. Kept on its own logger so a
+       flood from one bad page can be turned down without silencing the server. -->
+  <logger name="com.swarmcoder.browser" level="INFO"/>
+
+  <!-- Context7 is optional; when its MCP server (localhost:3000) is down, Context7Client
+       logs one INFO line and degrades. The MCP SDK + reactor otherwise dump a 60-line
+       stack trace on every start — pure noise, silenced here. -->
+  <logger name="io.modelcontextprotocol" level="OFF"/>
+  <logger name="reactor.core.publisher" level="OFF"/>
+
+  <!-- EclipseStore narrates every storage channel at INFO and is deafening; its warnings matter. -->
+  <logger name="org.eclipse.store" level="WARN"/>
+  <logger name="org.eclipse.serializer" level="WARN"/>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+    <appender-ref ref="FILE"/>
+  </root>
+</configuration>

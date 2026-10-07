@@ -1,0 +1,12 @@
+# SwarmCoder verification contract for this repo (spec §10.1).
+# Acceptance tests live in the protected package swarm.accept (written by TEST_AUTHORING,
+# never by workers); the pattern below runs only those. With none present yet the stage is
+# skipped cleanly thanks to -Dsurefire.failIfNoSpecifiedTests=false.
+toolchain: maven
+compile:
+  - "mvn -q -B compile test-compile"
+acceptance:
+  - "mvn -q -B test -Dtest=swarm/accept/** -Dsurefire.failIfNoSpecifiedTests=false"
+existing:
+  - "mvn -q -B test"
+timeoutSeconds: 600

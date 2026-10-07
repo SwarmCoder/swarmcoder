@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-server</artifactId>
+  <name>sc-server</name>
+  <description>The MCP server: a thin, read-first adapter over the Console's own ObserverService,
+    GraphService and ControlService, so an outside agent (Claude Code, an IDE, CI) can see what a
+    run is doing. Off by default, loopback only. Also the legacy decision-queue API. No ACP —
+    DEVELOPER_CORRECTIONS.md §9 S7 dropped that half outright and §32 keeps it dropped.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-store</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The Console's read and control contracts, INTERFACES ONLY: sc-server never depends on
+         sc-console, so the implementations stay where the Console builds them and there is exactly
+         one place that decides what is true. -->
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-console-api</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp</artifactId>
+    </dependency>
+  </dependencies>
+</project>

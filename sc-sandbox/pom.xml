@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 Franz Schöning (https://www.franzschoning.com)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.swarmcoder</groupId>
+    <artifactId>swarmcoder</artifactId>
+    <version>${revision}</version>
+  </parent>
+
+  <artifactId>sc-sandbox</artifactId>
+  <name>sc-sandbox</name>
+  <description>Docker sandbox manager (docker-java), action-server protocol client.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-domain</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.docker-java</groupId>
+      <artifactId>docker-java-core</artifactId>
+      <version>3.3.6</version>
+    </dependency>
+    <!-- zerodep transport (not httpclient5): it supports Windows named pipes (npipe://); the
+         Apache httpclient5 transport does not and falls back to tcp://localhost:2375. -->
+    <dependency>
+      <groupId>com.github.docker-java</groupId>
+      <artifactId>docker-java-transport-zerodep</artifactId>
+      <version>3.3.6</version>
+    </dependency>
+    <dependency>
+      <groupId>com.swarmcoder</groupId>
+      <artifactId>sc-testsupport</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- The page checker the UI image is built with, also on the classpath: the verifier sends
+           this build's copy into the container, so an image built earlier needs no rebuild. -->
+      <resource>
+        <directory>images/sc-java-ui</directory>
+        <targetPath>sc-browser</targetPath>
+        <includes>
+          <include>check.js</include>
+        </includes>
+      </resource>
+    </resources>
+  </build>
+</project>

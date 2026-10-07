@@ -1,0 +1,17 @@
+=== which tier answered which shape of question ===
+how do I persist an object graph in this stack                   DETERMINISTIC  What this project's reference documentation says about it.
+Zeroz4jClient                                                    DETERMINISTIC  This is how `Zeroz4jClient` is used in code that compiles today.
+cannot find symbol: class DataRootProvider                       DETERMINISTIC  The closest code in this project's reference material.
+when should I use LiveSync instead of server events, and what…   DETERMINISTIC  The closest code in this project's reference material.
+how do I add a REST controller                                   DETERMINISTIC  What this project's reference documentation says about it.
+how do I get the root object from the database node              DETERMINISTIC  The closest code in this project's reference material.
+how do I make a select box with three fixed options              DETERMINISTIC  The closest code in this project's reference material.
+what is zerozstack-store-eclipsestore and how do I declare it    DETERMINISTIC  `zerozstack-store-eclipsestore` is a module of this project's reference material, declare…
+which module should the service implementation live in, share…   DETERMINISTIC  What this project's reference documentation says about it.
+ZeroZDbNode                                                      DETERMINISTIC  This is how `ZeroZDbNode` is used in code that compiles today.
+ZerozDbNode embeded root                                         DETERMINISTIC  What this project's reference documentation says about it.
+skeleton: BookServiceImpl                                        DETERMINISTIC  A compiling starting point for `com.swarmcoder.demo.bookshelf.server.BookServiceImpl`. Wr…
+how does the client call the server                              DETERMINISTIC  What this project's reference documentation says about it.
+how do I inject EclipseStore in the client                       DETERMINISTIC  What this project's reference documentation says about it.
+how is an RmiService implementation discovered by the server     DETERMINISTIC  What this project's reference documentation says about it.
+=== end ===

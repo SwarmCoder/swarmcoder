@@ -1,0 +1,114 @@
+SwarmCoder
+Copyright 2026 Franz Schöning
+
+This product includes software developed by Franz Schöning.
+
+Architectural design, reference implementation, and enterprise integration
+strategy by Franz Schöning, Principal Enterprise Architect.
+
+For enterprise architecture advisory, legacy system modernization,
+and AI-integration strategy, visit:
+https://www.franzschoning.com
+
+=========================================================================
+Third-Party Acknowledgements
+=========================================================================
+This project relies on the following open-source technologies and
+acknowledges their respective licenses and contributors:
+
+* ZeroZ Stack
+  Copyright (c) Franz Schöning.
+  Licensed under the Apache License 2.0.
+  https://github.com/ZeroZ4j/zerozstack
+
+* Koog
+  Copyright (c) JetBrains s.r.o. and contributors.
+  Licensed under the Apache License 2.0.
+  https://github.com/JetBrains/koog
+
+* TeaVM
+  Copyright (c) Alexey Andreev and contributors.
+  Licensed under the Apache License 2.0.
+  https://teavm.org/
+
+* EclipseStore
+  Copyright (c) Eclipse Foundation and contributors.
+  Licensed under the Eclipse Public License - v 2.0.
+  https://eclipsestore.io/
+
+* Eclipse JGit
+  Copyright (c) Eclipse Foundation and contributors.
+  Licensed under the Eclipse Distribution License - v 1.0.
+  https://www.eclipse.org/jgit/
+
+* Eclipse LSP4J
+  Copyright (c) Eclipse Foundation and contributors.
+  Licensed under the Eclipse Public License - v 2.0 or the
+  Eclipse Distribution License - v 1.0.
+  https://github.com/eclipse-lsp4j/lsp4j
+
+* Eclipse JDT Language Server (installed separately; not distributed with this project)
+  Copyright (c) Eclipse Foundation and contributors.
+  Licensed under the Eclipse Public License - v 2.0.
+  https://github.com/eclipse-jdtls/eclipse.jdt.ls
+
+* Tree-sitter, its grammars, and the tree-sitter-ng Java bindings
+  Copyright (c) Max Brunsfeld and the tree-sitter and tree-sitter-ng contributors.
+  Licensed under the MIT License.
+  https://tree-sitter.github.io/ and https://github.com/bonede/tree-sitter-ng
+
+* OpenRewrite
+  Copyright (c) Moderne, Inc. and contributors.
+  Licensed under the Apache License 2.0.
+  https://docs.openrewrite.org/
+
+* docker-java
+  Copyright (c) docker-java contributors.
+  Licensed under the Apache License 2.0.
+  https://github.com/docker-java/docker-java
+
+* Model Context Protocol Java SDK
+  Copyright (c) Anthropic, PBC and contributors.
+  Licensed under the MIT License.
+  https://github.com/modelcontextprotocol/java-sdk
+
+* Playwright for Java
+  Copyright (c) Microsoft Corporation.
+  Licensed under the Apache License 2.0.
+  https://playwright.dev/java/
+
+* ONNX Runtime
+  Copyright (c) Microsoft Corporation.
+  Licensed under the MIT License.
+  https://onnxruntime.ai/
+
+* Apache Lucene, Apache PDFBox, Apache POI, Apache HttpComponents
+  Copyright (c) The Apache Software Foundation.
+  Licensed under the Apache License 2.0.
+  https://www.apache.org/
+
+* Jackson
+  Copyright (c) FasterXML, LLC and contributors.
+  Licensed under the Apache License 2.0.
+  https://github.com/FasterXML/jackson
+
+* ASM
+  Copyright (c) INRIA, France Telecom.
+  Licensed under the BSD 3-Clause License.
+  https://asm.ow2.io/
+
+* SLF4J
+  Copyright (c) QOS.ch.
+  Licensed under the MIT License.
+  https://www.slf4j.org/
+
+* Logback
+  Copyright (c) QOS.ch.
+  Licensed under the Eclipse Public License - v 1.0 or the
+  GNU Lesser General Public License - v 2.1.
+  https://logback.qos.ch/
+
+* TamboUI (two source files under dev/tamboui, kept with their own headers)
+  Copyright (c) TamboUI Contributors.
+  Licensed under the MIT License.
+  https://github.com/tamboui/tamboui
