@@ -38,7 +38,7 @@ from source.
    ```
 
    It must print nothing.
-6. Check that the build depends on no `-SNAPSHOT`: `git grep -n "SNAPSHOT" -- pom.xml 'sc-*/pom.xml'`
+6. Check that the build depends on no `-SNAPSHOT`: after step 3, `git grep -n "SNAPSHOT" -- pom.xml 'sc-*/pom.xml'`
    must print nothing. Somebody who clones the repository cannot resolve a snapshot that only
    exists on the maintainer's machine.
 

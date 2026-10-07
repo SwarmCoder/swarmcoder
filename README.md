@@ -72,7 +72,7 @@ java --add-exports java.base/jdk.internal.misc=ALL-UNNAMED \
      --add-opens java.base/java.util=ALL-UNNAMED \
      --add-opens java.base/java.lang=ALL-UNNAMED \
      --add-opens java.base/java.time=ALL-UNNAMED \
-     -jar sc-app/target/sc-app-0.1.0.jar
+     -jar sc-app/target/sc-app-0.2.0-SNAPSHOT.jar
 ```
 
 On Windows, `build.bat` and `run.bat` do the same. The four `--add` options are required by the

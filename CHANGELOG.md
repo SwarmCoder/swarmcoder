@@ -7,6 +7,13 @@ changes may land in a minor version while the design settles.
 
 SwarmCoder is experimental. Read each release's **Breaking** section before upgrading.
 
+## [Unreleased]
+
+### Fixed
+
+- The build no longer fails on newer Maven versions with "dependency must be unique": `sc-swarm`
+  declared `sc-domain` twice.
+
 ## [0.1.0] - 2026-10-07
 
 The first public release, under the Apache License 2.0.
@@ -47,4 +54,5 @@ stored data is stable yet, and a later release may not be able to open a store w
 - The documents under `docs/` were written during development. Several are historical, and
   [docs/README.md](docs/README.md) says which.
 
+[Unreleased]: https://github.com/SwarmCoder/swarmcoder/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/SwarmCoder/swarmcoder/releases/tag/v0.1.0

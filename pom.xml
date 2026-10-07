@@ -63,7 +63,7 @@
   <properties>
     <!-- The one place the version is stated. Every module's parent reference says ${revision},
          and flatten-maven-plugin writes the real number into the POMs a build installs. -->
-    <revision>0.1.0</revision>
+    <revision>0.2.0-SNAPSHOT</revision>
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
     <maven.compiler.release>21</maven.compiler.release>

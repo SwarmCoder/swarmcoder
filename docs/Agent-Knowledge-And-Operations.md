@@ -1403,7 +1403,7 @@ rules became store objects on 2026-09-02 — though the path is still resolved.
 ## 7.3 Building and running
 
 - **Build:** `build.bat` runs `mvn clean install -DskipTests`. A 20-module reactor, Java 21.
-- **Run:** `run.bat` runs `java %JAVA_OPTS% -jar sc-app\target\sc-app-0.1.0.jar`. `JAVA_OPTS`
+- **Run:** `run.bat` runs `java %JAVA_OPTS% -jar sc-app\target\sc-app-0.2.0-SNAPSHOT.jar`. `JAVA_OPTS`
   carries four `--add-exports`/`--add-opens` flags EclipseStore needs; the same flags are in the root
   pom's surefire `argLine`, with a comment that any launcher script must repeat them. `sc-app` is a
   **thin** jar: the manifest points at `libs/`, into which the dependency plugin copies runtime
