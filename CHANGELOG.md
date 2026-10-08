@@ -64,6 +64,34 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Changed
 
+- **The architect hands what it found to the workers.** While it designs, the architect keeps
+  the facts a worker will need about how the project and its framework do things (which
+  annotation makes the framework find a service, how a screen is put on the entry page, a few
+  lines of real code that do the same kind of thing). It marks them in a lookup it has just made
+  with a new tool, `keep_for_workers`; the lines are copied from the lookup, not typed again.
+  Each fact goes word for word to the workers and the test author of the tasks that build what
+  it is about, plus the project-wide ones, up to 12,000 characters a task
+  (`-Dswarmcoder.handover.maxChars`). A task the architect covered is no longer also pasted the
+  librarian's example; a task it kept nothing for gets the brief it always got. The run report
+  shows, per task, how many findings its workers were given and their size.
+- **The task planner only splits the design into tasks and orders them.** It no longer writes
+  how to build a task and is no longer sent, or told to fetch, framework documentation and
+  example code. A task's instructions now say what the task delivers. Every check of a plan is
+  unchanged.
+- **The task planner can run on its own model.** New role `roles.taskPlanner` in `config.yaml`
+  and in "Models & budgets"; when it is not set the planner runs on the architect's model, as
+  it always did. Nothing to do unless you want a smaller model for planning.
+- **A task's files are worked out, not guessed, and a worker may take a file nobody else
+  holds.** The files a task starts with are computed from the contracts it delivers: where the
+  project already has the type, where its package puts a new one, and every existing file that
+  stops compiling with the change. During the run, a worker that writes a file outside those:
+  is allowed when no other task of the plan holds the file and nothing protects it (recorded on
+  the task, shown in the run report as "Files taken beyond the plan"); is refused, with the
+  task named, when a task built at the same time holds it; is refused, and the plan is blamed
+  rather than the worker, when a task that has not run yet holds it. Acceptance tests,
+  journeys, `.swarmcoder/`, `.git/` and locked modules are refused as before. Until now any
+  source file outside the planned write set failed the candidate.
+
 - **A journey that fails in the browser goes back to its author before any worker repairs
   anything.** The test author is shown the journey, the failing step and what the page showed
   at that step (roles, accessible names, placeholders, visible text, read by the browser). It

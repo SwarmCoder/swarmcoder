@@ -6576,3 +6576,185 @@ tokens by what the conversation held when the drafts were written (about 59,000)
 `TheDesignReviewerKnowsWhatATestCanExecuteTest`; existing `BuildFilesInTheJobTest`,
 `TheSwarmDeclaresItsOwnDependencyTest`, `RulesVersusManifestTest`,
 `TheDesignReviewerPutsRulesAboveTheGoalTest`, `AnAcceptanceTestMayNotCallBrowserOnlyCodeTest`.
+
+## 73. The architect hands its findings to the workers, the planner only splits and orders, and a task's files are a computed reservation (owner's decisions, 2026-10-08)
+
+The owner: "The task planner should not write how-tos. That is the architect's job at the high
+level and the worker's at the low level. The smart architect provides the information the worker
+needs, so the worker's weaker model has a fighting chance; the worker may also look things up,
+but it must be primed. And I question whether the task planner wrongly restricts which files
+workers may change." On tokens: input is cheap on the local server; output tokens, calls and
+repair rounds are the cost; a worker is not to be starved of useful information.
+
+What was true: nothing of the design reached a worker. The planner wrote about 600 tokens of
+how-to per task after looking the framework up a second time (run 98: 78 lookups in 28 calls, 31
+of 69 distinct ones a repeat of the architect's, 33 of 44 whole-file reads framework examples).
+Write sets were the planner model's guess, and a source file outside one failed the candidate
+(run 90 lost a build to it). Nothing below was measured in a live run.
+
+### A. The architect's findings
+
+- **A finding** (`DesignFinding`, on `DesignDocument.findings`): what it is about (a contract's
+  name or type name, or nothing for the whole project), the lookup it came from, one sentence,
+  and lines of that lookup's result.
+- **Recorded by marking a lookup, not by typing the fact** (`DraftTools.keepForWorkers`, tool
+  `keep_for_workers(about, lookup, lines, note)`, architect only). `lookup` names a lookup made
+  in this session (`ExpertTools.resultOf`); `lines` is `first-last` within its result, empty for
+  all of a short one, `none` for the sentence alone. The tool copies the lines. **Decision:**
+  this over a tool that takes the fact as text. A finding costs the architect about 30 output
+  tokens instead of the code a second time, and a finding cannot carry code no lookup returned.
+  Cost: the architect has to count lines of a result; a narrower lookup (one member) is the
+  way round, and the tool says so when it cuts.
+- **Bounds at recording:** 20 lines and 1,600 characters of code, 400 characters of sentence,
+  40 findings a design (`swarmcoder.handover.maxFindings`). A lookup that was never made is
+  refused with the session's latest lookups listed.
+- The design prompt has a step for it (`DESIGN_HOW` 2). A clean `check_design` with nothing kept
+  says so once; it is not an objection. A revision keeps every finding and adds the new ones
+  (`ArchitectClient.mergedFindings`); findings survive the two places the workflow copies a
+  design.
+- **Which task gets which** (`ArchitectHandover`, no model, run when the plan is accepted,
+  stored on `Task.architectFindings`): findings about a contract the task delivers; about a type
+  whose file its write set names; about the whole project; about another contract of the design
+  that a member of the task's own contracts names as a type. In that order.
+- **Bound per task: 12,000 characters** (`swarmcoder.handover.maxChars`), about 3,000 tokens.
+  A finding is never cut. One that does not fit whole is given as its sentence and lookup; one
+  that still does not fit is left out and counted. So the least relevant goes first.
+- **Where they go.** The worker's opening, under the task and above its files
+  (`SwarmDispatcher.buildBundle`), on first dispatch and repair. The test author's authoring
+  call and its re-ask (`TestAuthorClient.established`). `designSummary` carries one `FACT` line
+  per finding without the code, so the planner and the design reviewer read them.
+- **The librarian's brief is the fallback** (`Librarian.coveredByTheArchitect`): where the task
+  carries a finding with code and every contract it delivers has a finding, the worked example
+  is not pasted (a short note stands in its place, so the channels an example displaces do not
+  come back). Otherwise the brief is what it was. Workers keep every lookup tool.
+- **Run report:** per task "Architect's findings given to the workers: first dispatch N
+  finding(s), C characters, about T tokens", from a span recorded at each dispatch
+  (`worker handover|`). The PLAN log says per task how many it was given, how many without
+  their lines, how many did not fit, and which subjects no task builds.
+- **Not prompt-stuffing.** CLAUDE.md section 1 forbids pasting files and inventories to save a
+  lookup. A finding was selected by the architect for this design, names its lookup, is copied
+  by a tool, and is bounded twice. CLAUDE.md section 1 now says where that line is.
+
+### B. The planner
+
+- Prompt (`PLAN_SYSTEM_PROMPT`, `PLAN_HOW`, `LOOK_IT_UP`): instructions are one to three
+  sentences on what the task delivers; no how-to; it is told the findings reach the workers
+  without it and that it need not work out a task's files.
+- The planner is sent neither the framework reference nor example code, with tools or without
+  (`exampleBlock` and `referenceBlock` are gone from the plan calls).
+- **Decision: no lookup tool was taken from the planner.** It is no longer told to read
+  documentation and examples. CLAUDE.md section 2 says not to cap what a role may look up, and
+  the per-role lookup counts will show whether it still does. Removing the documentation tools
+  from its session is one line in `LookupAgent.run` if a live run shows it reading them.
+- The contract statement appended to instructions (`withContractBrief`) stays: it says what to
+  deliver, not how.
+- Every deterministic plan check is unchanged.
+- **Who read `Task.instructions` as how-to:** `PlanConnectsWhatItAdds` took "its task says the
+  type carries a discovery annotation" from them; it now also reads the findings about the
+  task's contracts. The Librarian uses them as search words for a brief that is now the
+  fallback. Judge, design reviewer, `ForbiddenTechGuard`, `TypeDependencyOrder`, the Console
+  and the run report read them as a statement of the task and needed nothing.
+- **The planner's model:** `roles.taskPlanner` (`RolesConfig`, `RoleClients`, the roles form).
+  Unset is the architect's client; no default changed. `ArchitectClient.setPlannerClient`
+  sends the plan session and the one-reply fallback there.
+
+### C. Files
+
+**Computed** (`ComputedReservation`, before `BuildFilesInTheJob.expandWriteSets`, on every
+attempt and on `check_plan` drafts; recorded on `Task.computedReservation`). For each contract a
+task delivers: the tree's file for an existing type; `<source root>/<package>/<Type>.java` for a
+new one; every existing file `ChangeBreaksExistingCode.brokenBy` says stops compiling (an
+abstract method added to an interface or abstract class, a component added to a record). The
+source root of a new type is the one a path of the planner's write set lies in, else the one
+that holds its package or the nearest package above, else the build's only Java source root;
+otherwise nothing is computed and the log says so.
+
+**Reconciling the planner's paths.** Kept, except: a file path named like an existing contract
+type where the tree does not have it and no file is, is dropped; a file path named like a new
+contract type whose folders are not its package is replaced by the package's path under the same
+source root. Nothing is taken from another task: one file computed for two unordered tasks is
+the existing disjointness objection; two ordered tasks may share it.
+
+**Extended by rule** (`ReservationBook`, one per run, held by the engine, asked through
+`PathPolicy.OtherTasks` at every write of a worker and again at verification):
+
+| the file outside the task's reservation | what happens |
+|---|---|
+| protected (acceptance tests, journeys, `.swarmcoder/`, `.git/`, locked modules, outside the repository) | refused by `PathPolicy.check` before the plan is asked, counted toward the stop, as before |
+| held by no other task | written; it is the task's from then on, so a task built at the same time is refused it; recorded on the candidate; on `Task.takenBeyondPlan` and in the write set when the candidate is selected |
+| held by a task of the same wave | refused, the task named; not counted toward the stop |
+| held by a task of a later wave | refused, the task named; remembered. When no candidate passes and the worker of every verified candidate was refused the same file (two, or one when the read set names it), `FileOfATaskNotYetRun` blocks the task before the repair round and blames the plan |
+| held by a task of an earlier wave | written: that work is merged and the checkout is cut from it |
+| a build file, a non-source file | nobody's, as before |
+
+A shell command's change to a held file is put back by the existing audit. At verification
+`SourceOutsideWriteSet.objection` fails a candidate only for a source file another task holds.
+
+**Decisions.**
+
+- *Earlier tasks' files are free.* `SiblingDefects` asked for evidence before one widening;
+  that path still exists and is reached less. What protects merged work is unchanged: delivered
+  contracts are checked, removed public code fails verification, final integration runs every
+  test.
+- *A later task whose reservation an earlier extension overlaps.* It cannot happen through the
+  plan: a file a later task reserved is refused to the earlier one. It can only be the later
+  task itself taking a file an earlier task took, and it builds on the merged result. No
+  reservation is re-derived during a run.
+- *Repair rounds* use the same book: what the first round took stays the task's.
+- *Resume from an older snapshot.* Old tasks have the planner's write sets only; they are used
+  as they are, the book is rebuilt from the plan on first ask, and nothing is recomputed (the
+  tests are already written against that plan). The new fields are null and read as empty.
+- *Final integration* audits against write sets, which now hold what winners took.
+- *The first candidate to take a free file holds it for its task even if that candidate later
+  fails.* A task of the same wave may then be refused a file nobody ends up changing. Chosen
+  over a merge conflict between two winners.
+
+**Containment (section 13).** Unchanged: every refusal `PathPolicy` made it still makes, first
+and in the same words. The new question is put only for a path that used to be written and
+recorded anyway, and is answered from the plan in the engine's memory, never from the worker's
+tree. `WorkerToolbox` stays in the trust kernel.
+
+### Not covered by a test
+
+- The whole path in a live engine: a worker taking a file, the selected candidate's files landing
+  on the task, two tasks of one wave reaching for one file. The parts are tested
+  (`ReservationBook`, the toolbox with a book, `growReservation`, the verdict).
+- A shell command changing a held file (the audit branch that puts it back).
+- The `worker handover|` span being recorded at dispatch; the report line is tested from a span.
+- `roles.taskPlanner` from `config.yaml` to the client (the client switch is tested).
+- A store written before today being opened with the new fields absent.
+- The architect's session continuing after a send-back with findings from both rounds.
+
+### Left
+
+- Callers of a member that is removed or whose parameters change are not computed: a contract
+  does not say what was removed. The extension rule covers them when nobody else holds the file.
+  The language server's `callers_of` would compute them; it is not running at PLAN.
+- The test author is given a task's findings and also the `FACT` lines of the whole design, so
+  a task's own sentences appear twice there.
+- The Console shows neither findings nor files taken beyond the plan.
+- The harness's role-to-server mapping has no entry for the task planner.
+- `ArchitectResearch.examples` and `Librarian.planExamples` have no caller left.
+
+### A live run should be watched for
+
+- Whether the architect calls `keep_for_workers` at all, how many findings, and whether the
+  line ranges it names are the lines it meant (the log has one `keep_for_workers:` line each).
+- The planner's lookups by kind: whole-file reads of framework examples should be near zero,
+  and its output tokens per task lower.
+- Worker lookups and output tokens per task against run 98, and whether repair rounds drop.
+- "No file was computed for the new type" lines at PLAN, and overlap objections caused by a
+  computed file.
+- "Files taken beyond the plan" per task, and any refusal naming another task.
+- `TypeDependencyOrder` reads type names out of instructions; with shorter instructions watch
+  for a missing edge it used to add.
+
+**Tests.** New: `TheArchitectHandsItsFindingsToTheWorkersTest`,
+`ThePlannerOnlySplitsAndOrdersTest`, `ATasksFilesAreComputedFromWhatItClaimsTest`,
+`AWriteOutsideTheReservationIsDecidedByRuleTest`,
+`AWorkerIsOpenedWithWhatTheArchitectEstablishedTest`. Changed to the new rule:
+`ACandidateThatChangedSourceAnotherTaskHoldsDoesNotPassTest` (was
+`...OutsideItsWriteSet...`), `TheArchitectAndThePlannerLookThingsUpAndCheckTheirDraftsTest`,
+`TheTestAuthorIsShownARealTestTest`, `WorkerToolboxTest`; cases added to
+`AWorkerIsShownHowThisCodebaseDoesItTest`, `APlanThatCannotConnectWhatItAddsIsSentBackTest`,
+`HarnessRunReportTest`.

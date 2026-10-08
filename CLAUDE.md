@@ -35,6 +35,14 @@ Rules that follow:
   the tree cannot return, add the query.
 - **No prompt-stuffing.** Do not paste files, reference material or inventories into a role's
   opening to save it a lookup; give it the map and the tools.
+  **Handing on what a role with judgement found is not prompt-stuffing** (owner's decision,
+  2026-10-08): the architect keeps, as it designs, the facts a worker will need about how this
+  project and its framework do things, and those go word for word to the workers and the test
+  author of the tasks they concern. It stays on the right side of this rule only while each fact
+  was selected by the architect for this design, names the lookup it came from, is copied from
+  that lookup by a tool and not re-typed by a model, and is bounded per fact and per task. The
+  workers keep every lookup tool. Anything chosen by a search, or pasted because it might help,
+  is still stuffing.
 - **A new role or a new tool is not done until it uses the tree.** Review any change to agent tools
   or prompts against this section.
 - **Every run report shows, per role, lookups by kind** (tree/graph, search, whole file) with counts

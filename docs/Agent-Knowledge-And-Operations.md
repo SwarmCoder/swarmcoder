@@ -707,6 +707,7 @@ logs.
 | `chat` | the Console's chat coder; falls back to `utility` |
 | `requirementsAnalyst` | writes the requirements graph; falls back to `chat` |
 | `storyPlanner` | slices requirements into stories; falls back to `chat` |
+| `taskPlanner` | splits an accepted design into tasks and orders them (the plan part of `ArchitectClient`); falls back to `architect`, the model it always ran on |
 
 The last three are absent from the current config file, so they are running on their fallbacks.
 
