@@ -100,22 +100,59 @@ class AWorkerUsesTheLanguageServerTest {
         assertThat(names).doesNotHaveDuplicates().endsWith("report_done");
     }
 
+    /** Section 73: a file no other task holds is the task's now; the change is kept and recorded. */
     @Test
-    void aRenameIsHeldToTheWritePolicy() {
+    void aRenameTouchingAFreeFileIsKeptAndRecordedAsTheTasksNow() {
         WorkerToolbox toolbox = new WorkerToolbox(checkout, task(), withServer);
+        toolbox.setOtherTasks(path -> null);
 
         String answer = toolbox.renameSymbol("App#run", "start");
 
         assertThat(answer).startsWith("rename App#run -> start: 2 file(s)")
-            .as("a file outside the write set is written and noted, as write_file does")
-            .contains("outside your write set");
+            .contains("[write policy]").contains("KEPT").contains("no other task holds that file");
         assertThat(toolbox.outOfWriteSetPaths()).containsExactly("src/main/java/Other.java");
+    }
 
+    @Test
+    void aRenameTouchingAFileAnotherTaskHoldsIsRefusedNamingThatTask() {
+        WorkerToolbox toolbox = new WorkerToolbox(checkout, task(), withServer);
+        toolbox.setOtherTasks(path -> path.equals("src/main/java/Other.java")
+            ? "held by the task 'Other screen', built at the same time; was not written" : null);
+
+        assertThat(toolbox.renameSymbol("App#run", "start"))
+            .startsWith("refused for src/main/java/Other.java").contains("'Other screen'");
+        assertThat(toolbox.outOfWriteSetPaths()).isEmpty();
+    }
+
+    @Test
+    void aRenameOrAnImportsChangeTouchingAProtectedFileIsRefusedWhoeverHoldsWhat() {
+        // Nobody holds anything: the answer from the plan must not matter for a protected file.
         WorkerToolbox locked = new WorkerToolbox(checkout, task(), withServer, null, null,
             List.of("src/main/java/Other.java"));
+        locked.setOtherTasks(path -> null);
         assertThat(locked.renameSymbol("App#run", "start"))
-            .startsWith("refused for src/main/java/Other.java");
+            .startsWith("refused for src/main/java/Other.java").contains("locked module");
         assertThat(locked.outOfWriteSetPaths()).isEmpty();
+
+        String accept = "src/test/java/swarm/accept/OrderTest.java";
+        WorkerToolbox acceptance = new WorkerToolbox(checkout, task(), new ApiLookup() {
+            @Override public String lookup(String query) {
+                return "";
+            }
+            @Override public boolean languageServer() {
+                return true;
+            }
+            @Override public InCheckout inCheckout(Path where, String action, String argument,
+                                                   String second, Function<String, String> refusal) {
+                String why = refusal.apply(accept);
+                return why != null ? new InCheckout("refused for " + accept + ": " + why, List.of())
+                    : new InCheckout("changed", List.of(accept));
+            }
+        });
+        acceptance.setOtherTasks(path -> null);
+        assertThat(acceptance.organizeImports(accept))
+            .startsWith("refused for").contains("acceptance tests are protected");
+        assertThat(acceptance.outOfWriteSetPaths()).isEmpty();
     }
 
     @Test
