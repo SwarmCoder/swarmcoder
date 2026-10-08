@@ -11,6 +11,7 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A journey that fails again at a later step goes back to its author once more.** After the repair round, if the journey now fails further along than before (the earlier step passes), the author reviews it again with what the page showed there, under the same bounds and guards for a correction. A failure at the same or an earlier step is not sent back. At most two author reviews per journey; there is still only one worker repair round, and a second review that does not correct the journey stops the run with both reasons. `check_journey` now says that typing into a search or filter box does not create the record.
 - **The requirements graph is readable.** A link between two boxes in one row no longer runs
   through the box between them; it goes round. The relation's name is no longer printed on each
   line (the names overprinted each other where lines crossed); it shows when you hover the line,

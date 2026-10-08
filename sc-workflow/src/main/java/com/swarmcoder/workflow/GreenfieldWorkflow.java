@@ -1546,7 +1546,8 @@ public class GreenfieldWorkflow {
             Run run, Task task, List<JourneyFile.Result> failed, Path mergedTree,
             java.util.function.Function<List<JourneyFile.Journey>,
                 JourneyRunner.Outcome> onMergedTree) {
-        if (task.journeySentBack() || failed == null || failed.isEmpty()
+        if (failed == null || failed.isEmpty()
+                || failed.stream().noneMatch(f -> JourneysOfAPlan.goesToItsAuthor(task, f))
                 || roles.testAuthor() == null || repoPath == null || !gitService.isEnabled()) {
             return FinalIntegrator.SentBack.STANDS;
         }
@@ -1574,11 +1575,21 @@ public class GreenfieldWorkflow {
             : artifactStore.root().designs.get(run.designId());
         List<String> notes = new ArrayList<>();
         List<String> taken = new ArrayList<>();
+        List<String> secondReviews = new ArrayList<>();
+        Map<String, Integer> reviewedAt = new java.util.LinkedHashMap<>();
         try {
             removeTree(worktree); // a leftover from a killed attempt, if any
             gitService.addWorktreeAt(branch, worktree);
             for (JourneyFile.Result result : failed) {
+                if (!JourneysOfAPlan.goesToItsAuthor(task, result)) {
+                    continue; // same or earlier step than at its last review, or asked twice
+                }
                 String path = result.journey().path();
+                boolean again = JourneysOfAPlan.reviewsOf(task, path) > 0;
+                if (again) {
+                    secondReviews.add(path);
+                }
+                reviewedAt.put(path, result.step());
                 String content = Files.readString(worktree.resolve(path));
                 log("FINAL_INTEGRATION: the journey \"" + result.journey().name() + "\" ("
                     + path + ") of task '" + task.title() + "' failed in the browser. Before "
@@ -1631,6 +1642,11 @@ public class GreenfieldWorkflow {
                         disownedAnswers.add(note);
                     }
                 }
+                if (again) {
+                    note = "SECOND REVIEW (after the repair round the journey failed at step "
+                        + result.step() + ", at its first review at step "
+                        + JourneysOfAPlan.lastReviewedStep(task, path) + "): " + note;
+                }
                 log("FINAL_INTEGRATION: " + note);
                 notes.add(note);
             }
@@ -1647,8 +1663,22 @@ public class GreenfieldWorkflow {
         } finally {
             removeTree(worktree); // the branch stays; a correction is on it
         }
-        task.setJourneyReviewNote(String.join(" ", notes));
-        if (!disowned.isEmpty()) {
+        String earlier = task.journeyReviewNote();
+        task.setJourneyReviewNote((earlier == null || earlier.isBlank() ? "" : earlier + " ")
+            + String.join(" ", notes));
+        boolean stopsOnSecond = !secondReviews.isEmpty() && taken.isEmpty();
+        if (!disowned.isEmpty() || stopsOnSecond) {
+            // A second review is recorded even so: a journey is not sent back a third time.
+            secondReviews.forEach(p -> JourneysOfAPlan.recordReview(task, p, reviewedAt.get(p)));
+            if (stopsOnSecond) {
+                artifactStore.saveTask(task);
+                log("FINAL_INTEGRATION: the journey(s) " + secondReviews + " of task '"
+                    + task.title() + "' were sent back to their author a second time and no "
+                    + "correction was taken. No worker is started; the run stops here.");
+                return FinalIntegrator.SentBack.disowned(
+                    JourneysOfAPlan.reviewedTwice(task, secondReviews)
+                        + OperatorCorrectedTests.whereToCorrect(run));
+            }
             // Not marked as asked: no worker repairs a journey its author disowns, so the
             // only ways on are a correction by hand or asking the author again on resume.
             artifactStore.saveTask(task);
@@ -1659,6 +1689,7 @@ public class GreenfieldWorkflow {
                 JourneysOfAPlan.disowned(task, disowned, disownedAnswers)
                     + OperatorCorrectedTests.whereToCorrect(run));
         }
+        reviewedAt.forEach((p, step) -> JourneysOfAPlan.recordReview(task, p, step));
         task.setJourneySentBack(true);
         artifactStore.saveTask(task);
         return taken.isEmpty() ? FinalIntegrator.SentBack.STANDS

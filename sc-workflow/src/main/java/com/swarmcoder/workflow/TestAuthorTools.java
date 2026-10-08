@@ -391,6 +391,9 @@ public final class TestAuthorTools {
             return "VALID - kept, and handed in " + (journeyOnly ? "" : "with your test ")
                 + "by report_done.\n"
                 + read.journey().describe()
+                + "Typing a text into a search or filter box does not create it: when the "
+                + "application starts with no data, the journey must first add the record "
+                + "through the screen, then search for it. "
                 + "This says the file is well formed. It does not say the journey is right: "
                 + (journeyOnly
                     ? "it is now made in a real browser twice - on the application as it was "

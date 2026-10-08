@@ -298,11 +298,17 @@ public final class JourneyFile {
      *                text, as the browser in the container read them - no model, at most
      *                {@link #MAX_SEEN} characters. Null when the journey passed or the browser
      *                gave no reading
+     * @param step    the number (from 1) of the step that failed; 0 when the journey passed or
+     *                the failure is not a step's (the page did not load)
      */
-    public record Result(Journey journey, boolean passed, String failure, String seen) {
+    public record Result(Journey journey, boolean passed, String failure, String seen, int step) {
+
+        public Result(Journey journey, boolean passed, String failure, String seen) {
+            this(journey, passed, failure, seen, 0);
+        }
 
         public Result(Journey journey, boolean passed, String failure) {
-            this(journey, passed, failure, null);
+            this(journey, passed, failure, null, 0);
         }
     }
 
@@ -360,7 +366,7 @@ public final class JourneyFile {
                 text.append(" It is the first step, made on the entry page ").append(check.url())
                     .append('.');
             }
-            return new Result(journey, false, text.toString(), seenIn(assertions));
+            return new Result(journey, false, text.toString(), seenIn(assertions), number);
         }
         return new Result(journey, true, null);
     }

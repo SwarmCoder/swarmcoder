@@ -373,6 +373,66 @@ final class JourneysOfAPlan {
             + "is then asked again.";
     }
 
+    /** Most reviews by its author one journey gets in a run (section 71). */
+    static final int MAX_REVIEWS = 2;
+
+    /** The step a journey was last reviewed at, 0 when never (see {@link Task#journeyReviews}). */
+    static int lastReviewedStep(Task task, String path) {
+        int last = 0;
+        for (String entry : task.journeyReviews()) {
+            int bar = entry.lastIndexOf('|');
+            if (bar > 0 && entry.substring(0, bar).equals(path)) {
+                try {
+                    last = Integer.parseInt(entry.substring(bar + 1));
+                } catch (NumberFormatException e) {
+                    // an entry that is not ours; ignored
+                }
+            }
+        }
+        return last;
+    }
+
+    /** How many times the journey at {@code path} has been reviewed by its author. */
+    static int reviewsOf(Task task, String path) {
+        return (int) task.journeyReviews().stream()
+            .filter(entry -> entry.startsWith(path + "|")).count();
+    }
+
+    /**
+     * Whether a failed journey goes to its author now (section 71), decided from step numbers
+     * only. A journey never reviewed goes once per task (section 69); one reviewed before goes
+     * again only when it now fails at a LATER step than at its last review - the earlier step
+     * passes now, which its author has not seen - and never a third time.
+     */
+    static boolean goesToItsAuthor(Task task, JourneyFile.Result failed) {
+        int reviews = reviewsOf(task, failed.journey().path());
+        if (reviews == 0) {
+            return !task.journeySentBack();
+        }
+        return reviews < MAX_REVIEWS
+            && failed.step() > lastReviewedStep(task, failed.journey().path());
+    }
+
+    /** Notes a review of {@code path} that failed at {@code step}. */
+    static void recordReview(Task task, String path, int step) {
+        List<String> all = new ArrayList<>(task.journeyReviews());
+        all.add(path + "|" + step);
+        task.setJourneyReviews(all);
+    }
+
+    /**
+     * What the run stops on when a journey, sent back a second time after a repair round, was
+     * not corrected: both of its author's answers, and no worker.
+     */
+    static String reviewedTwice(Task task, List<String> paths) {
+        return "The journey went back to its author twice: once when it first failed, and again "
+            + "after the repair round, when it failed at a later step. Neither time was a "
+            + "corrected journey taken. Task '" + task.title() + "', " + paths + ":\n"
+            + task.journeyReviewNote() + "\n\nNo worker was started: the repair round of a "
+            + "task is one, and a journey is not sent back a third time. Correct the journey "
+            + "or the screen by hand and resume.";
+    }
+
     /** One journey a task claims, read from the run's tests commit. */
     record Claimed(Task task, JourneyFile.Journey journey) {}
 

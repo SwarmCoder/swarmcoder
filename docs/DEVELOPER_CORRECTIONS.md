@@ -6459,3 +6459,40 @@ run integrated three times; a worktree left by a killed attempt),
 `AWorkerReadsTheAcceptanceTestItMustMeetTest`.
 
 **Left.** A live run with a screen.
+
+
+## 71. A journey that fails again at a later step goes back to its author a second time (run 97, 2026-10-08)
+
+Run 97: a two-step journey (fill a search box, expect a book title) failed at step 1; the page
+had stayed on its loading text. The author answered `SCREEN_WRONG`, truthfully. The repair round
+fixed the screen, final integration ran again, and the journey failed at step 2: it expects a
+book on a store that starts empty, and no step adds one. That is a fault of the journey, but the
+task had been asked once (section 69), so the author was not asked and the run parked.
+
+**Rule** (`JourneysOfAPlan.goesToItsAuthor`, decided from step numbers only). The browser's
+result carries the failing step's number (`JourneyFile.Result.step`, 0 when the failure is not a
+step's). Each review is recorded on the task as `<path>|<step>` (`Task.journeyReviews`). A
+journey never reviewed goes back once per task, as before. A journey reviewed before goes back
+again only when it now fails at a LATER step than at its last review; a failure at the same or
+an earlier step does not, and no journey is reviewed more than twice in a run. The second review
+has the same opening, bounds and guards as the first (section 70: verdict, a kept correction
+must pass on the merged tree and fail on the start tree, at least as many acting steps).
+
+**What follows.** A correction is committed with the run's tests and the integration is made
+again; no worker. The worker repair round stays one per task. If the second review does not
+produce a taken correction (`SCREEN_WRONG`, no usable answer, `JOURNEY_WRONG` without a kept
+correction, or a correction refused), the run stops without a worker, and the message carries
+both reasons (`JourneysOfAPlan.reviewedTwice`). Both reviews are in `Task.journeyReviewNote`
+(the second begins "SECOND REVIEW") and so in the run report. A task marked as asked by an
+earlier version has no recorded steps and is not asked again.
+
+**The authoring-time check of section 69 cannot tell a record-creating field from a search
+field.** In run 97 step 1 typed the word the last step expects, so "typed by an earlier fill"
+held. Telling the two apart needs the screen, which the check does not have. Instead the VALID
+answer of `check_journey` says that typing a text into a search or filter box does not create it
+and that the journey must first add the record through the screen when the store starts empty.
+
+**Not exercised by any test:** `sendJourneyBackToItsAuthor` as a whole (it needs a container
+with a browser); the decision, the step number and the stop message are tested on their own.
+
+**Tests.** Cases in `AFailedJourneyGoesBackToItsAuthorTest`.
