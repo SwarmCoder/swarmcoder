@@ -300,7 +300,10 @@ import java.util.stream.Stream;
  * documentation the workers are given; see {@link HarnessReferenceRoot}),
  * {@code -Dswarmcoder.e2e.saveAtBuild=<dir>} and {@code -Dswarmcoder.e2e.resumeFrom=<dir>} (above),
  * {@code -Dswarmcoder.e2e.observe} (default true), {@code -Dswarmcoder.e2e.consolePort} (9090),
- * {@code -Dswarmcoder.e2e.mcpPort} (8931) and {@code -Dswarmcoder.e2e.holdMinutes} (0) (above).
+ * {@code -Dswarmcoder.e2e.mcpPort} (8931), {@code -Dswarmcoder.e2e.holdMinutes} (0) (above) and
+ * {@code -Dswarmcoder.e2e.acceptDelivery} (false): when true, once the chain is verified the harness
+ * accepts the delivery by calling the same {@code BacklogService.acceptStory} as the Pipeline
+ * board's "Accept delivery" button, so the hold shows the story in the Delivered column.
  */
 @RunsWhen({Need.LIVE_MODEL, Need.MAVEN})
 class EndToEndLoopTest {
@@ -838,6 +841,33 @@ class EndToEndLoopTest {
             delivered.deliveredCommit(), testsCommit, inCommit, graph, story.id(), selected,
             candidates);
         chain.require(L_PROVES, proves.ok(), proves.observed());
+        acceptDeliveryIfAsked(store, story.id());
+    }
+
+    /**
+     * With {@code -Dswarmcoder.e2e.acceptDelivery=true}, presses "Accept delivery" for the story the
+     * way the Console does: the same {@code BacklogService.acceptStory} call the Pipeline board's
+     * button makes. Runs after the chain is verified and before any hold, so the board can be looked
+     * at with the story delivered. Never breaks the chain; it only logs what happened.
+     */
+    private static void acceptDeliveryIfAsked(ArtifactStore store, UUID storyId) {
+        if (!Boolean.getBoolean("swarmcoder.e2e.acceptDelivery")) {
+            return;
+        }
+        try {
+            Story story = store.getStory(storyId);
+            if (story == null || story.state() != com.swarmcoder.domain.StoryState.REVIEW) {
+                System.out.println("[E2E] delivery not accepted: the story is "
+                    + (story == null ? "missing" : story.state()) + ", not waiting in REVIEW");
+                return;
+            }
+            String refused = new BacklogServiceImpl().acceptStory(storyId.toString());
+            System.out.println(refused == null || refused.isEmpty()
+                ? "[E2E] delivery accepted for '" + story.title() + "' (as the Accept delivery button does)"
+                : "[E2E] delivery not accepted: " + refused);
+        } catch (RuntimeException e) {
+            System.out.println("[E2E] delivery not accepted: " + e);
+        }
     }
 
     // --- links 7 to 9, measurable the moment the run is about to dispatch --------------------
