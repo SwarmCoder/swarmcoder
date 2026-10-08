@@ -22,6 +22,23 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Changed
 
+- **A journey that fails in the browser goes back to its author before any worker repairs
+  anything.** The test author is shown the journey, the failing step and what the page showed
+  at that step (roles, accessible names, placeholders, visible text, read by the browser). It
+  either corrects the journey or says why the screen is wrong; the workers of the repair round
+  are then told that reason. A correction is taken only when it still fails on the code the
+  run started from and passes on the merged code, and has no fewer fill, click and press steps
+  than the journey it replaces. Once per task. Costs one test-author session and, for a
+  correction, one more build of the start tree. The run report has the outcome per task.
+- **The test author is asked about a text its journey expects and nobody enters.** When
+  `check_journey` is given a journey whose `expectVisible` text is typed by no earlier step and
+  is in no code of the project, it asks once whether that is data (then the journey must add
+  it first: the application starts with no data of its own) or a text the new screen shows by
+  itself (then the same file given again is kept). The journeys' red check notes the same.
+- **A worker of a task that claims a journey is told** that its screen must expose the roles,
+  accessible names and texts the journey's selectors use.
+- **A run refused at final integration for added code nothing can reach is sent back to the
+  task that added it once**, with the refusal as the reason, before it stops.
 - **A project that starts nearly empty is no longer refused its first framework-found class.**
   A run was stopped at final integration with "adds production code that nothing in the
   application can reach" for a service and a store provider the framework finds by their

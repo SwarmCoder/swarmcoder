@@ -825,6 +825,15 @@ public class SwarmDispatcher {
                     + "satisfy with acceptance_test (its claimed test methods and the helpers "
                     + "they use) before you write code; verification places the committed "
                     + "test, so nothing you write there counts.\n");
+            if (!task.journeyPaths().isEmpty()) {
+                // Section 69: the journey was written before the screen, so the names in its
+                // selectors bind the screen, not the other way round. One sentence; the journey
+                // itself is behind the lookup.
+                instructions.append("This task also claims a journey (acceptance_test shows "
+                    + "it): the screen must expose exactly the roles, accessible names and "
+                    + "texts its selectors use, and be reachable from the entry page by its "
+                    + "steps.\n");
+            }
         }
         if (protectedPaths != null && !protectedPaths.isEmpty()) {
             // COURTESY, NOT ENFORCEMENT. Naming the locked modules saves the model the turns it

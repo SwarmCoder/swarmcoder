@@ -85,6 +85,12 @@ public final class TestAuthorTools {
     private boolean journeyWaivable;
     private String journeyWaiver;
     private String journeyWaiverPath;
+    /** Whether the project as it stands holds a text; null when that cannot be asked. */
+    private java.util.function.Predicate<String> heldByTheProject;
+    /** The journey last sent back with the question about a text nobody enters, as it was given. */
+    private String askedAboutUnentered;
+    /** True while the session reviews a journey that failed: no test is compiled or handed in. */
+    private boolean journeyOnly;
 
     /**
      * @param session      the session's toolbox; every call here runs through it, so it is logged
@@ -116,6 +122,45 @@ public final class TestAuthorTools {
 
     boolean journeyDue() {
         return journeyObjection != null;
+    }
+
+    /**
+     * A journey is also held to this (section 69): a text it expects to see is typed by one of
+     * its steps or held by the project as it stands, or its author is asked once whether the
+     * new screen shows it by itself.
+     *
+     * @param held whether the project's shipped code holds a text; null to ask nothing
+     */
+    TestAuthorTools knowingTheProjectsTexts(java.util.function.Predicate<String> held) {
+        this.heldByTheProject = held;
+        return this;
+    }
+
+    /**
+     * The session now reviews ONE journey that failed in the browser (section 69): only a draft
+     * at {@code path} is taken, nothing kept from authoring is handed in again, and no test is
+     * compiled. What the review came to is read from {@link #journeys()} and {@link #handedIn()}.
+     */
+    TestAuthorTools reviewingAJourney(String path) {
+        String only = path.replace((char) 92, '/');
+        this.journeyObjection = (given, content) -> only.equals(given) ? null
+            : "This review is about `" + only + "` and no other file. Give the corrected "
+                + "journey at exactly that path.";
+        this.journeyOnly = true;
+        this.journeyWaivable = false;
+        this.journeyWaiver = null;
+        this.journeyWaiverPath = null;
+        this.journeys.clear();
+        this.journeyChecks = 0;
+        this.askedAboutUnentered = null;
+        this.check = files -> new Verdict(false, "No test is compiled in this review: it is "
+            + "about the journey only. Use check_journey, then report_done.");
+        this.draft.clear();
+        this.lastHealthy = null;
+        this.lastWasHealthy = false;
+        this.wrote = "";
+        this.handedIn = false;
+        return this;
     }
 
     /**
@@ -188,16 +233,45 @@ public final class TestAuthorTools {
                 return "NOT A VALID JOURNEY - not kept.\n" + objection
                     + "\n\nCorrect it and call check_journey again with the complete file.";
             }
+            // A text it expects that nobody enters (section 69, live run 93): asked once,
+            // while the journey is being written. The same file given again is the author's
+            // answer that the new screen shows the text by itself, and is kept.
+            List<com.swarmcoder.verify.JourneyExpectations.Unentered> unentered =
+                com.swarmcoder.verify.JourneyExpectations.unentered(read.journey(),
+                    heldByTheProject);
+            String given = content.replace("\r\n", "\n").strip();
+            if (!unentered.isEmpty() && !given.equals(askedAboutUnentered)) {
+                askedAboutUnentered = given;
+                log.info("check_journey {} for {}: asked about {} expected text(s) no step "
+                    + "enters - {}", journeyChecks, target, unentered.size(), unentered);
+                return "NOT KEPT YET - one question first.\n"
+                    + com.swarmcoder.verify.JourneyExpectations.question(unentered)
+                    + "\n\nCorrect the journey and call check_journey with the complete file - "
+                    + "or, when every text named above is one the new screen shows by itself, "
+                    + "call check_journey again with this same file and it is kept.";
+            }
+            if (!unentered.isEmpty()) {
+                log.info("check_journey {} for {}: kept on its author's word that the new "
+                    + "screen itself shows {}", journeyChecks, target, unentered);
+            }
             journeys.put(target, content);
             journeyWaiver = null;
             journeyWaiverPath = null;
             log.info("check_journey {} for {}: valid, {} step(s)", journeyChecks, target,
                 read.journey().steps().size());
-            return "VALID - kept, and handed in with your test by report_done.\n"
+            return "VALID - kept, and handed in " + (journeyOnly ? "" : "with your test ")
+                + "by report_done.\n"
                 + read.journey().describe()
                 + "This says the file is well formed. It does not say the journey is right: "
-                + "after hand-in it is made in a real browser on the application as it is now, "
-                + "where it must FAIL at a step this task's work will make possible.";
+                + (journeyOnly
+                    ? "it is now made in a real browser twice - on the application as it was "
+                        + "before the story, where it must FAIL, and on the built one, where "
+                        + "it must pass."
+                    : "after hand-in it is made in a real browser on the application as it is "
+                        + "now, where it must FAIL at a step this task's work will make "
+                        + "possible. The application is started with no data of its own unless "
+                        + "the project's contract says otherwise: what the journey expects to "
+                        + "see, one of its steps types or the screen shows by itself.");
         });
     }
 
@@ -244,6 +318,7 @@ public final class TestAuthorTools {
      */
     void nextRound(Function<Map<String, String>, Verdict> check) {
         this.check = check;
+        journeyOnly = false;
         draft.clear();
         lastHealthy = null;
         lastWasHealthy = false;
@@ -256,12 +331,23 @@ public final class TestAuthorTools {
     public String reportDone(String wrote) {
         this.wrote = wrote == null ? "" : wrote;
         this.handedIn = true;
+        if (journeyOnly) {
+            return journeys.isEmpty() ? "recorded: the journey stands as you wrote it"
+                : "the corrected journey is handed in";
+        }
         return draft.isEmpty() ? "nothing was compiled, so nothing is handed in" : "handed in";
     }
 
     List<ToolBinding> bindings() {
         try {
-            List<ToolBinding> all = new ArrayList<>(List.of(
+            List<ToolBinding> all = journeyOnly ? new ArrayList<>(List.of(
+                new ToolBinding(LookupAgent.SUBMIT_TOOL,
+                    "End the review. Give two or three sentences: what was wrong with the "
+                        + "journey when you corrected it (the journey check_journey last called "
+                        + "VALID is handed in), or what the screen got wrong when the journey "
+                        + "is right (give check_journey nothing then).",
+                    this, TestAuthorTools.class.getMethod("reportDone", String.class))))
+                : new ArrayList<>(List.of(
                 new ToolBinding("compile_test",
                     "Compile a draft of your test exactly as the build's own check will, with the "
                         + "types the plan has not written yet stubbed in. Give the file path ("

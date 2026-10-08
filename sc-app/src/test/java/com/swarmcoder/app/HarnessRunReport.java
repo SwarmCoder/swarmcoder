@@ -469,6 +469,20 @@ final class HarnessRunReport {
                     + "(every first candidate failed it the same way): ")
                     .append(task.authoredTests().reviewNote().strip()).append('\n');
             }
+            if (task.journeyReviewNote() != null && !task.journeyReviewNote().isBlank()) {
+                sb.append("Journey sent back to its author before any worker repair (it failed "
+                    + "in the browser at final integration): ")
+                    .append(task.journeyReviewNote().strip()).append('\n');
+            }
+            if (task.journeyRepairAttempted() || task.integrationRepairAttempted()) {
+                sb.append("Returned to the workers once from final integration: ")
+                    .append(task.journeyRepairAttempted() ? "its journey failed in the browser"
+                        : "").append(task.journeyRepairAttempted()
+                            && task.integrationRepairAttempted() ? "; " : "")
+                    .append(task.integrationRepairAttempted()
+                        ? "what it added was refused as code nothing can reach" : "")
+                    .append('\n');
+            }
             sb.append(openingOf(in.spans(), task.id()));
             List<AgentSessionRecord> sessions = in.sessions().stream()
                 .filter(s -> task.id().equals(s.taskId()))

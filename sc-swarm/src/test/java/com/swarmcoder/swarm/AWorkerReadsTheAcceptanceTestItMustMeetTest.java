@@ -168,6 +168,26 @@ class AWorkerReadsTheAcceptanceTestItMustMeetTest {
             .doesNotContain("do not look for them")
             .doesNotContain("not in your checkout while you work")
             .as("no prompt-stuffing: the method body is not pasted")
-            .doesNotContain("usableFromKeyboard");
+            .doesNotContain("usableFromKeyboard")
+            .as("a task that claims no journey is told nothing about one")
+            .doesNotContain("claims a journey");
+    }
+
+    /**
+     * Section 69 (live run 93): the journey is written before the screen, so the names in its
+     * selectors bind the screen. A worker of a task that claims a journey is told so in one
+     * sentence; the journey itself stays behind the lookup.
+     */
+    @Test
+    void aTaskThatClaimsAJourneyIsToldInOneSentenceThatItsScreenMustMeetIt() {
+        Task task = task();
+        task.setJourneyPaths(List.of(DIR + "/accept/add-contact.journey.yaml"));
+
+        String prompt = SwarmDispatcher.buildBundle(task, null, "", null, List.of()).sharedText();
+
+        assertThat(prompt)
+            .contains("This task also claims a journey (acceptance_test shows it): the screen "
+                + "must expose exactly the roles, accessible names and texts its selectors use")
+            .as("the journey is not pasted").doesNotContain("role=button");
     }
 }
