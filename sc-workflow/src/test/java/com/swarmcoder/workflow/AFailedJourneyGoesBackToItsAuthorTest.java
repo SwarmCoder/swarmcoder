@@ -134,7 +134,8 @@ class AFailedJourneyGoesBackToItsAuthorTest {
                     "verdict SCREEN_WRONG");
             assertThat(llm.sessionRequests.get(1)).as("only the failed journey may be corrected")
                 .contains("This review is about `" + PATH + "` and no other file");
-            assertThat(llm.sessionRequests.get(2)).contains("VALID - kept");
+            assertThat(llm.sessionRequests.get(2)).contains("VALID - kept",
+                "Typing a text into a search or filter box does not create it");
             assertThat(Files.readString(repo.resolve(PATH))).as("nothing is written by the "
                 + "review: whether the correction is taken is decided in a browser")
                 .isEqualTo(WRITTEN);
@@ -427,6 +428,74 @@ class AFailedJourneyGoesBackToItsAuthorTest {
             "'search the books'", PATH, "it types into a box nobody built.",
             "No worker was started", "correct the journey by hand and resume",
             "the author is then asked again");
+    }
+
+    /** Section 71: a second review only for a failure at a later step, and never a third. */
+    private static JourneyFile.Result failedAt(int step) {
+        return new JourneyFile.Result(journey(WRITTEN), false, "step " + step + " of 3 failed",
+            null, step);
+    }
+
+    @Test
+    void aJourneyThatFailsAtALaterStepAfterTheRepairRoundIsAskedAgain() {
+        Task task = task();
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(1))).as("never asked").isTrue();
+        JourneysOfAPlan.recordReview(task, PATH, 1);
+        task.setJourneySentBack(true);
+
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(3))).isTrue();
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(2))).isTrue();
+    }
+
+    @Test
+    void aJourneyThatFailsAtTheSameOrAnEarlierStepIsNotAskedAgain() {
+        Task task = task();
+        JourneysOfAPlan.recordReview(task, PATH, 2);
+        task.setJourneySentBack(true);
+
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(2))).isFalse();
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(1))).isFalse();
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(0))).as("not a step's failure")
+            .isFalse();
+    }
+
+    @Test
+    void aJourneyIsAskedAtMostTwiceInARun() {
+        Task task = task();
+        JourneysOfAPlan.recordReview(task, PATH, 1);
+        JourneysOfAPlan.recordReview(task, PATH, 2);
+        task.setJourneySentBack(true);
+
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(3))).isFalse();
+        assertThat(JourneysOfAPlan.reviewsOf(task, PATH)).isEqualTo(2);
+    }
+
+    @Test
+    void aRunMarkedAsAskedBeforeStepsWereKeptIsNotAskedAgain() {
+        Task task = task();
+        task.setJourneySentBack(true);
+
+        assertThat(JourneysOfAPlan.goesToItsAuthor(task, failedAt(3))).isFalse();
+    }
+
+    @Test
+    void theStopAfterTheSecondReviewCarriesBothReasons() {
+        Task task = task();
+        task.setJourneyReviewNote("first reason: the page never mounted. "
+            + "SECOND REVIEW: second reason: no step adds a book.");
+
+        assertThat(JourneysOfAPlan.reviewedTwice(task, List.of(PATH))).contains(
+            "first reason: the page never mounted.", "second reason: no step adds a book.",
+            "No worker was started");
+    }
+
+    @Test
+    void theBrowsersResultNamesTheStepThatFailed() {
+        com.swarmcoder.domain.PageCheck check = new com.swarmcoder.domain.PageCheck("http://x/",
+            true, List.of(), List.of(new com.swarmcoder.domain.AssertionResult("step 2: fill",
+                false, "timeout")), null);
+
+        assertThat(JourneyFile.resultOf(journey(WRITTEN), check).step()).isEqualTo(2);
     }
 
     // ---------------------------------------------------------------------------------------

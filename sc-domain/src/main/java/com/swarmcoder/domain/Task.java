@@ -155,6 +155,12 @@ public class Task {
      */
     private String journeyReviewNote;
     /**
+     * Each review of a journey by its author, as {@code <path>|<failing step number>}, oldest
+     * first (section 71). Decides whether a journey that fails again is sent back again: only
+     * when it now fails at a later step, and at most twice per journey. Null until reviewed.
+     */
+    private List<String> journeyReviews;
+    /**
      * True once a refusal at final integration that names this task's own files (code nothing
      * can reach) has sent the task back to the workers; it is sent once (section 69).
      */
@@ -290,6 +296,14 @@ public class Task {
         this.journeySentBack = journeySentBack;
     }
 
+    public List<String> journeyReviews() {
+        return journeyReviews == null ? List.of() : journeyReviews;
+    }
+    public List<String> getJourneyReviews() { return journeyReviews; }
+    public void setJourneyReviews(List<String> journeyReviews) {
+        this.journeyReviews = journeyReviews;
+    }
+
     public String journeyReviewNote() { return journeyReviewNote; }
     public String getJourneyReviewNote() { return journeyReviewNote; }
     public void setJourneyReviewNote(String journeyReviewNote) {
@@ -319,6 +333,7 @@ public class Task {
             && Objects.equals(this.journeyWaiver, that.journeyWaiver)
             && this.journeySentBack == that.journeySentBack
             && Objects.equals(this.journeyReviewNote, that.journeyReviewNote)
+            && Objects.equals(this.journeyReviews(), that.journeyReviews())
             && this.integrationRepairAttempted == that.integrationRepairAttempted;
     }
 
