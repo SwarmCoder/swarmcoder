@@ -1179,6 +1179,7 @@ public class GreenfieldWorkflow {
                     log("Processing FINAL_INTEGRATION...");
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
+                            .tellingTheRun(this::log)
                             .integrate(run);
                     if (!integration.ok() && repairAfterFailedJourney(run, integration)) {
                         // Stays in FINAL_INTEGRATION: the run is merged and verified again with

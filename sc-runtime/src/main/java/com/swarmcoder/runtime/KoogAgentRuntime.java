@@ -830,8 +830,9 @@ public final class KoogAgentRuntime implements AgentRuntime {
             });
             if (result.changed()) {
                 promptTokens.set(result.tokensAfter());
-                log.info("Session '{}': at turn {} {} old lookup result(s) were replaced by their "
-                    + "first lines, {} -> {} tokens (estimated)", spec.role(), turns.get(),
+                log.info("Session '{}': at turn {} {} old lookup result(s) were shortened (whole "
+                    + "to first lines, first lines to one line), {} -> {} tokens (estimated)",
+                    spec.role(), turns.get(),
                     result.dropped(), result.tokensBefore(), result.tokensAfter());
             }
         }

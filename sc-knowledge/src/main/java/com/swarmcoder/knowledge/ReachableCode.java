@@ -80,6 +80,19 @@ import java.util.stream.Stream;
  * bean that is only ever injected by its interface teaches its scope annotation. A new class with
  * neither a user nor such a mark is an orphan.
  *
+ * <h2>A source root with nothing to learn from (live run 93, 2026-10-08)</h2>
+ *
+ * <p>The rule above needs code that was there before. A project that starts as a skeleton has a
+ * server module holding one {@code main} that hands over to a library, and the first story adds
+ * the first service: a class the framework finds by its annotation, which no source file names
+ * and which no earlier class could teach. The run was refused for it, after a repair round spent
+ * on "connecting" code that was connected. So: in a source root where <b>none</b> of the code
+ * that was there before is framework-discovered, an added type nothing uses that carries a
+ * type-level annotation (not the language's own, not one the run added itself) is <b>taken as
+ * found</b> by a framework. It is not an orphan, what it uses counts as reached, and the finding
+ * names it ({@link Finding#takenAsFound}) so the run says what it did not establish. An added
+ * class there with no annotation and no user is still an orphan.
+ *
  * <h2>What this cannot see</h2>
  *
  * <ul>
@@ -99,6 +112,12 @@ import java.util.stream.Stream;
  *       gets a wrong objection, and the switch below is the way out.</li>
  *   <li><b>Reflection by a name that is built at run time</b>, and names in files outside the
  *       build files and main source trees.</li>
+ *   <li><b>The first discovered type of a source root is believed.</b> Where nothing that was
+ *       there before is framework-discovered, any type-level annotation excuses an added type
+ *       nothing uses - one a compiler or a code generator reads and no framework finds included.
+ *       It is named in the finding, not refused. The other way round too: the first type of a
+ *       <i>new kind</i> of discovery in a root that already shows another kind, and one found by
+ *       its supertype alone, are still objected to.</li>
  *   <li><b>Other languages.</b> Only Java sources are in the graph. A tree whose graph could not
  *       be built, or built only in part, is not judged at all ({@link Status#UNDETERMINED}).</li>
  * </ul>
@@ -149,9 +168,11 @@ public final class ReachableCode {
      * @param orphans    the added files nothing reaches, by path
      * @param note       why nothing was judged, or what was left out; "" otherwise
      * @param discovered how discovery looks in this project: annotation and supertype names
+     * @param takenAsFound added files nothing uses that were not judged, because they carry an
+     *                   annotation and their source root has no discovered type to compare with
      */
     public record Finding(Status status, List<Orphan> orphans, String note,
-                          List<String> discovered) {
+                          List<String> discovered, List<Presumed> takenAsFound) {
 
         public boolean unreachable() {
             return status == Status.UNREACHABLE;
@@ -164,8 +185,17 @@ public final class ReachableCode {
             }
             List<Orphan> kept = orphans.stream().filter(o -> file.test(o.file())).toList();
             return new Finding(kept.isEmpty() ? Status.ALL_REACHABLE : Status.UNREACHABLE, kept,
-                note, discovered);
+                note, discovered, takenAsFound);
         }
+    }
+
+    /**
+     * An added file that nothing uses and that was taken as found by a framework.
+     *
+     * @param types       the types it declares, simple names, outermost first
+     * @param annotations the type-level annotations it was believed for, simple names
+     */
+    public record Presumed(String file, List<String> types, List<String> annotations) {
     }
 
     /** One production file as the graph holds it. */
@@ -185,6 +215,8 @@ public final class ReachableCode {
         /** A file to the production files that use a type it declares. */
         private final Map<String, Set<String>> usedBy = new LinkedHashMap<>();
         private final Set<String> namedOutsideJava = new LinkedHashSet<>();
+        /** A type of the tree to the production file declaring it. */
+        private final Map<String, String> fileOfType = new LinkedHashMap<>();
 
         private Graph(String undetermined) {
             this.undetermined = undetermined;
@@ -211,14 +243,15 @@ public final class ReachableCode {
          */
         public Finding judge(Predicate<String> addedByTheRun) {
             if (!determined()) {
-                return new Finding(Status.UNDETERMINED, List.of(), undetermined, List.of());
+                return new Finding(Status.UNDETERMINED, List.of(), undetermined, List.of(),
+                    List.of());
             }
             Walk walk = walk(addedByTheRun == null ? file -> false : addedByTheRun);
             if (walk.anchors.isEmpty()) {
                 return new Finding(Status.UNDETERMINED, List.of(), "the tree has no entry point "
                     + "this can recognise (no main method, no type named in a build or resource "
                     + "file, no discovered type), so what is reachable in it cannot be said",
-                    List.of());
+                    List.of(), List.of());
             }
             List<Orphan> orphans = new ArrayList<>();
             Set<String> leftOut = new TreeSet<>();
@@ -237,8 +270,20 @@ public final class ReachableCode {
             String note = leftOut.isEmpty() ? "" : "not judged, because more than half of the "
                 + "code already there is used by nothing in this project (a library's surface): "
                 + String.join(", ", leftOut);
+            List<Presumed> presumed = new ArrayList<>();
+            walk.presumed.forEach((file, marks) -> presumed.add(new Presumed(file,
+                simpleNames(nodes.get(file).types()), simpleNames(List.copyOf(marks)))));
             return new Finding(orphans.isEmpty() ? Status.ALL_REACHABLE : Status.UNREACHABLE,
-                List.copyOf(orphans), note, walk.discovered());
+                List.copyOf(orphans), note, walk.discovered(), List.copyOf(presumed));
+        }
+
+        /**
+         * True when none of the code that was in this source root before the run is
+         * framework-discovered, so the root shows nothing an added type could be compared
+         * with - a root the tree does not hold yet included.
+         */
+        public boolean showsNoDiscoveryIn(String sourceRoot) {
+            return determined() && !walk(file -> false).teachingRoots.contains(sourceRoot);
         }
 
         /**
@@ -416,6 +461,10 @@ public final class ReachableCode {
                 } else {
                     walk.supertypes.addAll(node.supertypes());
                 }
+                if (!node.typeAnnotations().isEmpty() || !node.fileAnnotations().isEmpty()
+                        || !node.supertypes().isEmpty()) {
+                    walk.teachingRoots.add(sourceRootOf(node.file()));
+                }
             }
             for (Node node : nodes.values()) {
                 if (node.hasMain() || namedOutsideJava.contains(node.file())
@@ -427,13 +476,32 @@ public final class ReachableCode {
             }
             Deque<String> open = new ArrayDeque<>(walk.anchors);
             walk.reachable.addAll(walk.anchors);
-            while (!open.isEmpty()) {
-                Node node = nodes.get(open.poll());
-                for (String used : node.uses()) {
-                    if (walk.reachable.add(used)) {
-                        open.add(used);
+            reach(open, walk.reachable);
+            // A source root with nothing to learn from (run 93): an added type there that
+            // nothing uses and that carries an annotation is taken as found by a framework.
+            // Only when the tree has an entry point at all, and never for an annotation the
+            // run declared itself.
+            if (!walk.anchors.isEmpty()) {
+                for (Node node : nodes.values()) {
+                    if (!walk.added.contains(node.file()) || walk.reachable.contains(node.file())
+                            || walk.teachingRoots.contains(sourceRootOf(node.file()))
+                            || !usedBy.getOrDefault(node.file(), Set.of()).isEmpty()) {
+                        continue;
+                    }
+                    Set<String> marks = new TreeSet<>();
+                    for (String annotation : node.typeAnnotations()) {
+                        String declaredIn = fileOfType.get(annotation);
+                        if (declaredIn == null || !walk.added.contains(declaredIn)) {
+                            marks.add(annotation);
+                        }
+                    }
+                    if (!marks.isEmpty()) {
+                        walk.presumed.put(node.file(), marks);
                     }
                 }
+                open.addAll(walk.presumed.keySet());
+                walk.reachable.addAll(walk.presumed.keySet());
+                reach(open, walk.reachable);
             }
             Map<String, int[]> byRoot = new LinkedHashMap<>();
             for (Node node : nodes.values()) {
@@ -453,6 +521,17 @@ public final class ReachableCode {
             }
             return walk;
         }
+
+        private void reach(Deque<String> open, Set<String> reachable) {
+            while (!open.isEmpty()) {
+                Node node = nodes.get(open.poll());
+                for (String used : node.uses()) {
+                    if (reachable.add(used)) {
+                        open.add(used);
+                    }
+                }
+            }
+        }
     }
 
     private static final class Walk {
@@ -462,6 +541,10 @@ public final class ReachableCode {
         final Set<String> anchors = new LinkedHashSet<>();
         final Set<String> reachable = new LinkedHashSet<>();
         final Set<String> surfaceRoots = new TreeSet<>();
+        /** Source roots where code that was there before is framework-discovered. */
+        final Set<String> teachingRoots = new TreeSet<>();
+        /** Added files taken as found by a framework, to the annotations they were believed for. */
+        final Map<String, Set<String>> presumed = new TreeMap<>();
 
         List<String> discovered() {
             List<String> all = new ArrayList<>();
@@ -531,7 +614,12 @@ public final class ReachableCode {
             Set<String> typeAnnotations = new LinkedHashSet<>();
             Set<String> supertypes = new LinkedHashSet<>();
             boolean hasMain = false;
-            for (SemanticFacts.TypeFact type : entry.getValue()) {
+            // Outermost first: a nested type's name is its outer type's name and more.
+            List<SemanticFacts.TypeFact> declared = new ArrayList<>(entry.getValue());
+            declared.sort(java.util.Comparator
+                .comparingInt((SemanticFacts.TypeFact type) -> type.fqn().length())
+                .thenComparing(SemanticFacts.TypeFact::fqn));
+            for (SemanticFacts.TypeFact type : declared) {
                 types.add(type.fqn());
                 type.annotations().stream().filter(ReachableCode::notTheLanguages)
                     .forEach(typeAnnotations::add);
@@ -544,6 +632,7 @@ public final class ReachableCode {
                 typeAnnotations, annotationsInFile.getOrDefault(entry.getKey(), Set.of()),
                 supertypes, hasMain, usesOfFile.getOrDefault(entry.getKey(), Set.of())));
         }
+        graph.fileOfType.putAll(fileOfType);
         readNamesOutsideJava(tree, fileOfType, graph.namedOutsideJava);
         log.info("reachable-code graph of {}: {} production file(s), {} named in build or "
             + "resource files, parsed in {} ms", tree, graph.nodes.size(),
@@ -652,6 +741,34 @@ public final class ReachableCode {
             + "fault in the plan, not something to work around";
     }
 
+    /**
+     * What a run says about the added files it did not judge, in a sentence; "" when there are
+     * none. For the run's own record: nothing is refused for it.
+     */
+    public static String takenAsFoundNote(Finding finding) {
+        if (finding == null || finding.takenAsFound().isEmpty()) {
+            return "";
+        }
+        List<Presumed> all = finding.takenAsFound();
+        StringBuilder named = new StringBuilder();
+        for (Presumed each : all.subList(0, Math.min(MAX_NAMED, all.size()))) {
+            named.append(named.length() == 0 ? "" : ", ")
+                .append(each.types().isEmpty() ? each.file() : each.types().get(0))
+                .append(" (@").append(String.join(", @", each.annotations())).append(", ")
+                .append(each.file()).append(')');
+        }
+        if (all.size() > MAX_NAMED) {
+            named.append(" and ").append(all.size() - MAX_NAMED).append(" more");
+        }
+        boolean one = all.size() == 1;
+        return "Not established: whether the application reaches " + named + ". No source "
+            + "file uses " + (one ? "it" : "them") + ". " + (one ? "It carries an annotation"
+                : "Each carries an annotation") + ", and none of the code that was already in "
+            + (one ? "its" : "their") + " part of the project is found by a framework, so there "
+            + "is nothing to compare " + (one ? "it" : "them") + " with: " + (one ? "it is"
+                : "they are") + " taken as found by the framework and not refused";
+    }
+
     // -------------------------------------------------------------------------------------------
 
     /**
@@ -662,7 +779,8 @@ public final class ReachableCode {
      * source file, or a non-Java file of a main source tree (where a type can be registered by
      * name), in the new file's own source root or in one whose code already uses that root's
      * code. A new file whose task names one of the project's discovery annotations is taken to
-     * be found by the framework and is not counted. Such a plan can be carried out perfectly
+     * be found by the framework and is not counted; nor is one in a source root that shows no
+     * discovered type at all, when its task names any annotation. Such a plan can be carried out perfectly
      * and still deliver nothing a user can arrive at.
      *
      * <p>Build files do not count as a place to connect from: every task is given its module's
@@ -726,7 +844,11 @@ public final class ReachableCode {
                     if (reachable.contains(path)) {
                         footholds.add(sourceRootOf(path));
                     }
-                } else if (!saysDiscovered && !surface.contains(sourceRootOf(path))) {
+                } else if (!saysDiscovered && !surface.contains(sourceRootOf(path))
+                        // nothing in its source root shows how a type is found there, and the
+                        // task names an annotation for it (run 93): believed, as judge() does
+                        && !(namesAnAnnotation(task.told())
+                            && graph.showsNoDiscoveryIn(sourceRootOf(path)))) {
                     planned.add(path);
                 }
             }
@@ -812,6 +934,19 @@ public final class ReachableCode {
             // are the ones of java.lang, which mark nothing a framework finds
             && !Set.of("Override", "Deprecated", "SuppressWarnings", "SafeVarargs",
                 "FunctionalInterface").contains(type);
+    }
+
+    /** An annotation as source writes it: {@code @Name}, not a documentation tag. */
+    private static final Pattern ANNOTATION = Pattern.compile("@([A-Z][\\w.]*)");
+
+    private static boolean namesAnAnnotation(String text) {
+        Matcher matcher = ANNOTATION.matcher(text == null ? "" : text);
+        while (matcher.find()) {
+            if (notTheLanguages(matcher.group(1))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean intersects(Set<String> one, Set<String> other) {

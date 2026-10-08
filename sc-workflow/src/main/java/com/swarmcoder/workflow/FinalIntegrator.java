@@ -113,6 +113,17 @@ public class FinalIntegrator {
     private final SecretScanner secretScanner = new SecretScanner();
     private final List<String> protectedPaths;
     private final BuildBoxes boxes;
+    /** Where a sentence for the run's own record goes; nothing by default. */
+    private java.util.function.Consumer<String> runRecord = sentence -> { };
+
+    /**
+     * Sends what this stage could not establish and did not refuse to the run's own record
+     * (live run 93: added types taken as found by a framework), beside the log.
+     */
+    public FinalIntegrator tellingTheRun(java.util.function.Consumer<String> record) {
+        this.runRecord = record == null ? sentence -> { } : record;
+        return this;
+    }
 
     public FinalIntegrator(GitService gitService, ArtifactStore store) {
         this(gitService, store, LspServiceFactory.NONE);
@@ -405,6 +416,10 @@ public class FinalIntegrator {
             if (finding.status() == ReachableCode.Status.UNDETERMINED || !finding.note().isEmpty()) {
                 log.info("Run {}: whether what the run added can be reached - {}", run.id(),
                     finding.note());
+            }
+            String believed = ReachableCode.takenAsFoundNote(finding);
+            if (!believed.isEmpty()) {
+                runRecord.accept("FINAL_INTEGRATION: " + believed + ".");
             }
             String objection = ReachableCode.objection(finding, "This run adds");
             if (objection != null) {

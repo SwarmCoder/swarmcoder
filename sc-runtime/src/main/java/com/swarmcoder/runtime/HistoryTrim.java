@@ -395,6 +395,15 @@ public final class HistoryTrim {
      * the files are on disk. They count toward the threshold and, after the superseded results,
      * go next: the call keeps its id and its path and the body becomes a line saying how much was
      * sent and how it began ({@link #digestArguments}); the last few turns stay whole.
+     *
+     * <p><b>First lines do not stay for ever</b> (live run 93, 2026-10-08). A digest keeps up to
+     * {@code digestChars} characters and a sentence, about 200 tokens, and nothing ever shortened
+     * one: after the architect's 134th lookup the first lines alone were about 20,000 tokens -
+     * the mark itself - resent on every call, counted by nothing, and its second tidy could
+     * take only 10,000 off a conversation of 47,668. So the first lines kept by an
+     * <i>earlier</i> tidy count toward the threshold like whole results, and they go before any
+     * whole result that nothing has superseded: each becomes one line that still names the
+     * call ({@link #collapse}). A result is whole, then its first lines, then one line.
      */
     public static Result tidy(List<Message> messages, int aboveTokens, int toTokens,
                               int digestChars) {
@@ -422,6 +431,8 @@ public final class HistoryTrim {
         // The whole file bodies and diffs the worker sent in earlier write_file / apply_diff calls
         // are resent every turn too, and the files are on disk now.
         droppable += trimmableArgumentTokens(messages);
+        // And the first lines an earlier tidy kept of results older still (run 93).
+        droppable += earlierDigestTokens(messages);
         if (droppable <= aboveTokens) {
             return new Result(messages, 0, 0, before, before);
         }
@@ -436,6 +447,12 @@ public final class HistoryTrim {
             int trimmed = trimOldCallArguments(out, target, running);
             dropped += trimmed;
             running = trimmed == 0 ? running : estimateTokens(out);
+        }
+        if (running > target) {
+            // Then what is oldest of all: the first lines an earlier tidy left.
+            int collapsed = collapseEarlierDigests(out, target, running);
+            dropped += collapsed;
+            running = collapsed == 0 ? running : estimateTokens(out);
         }
         if (running > target) {
             dropped += emptyOldToolOutputs(out, target, running, Math.max(1, digestChars), null,
@@ -929,6 +946,89 @@ public final class HistoryTrim {
         return ELIDED_MARK + " You read this earlier with " + result.getTool() + shortArgs
             + "; only its beginning is kept (" + output.length() + " characters were returned)."
             + " Make the same call again if you need the rest.\n" + head + "\n...";
+    }
+
+    /** How a digest says it kept a head; what tells a digest from a stub or a collapsed one. */
+    private static final String DIGEST_KEPT = "; only its beginning is kept (";
+    private static final String DIGEST_COUNTED = " characters were returned).";
+
+    private static boolean isDigest(MessagePart.Tool.Result result) {
+        String output = result.getOutput();
+        return output.startsWith(ELIDED_MARK) && output.contains(DIGEST_KEPT);
+    }
+
+    /**
+     * A digest without the head it kept: one line that names the call, says how much it
+     * returned and that none of it is here. Null when the text is not a digest.
+     */
+    static String collapse(String digest) {
+        int kept = digest == null ? -1 : digest.indexOf(DIGEST_KEPT);
+        int counted = kept < 0 ? -1 : digest.indexOf(DIGEST_COUNTED, kept);
+        if (counted < 0 || !digest.startsWith(ELIDED_MARK)) {
+            return null;
+        }
+        return digest.substring(0, kept) + "; none of it is kept ("
+            + digest.substring(kept + DIGEST_KEPT.length(), counted)
+            + " characters were returned). Make the same call again if you need it.";
+    }
+
+    /** What the digests outside the protected tail hold beyond the one line each would become. */
+    private static int earlierDigestTokens(List<Message> messages) {
+        int tokens = 0;
+        int last = messages.size() - PROTECTED_TAIL_MESSAGES;
+        for (int i = firstDroppableIndex(messages); i < last; i++) {
+            if (messages.get(i) instanceof Message.User user) {
+                for (MessagePart part : user.getParts()) {
+                    if (part instanceof MessagePart.Tool.Result result && isDigest(result)) {
+                        String line = collapse(result.getOutput());
+                        if (line != null) {
+                            tokens += (result.getOutput().length() - line.length())
+                                / CHARS_PER_TOKEN;
+                        }
+                    }
+                }
+            }
+        }
+        return tokens;
+    }
+
+    /**
+     * Turns the digests an earlier tidy left into one line each, oldest first, until the
+     * conversation is down to {@code target}.
+     *
+     * @return how many were shortened
+     */
+    private static int collapseEarlierDigests(List<Message> out, int target, int running) {
+        int last = out.size() - PROTECTED_TAIL_MESSAGES;
+        int collapsed = 0;
+        for (int i = firstDroppableIndex(out); i < last && running > target; i++) {
+            if (!(out.get(i) instanceof Message.User user)) {
+                continue;
+            }
+            List<MessagePart.RequestPart> parts = new ArrayList<>();
+            int saved = 0;
+            int here = 0;
+            for (MessagePart.RequestPart part : user.getParts()) {
+                String line = part instanceof MessagePart.Tool.Result result && isDigest(result)
+                    ? collapse(result.getOutput()) : null;
+                if (line != null) {
+                    MessagePart.Tool.Result result = (MessagePart.Tool.Result) part;
+                    saved += result.getOutput().length() - line.length();
+                    here++;
+                    parts.add(new MessagePart.Tool.Result(result.getId(), result.getTool(), line,
+                        result.isError()));
+                } else {
+                    parts.add(part);
+                }
+            }
+            if (here == 0 || saved <= 0) {
+                continue;
+            }
+            out.set(i, user.copy(parts, user.getMetaInfo(), user.getId()));
+            running -= saved / CHARS_PER_TOKEN;
+            collapsed += here;
+        }
+        return collapsed;
     }
 
     /** One removed call, named the way the worker would have to type it to make it again. */

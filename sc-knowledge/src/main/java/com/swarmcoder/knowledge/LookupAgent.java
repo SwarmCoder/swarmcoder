@@ -91,7 +91,9 @@ public final class LookupAgent {
      * so the figures are higher than the workers' 12,000 and 3,000: results older than the last
      * four turns are left alone until they add up to {@link #TIDY_ABOVE_TOKENS}, then the oldest
      * (superseded ones first) are cut to their first {@link #DIGEST_CHARS} characters until
-     * {@link #TIDY_TO_TOKENS} are left whole. Not a limit: nothing is stopped, and one lookup
+     * {@link #TIDY_TO_TOKENS} are left whole. First lines kept by an earlier tidy count toward
+     * the mark and become one line each at the next (run 93: after 134 lookups they were about
+     * 20,000 tokens on their own). Not a limit: nothing is stopped, and one lookup
      * gets a cut result back. {@code -Dswarmcoder.roles.tidyAboveTokens=0} switches it off.
      */
     static final int TIDY_ABOVE_TOKENS = Integer.getInteger("swarmcoder.roles.tidyAboveTokens", 20_000);

@@ -175,4 +175,43 @@ class OldLookupResultsAreReplacedByTheirFirstLinesTest {
             .startsWith(HistoryTrim.ELIDED_MARK).contains("Thing2.java");
         assertThat(outputAt(result.messages(), 9)).isEqualTo(fileBody(3));
     }
+
+    /**
+     * Live run 93 (2026-10-08): the first lines kept of 134 lookups were about 20,000 tokens
+     * themselves, resent on every call, and no later tidy could shorten them.
+     */
+    @Test
+    void theFirstLinesAnEarlierTidyKeptBecomeOneLineAtTheNext() {
+        HistoryTrim.Result first = HistoryTrim.tidy(conversation(12), 6_000, 1_500, 600);
+        List<Message> later = new ArrayList<>(first.messages());
+        for (int i = 12; i < 16; i++) {
+            later.add(new Message.Assistant(List.of(new MessagePart.Tool.Call("call-" + i,
+                "read_file", "{\"path\":\"ref/src/Thing" + i + ".java\"}")),
+                ResponseMetaInfo.Companion.getEmpty(), null, null, null));
+            later.add(new Message.User(List.of(new MessagePart.Tool.Result("call-" + i,
+                "read_file", fileBody(i), false)), RequestMetaInfo.Companion.getEmpty(), null));
+        }
+        assertThat(outputAt(later, 3)).as("after the first tidy: its first lines")
+            .contains("package com.example.thing0;");
+
+        HistoryTrim.Result second = HistoryTrim.tidy(later, 6_000, 1_500, 600);
+
+        assertThat(second.changed()).isTrue();
+        String oldest = outputAt(second.messages(), 3);
+        assertThat(oldest)
+            .as("one line: the call it was, how much it returned, how to get it back")
+            .startsWith(HistoryTrim.ELIDED_MARK)
+            .contains("read_file").contains("Thing0.java")
+            .contains("none of it is kept (" + fileBody(0).length() + " characters were returned)")
+            .contains("Make the same call again")
+            .doesNotContain("package com.example.thing0;").doesNotContain("\n");
+        assertThat(oldest.length()).isLessThan(300);
+        assertThat(outputAt(second.messages(), 19))
+            .as("a result that was whole until now keeps its first lines")
+            .startsWith(HistoryTrim.ELIDED_MARK).contains("package com.example.thing8;");
+        int last = second.messages().size() - 1;
+        assertThat(outputAt(second.messages(), last)).isEqualTo(fileBody(15));
+        assertThat(HistoryTrim.collapse(oldest)).as("one line is not shortened again").isNull();
+        assertThat(HistoryTrim.collapse("some file text")).isNull();
+    }
 }

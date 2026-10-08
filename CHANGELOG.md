@@ -11,6 +11,19 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Changed
 
+- **A project that starts nearly empty is no longer refused its first framework-found class.**
+  A run was stopped at final integration with "adds production code that nothing in the
+  application can reach" for a service and a store provider the framework finds by their
+  annotation. Where none of the code that was already in a part of the project is found by a
+  framework, an added class nothing uses that carries an annotation is now accepted, and the
+  run's messages say so ("Not established: whether the application reaches ..."). An added class
+  with no annotation and no user is still refused. Nothing to do; if you had set
+  `-Dswarmcoder.verify.unreachableAddedCode=off` for this, you can take it out.
+- **The refusal names the class, not a class nested in it.**
+- **A long role session costs less per call.** The first lines kept of a role's old lookup
+  results are cut to one line each the next time its conversation is shortened; they used to
+  stay for the whole session (about 20,000 tokens after 134 lookups). The log line now reads
+  "old lookup result(s) were shortened".
 - **A planning role's old lookup results are shortened at the same mark on every server.** They
   used to be left whole until a quarter of the model's room when the server reports prompt-cache
   hits (an architect averaged 45,697 input tokens a call); now the mark is 20,000 tokens (was
