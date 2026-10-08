@@ -96,7 +96,10 @@ class AWorkerReadsTheAcceptanceTestItMustMeetTest {
             .doesNotContain("void another()");
         assertThat(toolbox().acceptanceTest("UsabilityTest#usableFromKeyboard"))
             .contains("void usableFromKeyboard()");
-        assertThat(toolbox().acceptanceTest("SomethingElse")).contains("No claimed test matches");
+        assertThat(toolbox().acceptanceTest("SomethingElse"))
+            .as("a name nothing claimed carries is answered with everything claimed, once")
+            .contains("Nothing this task claims is named `SomethingElse`")
+            .contains("void usableFromKeyboard()");
     }
 
     @Test
@@ -153,7 +156,21 @@ class AWorkerReadsTheAcceptanceTestItMustMeetTest {
         assertThat(toolbox.acceptanceTest("add-contact"))
             .as("asked by its name: the journey alone")
             .contains("expectVisible").doesNotContain("usableFromKeyboard");
-        assertThat(toolbox.acceptanceTest("UsabilityTest")).doesNotContain("--- journey");
+        assertThat(toolbox.acceptanceTest("UsabilityTest"))
+            .as("asked for the test class: the journey is one line away, not left out")
+            .doesNotContain("--- journey")
+            .contains("also claims the journey `add-contact`", "acceptance_test('add-contact')");
+        // Section 70 (live run 95): a worker repairing a failed journey asked this tool for
+        // its module and for the class of the code under test, got two lines each time, and
+        // never saw the journey.
+        for (String notAClaim : List.of("app-server", "com.f.server.ContactServiceImpl")) {
+            assertThat(toolbox.acceptanceTest(notAClaim))
+                .as("asked with `%s`", notAClaim)
+                .contains("Nothing this task claims is named `" + notAClaim + "`")
+                .contains("--- journey " + journeyPath + " ---")
+                .contains("role=button[name=\\\"Add contact\\\"]")
+                .contains("void usableFromKeyboard()");
+        }
         assertThat(toolbox.writeFile(journeyPath, "journey: easier\nsteps: []\n"))
             .as("the protected directory is closed to a journey as to a test")
             .startsWith("error:");

@@ -303,6 +303,76 @@ public final class TreeQueries {
         return textsIn(address, source, typeName);
     }
 
+    /**
+     * {@link #textsOf} for a tree given as a folder rather than the session's own material
+     * (section 70, live run 95): the author of a journey that failed is asked about a screen
+     * the run has just built, and its session reads the project as it was BEFORE the story -
+     * there the screen's type did not exist, and the author concluded nobody had built it.
+     *
+     * <p>No index: a top-level Java type is declared in the file of its name, so the files of
+     * that name under {@code tree} are read (shipped code before test code, at most three). A
+     * qualified name narrows them to the file its package says. Nothing is run.
+     */
+    public static String textsOfIn(Path tree, String what) {
+        String typeName = what == null ? "" : what.strip();
+        int hash = typeName.indexOf('#');
+        if (hash >= 0) {
+            typeName = typeName.substring(0, hash).strip();
+        }
+        if (typeName.isBlank()) {
+            return "Give a type - for example LogbookScreen.";
+        }
+        if (tree == null || !Files.isDirectory(tree)) {
+            return "The built tree cannot be read here.";
+        }
+        String simple = typeName.substring(typeName.lastIndexOf('.') + 1);
+        String fileName = simple + ".java";
+        String qualified = typeName.contains(".") ? typeName.replace('.', '/') + ".java" : null;
+        Set<String> skipped = Set.of(".git", "target", "build", "node_modules", ".swarmcoder");
+        List<String> found = new ArrayList<>();
+        try {
+            Files.walkFileTree(tree, new java.nio.file.SimpleFileVisitor<>() {
+                @Override
+                public java.nio.file.FileVisitResult preVisitDirectory(Path dir,
+                        java.nio.file.attribute.BasicFileAttributes attrs) {
+                    return !dir.equals(tree) && skipped.contains(dir.getFileName().toString())
+                        ? java.nio.file.FileVisitResult.SKIP_SUBTREE
+                        : java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFile(Path file,
+                        java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (file.getFileName().toString().equals(fileName)) {
+                        found.add(tree.relativize(file).toString().replace((char) 92, '/'));
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (java.io.IOException | RuntimeException unreadable) {
+            return "The built tree could not be read: " + unreadable + ".";
+        }
+        if (qualified != null && found.stream().anyMatch(path -> path.endsWith(qualified))) {
+            found.removeIf(path -> !path.endsWith(qualified));
+        }
+        if (found.isEmpty()) {
+            return "The built application has no file `" + fileName + "`. Give the name of a "
+                + "top-level type; a nested type is in its outer type's answer.";
+        }
+        found.sort(java.util.Comparator
+            .comparing((String path) -> path.contains("/src/test/") || path.startsWith("src/test/"))
+            .thenComparing(java.util.Comparator.naturalOrder()));
+        StringBuilder out = new StringBuilder();
+        for (String path : found.subList(0, Math.min(3, found.size()))) {
+            try {
+                out.append(textsIn(path, Files.readString(tree.resolve(path)), simple));
+            } catch (java.io.IOException | RuntimeException unreadable) {
+                out.append('`').append(path).append("` could not be read.\n");
+            }
+        }
+        return out.toString();
+    }
+
     /** {@link #textsOf} once the file is known. */
     static String textsIn(String address, String source, String typeName) {
         JavaOutline outline;

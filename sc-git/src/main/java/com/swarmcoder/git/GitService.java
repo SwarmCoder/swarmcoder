@@ -238,6 +238,38 @@ public class GitService {
         return addWorktree(branchName, worktreePath, startPoint);
     }
 
+    /**
+     * Moves an existing branch out of the way under a numbered name, so its own name is free
+     * again and what it holds can still be looked at: {@code <asidePrefix>/1}, {@code /2}, ...
+     * - the first number not taken.
+     *
+     * <p>For a stage that makes the same branch every time it runs. Final integration cuts
+     * {@code swarm/integration/<run>} afresh, and it runs again for the same run after a repair
+     * round, after a corrected journey, and after a pause for the model server (live run 95:
+     * every second attempt died on "a branch named ... already exists"). The earlier attempt is
+     * what a person reads to see why it failed, so it is renamed, never deleted.
+     *
+     * <p>A worktree a killed attempt left with the branch checked out is removed first; git
+     * refuses to rename over nothing but would leave that checkout pointing at the old name.
+     *
+     * @return the name the branch has now, or null when there was no such branch
+     */
+    public String setBranchAside(String branchName, String asidePrefix) throws IOException {
+        Path repo = requireRepo();
+        if (headSha(branchName) == null) {
+            return null;
+        }
+        detachWorktreeOf(repo, branchName);
+        int attempt = 1;
+        while (headSha(asidePrefix + "/" + attempt) != null) {
+            attempt++;
+        }
+        String aside = asidePrefix + "/" + attempt;
+        runGitCli(repo, "branch", "-M", branchName, aside);
+        log.info("Branch {} of an earlier attempt is kept as {}", branchName, aside);
+        return aside;
+    }
+
     /** Force-removes whatever linked worktree currently has {@code branchName} checked out, if any. */
     private void detachWorktreeOf(Path repo, String branchName) {
         List<String> listing = gitOutputLines(repo, "worktree", "list", "--porcelain");

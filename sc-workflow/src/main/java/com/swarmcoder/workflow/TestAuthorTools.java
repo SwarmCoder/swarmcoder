@@ -91,6 +91,46 @@ public final class TestAuthorTools {
     private String askedAboutUnentered;
     /** True while the session reviews a journey that failed: no test is compiled or handed in. */
     private boolean journeyOnly;
+    /** The journey under review: its path and its text as it failed; null outside a review. */
+    private String reviewPath;
+    private String reviewOriginal;
+    /** A type name to the texts it holds in the tree the run BUILT; null when there is none. */
+    private Function<String, String> builtTexts;
+    /** Which side the author named when it ended the review; null until then or when unreadable. */
+    private Side reviewSide;
+
+    /** The two answers a review ends on, as the author gives them to {@code report_done}. */
+    enum Side {
+        JOURNEY_WRONG, SCREEN_WRONG;
+
+        /** The side {@code given} names, whatever its case and separators; null when neither. */
+        static Side of(String given) {
+            String word = given == null ? "" : given.strip().toUpperCase(java.util.Locale.ROOT)
+                .replace('-', '_').replace(' ', '_');
+            for (Side side : values()) {
+                if (side.name().equals(word)) {
+                    return side;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * What a review came to, decided from what the author handed in and the side it named - not
+     * from the words of its reason (section 70: live run 95's author wrote "the journey was
+     * wrong", kept no journey, and that was recorded as "stands by it").
+     */
+    enum ReviewOutcome {
+        /** A changed journey was kept by {@code check_journey}, and the screen was not blamed. */
+        CORRECTED,
+        /** The author named the screen as the wrong side. */
+        STANDS_BY,
+        /** The author named the journey as the wrong side and kept no changed journey. */
+        COULD_NOT_CORRECT,
+        /** Neither: no hand-in, or one that names no side and keeps nothing. */
+        UNANSWERED
+    }
 
     /**
      * @param session      the session's toolbox; every call here runs through it, so it is logged
@@ -142,7 +182,21 @@ public final class TestAuthorTools {
      * compiled. What the review came to is read from {@link #journeys()} and {@link #handedIn()}.
      */
     TestAuthorTools reviewingAJourney(String path) {
+        return reviewingAJourney(path, null, null);
+    }
+
+    /**
+     * @param original the journey as it failed; a draft that says the same is not a correction
+     * @param built    a type name to its texts in the tree the run built - what {@code texts_of}
+     *                 answers from in this review, because the screen in question is not in the
+     *                 project as the session's other lookups see it; null leaves texts_of as it is
+     */
+    TestAuthorTools reviewingAJourney(String path, String original, Function<String, String> built) {
         String only = path.replace((char) 92, '/');
+        this.reviewPath = only;
+        this.reviewOriginal = original;
+        this.builtTexts = built;
+        this.reviewSide = null;
         this.journeyObjection = (given, content) -> only.equals(given) ? null
             : "This review is about `" + only + "` and no other file. Give the corrected "
                 + "journey at exactly that path.";
@@ -190,12 +244,87 @@ public final class TestAuthorTools {
     /** The session goes on after a hand-in without a journey; the test draft stays as it is. */
     void handInAgain() {
         handedIn = false;
+        reviewSide = null;
+    }
+
+    /** The corrected journey of a review: kept by {@code check_journey} and not the original. */
+    String correction() {
+        String kept = reviewPath == null ? null : journeys.get(reviewPath);
+        return kept == null || sameText(kept, reviewOriginal) ? null : kept;
+    }
+
+    private static boolean sameText(String a, String b) {
+        return a != null && b != null
+            && a.replace("\r\n", "\n").strip().equals(b.replace("\r\n", "\n").strip());
+    }
+
+    /** What the review came to so far; see {@link ReviewOutcome}. */
+    ReviewOutcome reviewOutcome() {
+        if (handedIn && reviewSide == Side.SCREEN_WRONG) {
+            return ReviewOutcome.STANDS_BY;
+        }
+        if (correction() != null) {
+            return ReviewOutcome.CORRECTED;
+        }
+        return handedIn && reviewSide == Side.JOURNEY_WRONG ? ReviewOutcome.COULD_NOT_CORRECT
+            : ReviewOutcome.UNANSWERED;
+    }
+
+    /** True when the review ended with the journey blamed, or no side named, and nothing kept. */
+    boolean reviewLacksACorrection() {
+        return handedIn && reviewSide != Side.SCREEN_WRONG && correction() == null;
+    }
+
+    /** The path of a review's draft: the journey under review, however its file was addressed. */
+    private String reviewTarget(String path) {
+        String cleaned = path == null ? "" : path.replace((char) 92, '/').strip();
+        while (cleaned.startsWith("./")) {
+            cleaned = cleaned.substring(2);
+        }
+        if (cleaned.startsWith("project/") && !reviewPath.startsWith("project/")) {
+            cleaned = cleaned.substring("project/".length());
+        }
+        String file = reviewPath.substring(reviewPath.lastIndexOf('/') + 1);
+        return cleaned.equals(reviewPath) || cleaned.equals(file) ? reviewPath
+            : cleaned.endsWith(JourneyFile.SUFFIX) ? cleaned : null;
+    }
+
+    /** {@code texts_of} in a review: the type as the run built it. */
+    public String textsOfBuilt(String type) {
+        return session.runOwnTool("texts_of", type, () -> builtTexts.apply(type));
+    }
+
+    /**
+     * Ends a review. The parameter names are the tool's schema - do not rename them.
+     *
+     * @param verdict which side is wrong, as one of two fixed words; the outcome is decided from
+     *                it and from what {@code check_journey} kept
+     * @param reason  the author's sentences, passed on as written and never interpreted
+     */
+    public String reviewDone(String verdict, String reason) {
+        this.wrote = reason == null ? "" : reason;
+        this.reviewSide = Side.of(verdict);
+        this.handedIn = true;
+        return switch (reviewOutcome()) {
+            case CORRECTED -> "the corrected journey is handed in";
+            case STANDS_BY -> "recorded: the journey stands as written and the screen is to be "
+                + "repaired" + (journeys.isEmpty() ? "" : "; nothing you gave check_journey is "
+                    + "handed in");
+            case COULD_NOT_CORRECT -> "recorded: the journey is wrong, and no corrected journey "
+                + "was kept";
+            case UNANSWERED -> "not usable: verdict must be exactly JOURNEY_WRONG or SCREEN_WRONG";
+        };
     }
 
     /** Parameter names are the tool's schema (the build compiles with {@code -parameters}). */
     public String checkJourney(String path, String content) {
         return session.runOwnTool("check_journey", path, () -> {
-            String target = accepted(path, JourneyFile.SUFFIX);
+            String target = journeyOnly && reviewPath != null ? reviewTarget(path)
+                : accepted(path, JourneyFile.SUFFIX);
+            if (target == null && journeyOnly && reviewPath != null) {
+                return "Refused: this review is about `" + reviewPath + "`. Give the corrected "
+                    + "journey at exactly that path.";
+            }
             if (target == null) {
                 return "Refused: `" + path + "` is not a journey file under " + protectedDir
                     + ". Give it as " + writeDir + "/<name>" + JourneyFile.SUFFIX + ".";
@@ -342,11 +471,14 @@ public final class TestAuthorTools {
         try {
             List<ToolBinding> all = journeyOnly ? new ArrayList<>(List.of(
                 new ToolBinding(LookupAgent.SUBMIT_TOOL,
-                    "End the review. Give two or three sentences: what was wrong with the "
-                        + "journey when you corrected it (the journey check_journey last called "
-                        + "VALID is handed in), or what the screen got wrong when the journey "
-                        + "is right (give check_journey nothing then).",
-                    this, TestAuthorTools.class.getMethod("reportDone", String.class))))
+                    "End the review with your answer. verdict is exactly one of two words: "
+                        + "JOURNEY_WRONG (you corrected the journey; the one check_journey last "
+                        + "called VALID is handed in) or SCREEN_WRONG (the journey is right as "
+                        + "written and the screen must be repaired; nothing you gave "
+                        + "check_journey is handed in). reason is one or two sentences: what "
+                        + "was wrong with the journey, or what the screen got wrong.",
+                    this, TestAuthorTools.class.getMethod("reviewDone", String.class,
+                        String.class))))
                 : new ArrayList<>(List.of(
                 new ToolBinding("compile_test",
                     "Compile a draft of your test exactly as the build's own check will, with the "
@@ -378,7 +510,14 @@ public final class TestAuthorTools {
                             + "it is recorded in place of a journey." : ""),
                     this, TestAuthorTools.class.getMethod("checkJourney", String.class,
                         String.class)));
-                all.add(0, new ToolBinding("texts_of",
+                all.add(0, journeyOnly && builtTexts != null ? new ToolBinding("texts_of",
+                    "The texts a type of the BUILT application holds - every string literal "
+                        + "in it, by member, with its annotations' arguments - and no code: the "
+                        + "labels, placeholders and headings the screen this run built shows. "
+                        + "Give a type name. This is the only lookup that reads what the run "
+                        + "built; the others read the project as it was before the story.",
+                    this, TestAuthorTools.class.getMethod("textsOfBuilt", String.class))
+                    : new ToolBinding("texts_of",
                     "The texts a type holds - every string literal in it, by member, with its "
                         + "annotations' arguments - and no code: what a screen shows, what a "
                         + "route is called, what a class of text constants holds. Give a type "
