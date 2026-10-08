@@ -1142,6 +1142,10 @@ public class SwarmEngineImpl implements SwarmEngine {
                 log.info("Candidate {}: whether what it adds can be reached - {}", sol.id(),
                     finding.note());
             }
+            String believed = ReachableCode.takenAsFoundNote(finding);
+            if (!believed.isEmpty()) {
+                log.info("Candidate {}: {}", sol.id(), believed);
+            }
             return ReachableCode.objection(finding, "the candidate adds");
         } catch (RuntimeException e) {
             log.warn("Candidate {}: whether what it adds can be reached could not be "

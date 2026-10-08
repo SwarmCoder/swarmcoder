@@ -6215,3 +6215,87 @@ Run reports keep input and output tokens separate.
 
 **Tests.** `ARoleLearnsTheProjectFromItsObjectGraphTest` (the cache case: the options carry the
 ordinary 20,000 mark on a server reporting cache hits), `ARolesSessionTidiesItsOldLookupResultsTest`.
+
+## 68. A correct run refused for code "nothing can reach", and first lines nothing ever shortened (run 93, 2026-10-08)
+
+Run 93: the bookshelf demo (three modules, one class each), story "search for a book by title
+or author". Design, plan, tests, four tasks, one repair round, then PARKED at FINAL_INTEGRATION.
+Nothing below was measured in a live run.
+
+**1. The refusal was a false alarm.** It named `BookServiceImpl` (as `ListAll`, a class nested
+in it), `DefaultDataRootProvider` and `DataRoot`. In the kept repository both classes carry the
+framework's bean scope annotation, the server's bean archive is scanned for annotated classes
+(its descriptor was in the start tree and says so), the service implements the shared service
+interface whose generated stub the new screen calls, and the screen is built from the client's
+`main`. `DataRoot` is what the provider returns. All of it is wired. `ReachableCode` learns
+discovery from unused code that was there before; the server module held one `main` that hands
+over to a library, so there was nothing to learn and only the shared module's `@DataModel` was
+known. Cost: both first candidates of the last task failed on it, a 30-minute repair round
+followed (the winner changed whitespace in the server's `main`, which the plan had put in
+that task's write set to be "wired", with nothing there to wire), and the run parked.
+
+- **Changed.** A source root where none of the code that was there before is
+  framework-discovered shows nothing to compare with. An added file there that nothing uses and
+  whose type carries an annotation (not `java.lang`'s, not one the run added) is taken as found:
+  not an orphan, what it uses is reached, and it is named in `Finding.takenAsFound`. Final
+  integration sends the sentence to the run's messages (`FinalIntegrator.tellingTheRun`), a
+  candidate's goes to the log. The plan check believes a new file in such a root when its task
+  names an annotation. No framework name, annotation list or wording is involved. On run 93's
+  merged tree: ALL_REACHABLE, both classes named as not established.
+- **Chosen against.** Reading annotation-processor output or `META-INF`: the build has not run
+  where the plan is checked, and the descriptor that matters here names no type. "Declared in a
+  dependency with a scanner": the tree cannot tell a scanner from any other jar. Not judging
+  the whole root: a class with no user and no annotation would pass.
+- **Still missed.** In such a root any annotation excuses a class nothing uses, one only a
+  compiler or generator reads included. A root that already shows one kind of discovery still
+  refuses the first class of another kind, and a class found by its supertype alone.
+- `ReachableCode` named the first type the tree lists for a file; it now names the outermost.
+- **Seen, not changed.** A repair candidate is asked only about files its own change adds, so
+  after a real refusal a repair that changes anything else passes the candidate check and the
+  run parks at final integration (section 66 "left" still stands: that stage has no repair).
+
+**The journey.** Written (`bookshelf-search.journey.yaml`, fill the search box, expect a title),
+checked by `check_journey`, claimed by the last task. Its red check ran in the browser
+container and failed on the start tree at step 1, as it must. It was never made on the merged
+tree: the reachability refusal comes first. As written it cannot pass there: it looks for a
+text box named "Search books by title or author" where the screen sets the placeholder
+"Search books...", and it expects a book's title in the list while the store starts empty and
+no step adds a book.
+
+**2. The architect: 34,982 input tokens a call, 43 calls, 1,504,262 in and 39,932 out.** The
+mark is applied: it was tidied at turn 19 (35,699 to 18,655 estimated) and turn 39 (47,668 to
+37,664); the planner once, the test author once. Worked out from the session's log lines
+(lookup sizes, the two tidy lines, "39,098 tokens held" at turn 33; 4 characters a token):
+
+| what | a call | all 43 | share |
+|---|---|---|---|
+| system prompt 1,525 and opening 3,455 | 4,980 | 214,000 | 14% |
+| 30 tool definitions (the server's count less the conversation's estimate, so it holds the estimate's error too) | about 6,500 | about 282,000 | 19% |
+| lookup results held, whole or as first lines (146 lookups returned 200,878 characters) | about 18,000 | about 774,000 | 51% |
+| its own calls and two design drafts, the reviewer's objections | about 5,400 | about 234,000 | 16% |
+
+So it is not opening plus 20,000. The defect: a shortened result keeps 600 characters and a
+sentence, about 200 tokens, results under 1,000 characters are never shortened, and nothing
+counted or cut either. By the second tidy the 134 results held were about 20,000 tokens in that
+form, which is why it could take only 10,004 off.
+
+- **Changed** (`HistoryTrim.tidy`, so workers and the expert too): first lines kept by an
+  earlier tidy count toward the mark, and at the next tidy they become one line that names the
+  call and its size, before any whole result is touched. Estimated for this session: about
+  3,000 fewer input tokens a call; more in a longer one, where the floor kept growing.
+- **By design, with what would cut it.** About 11,500 a call is fixed (opening and tool
+  definitions): only fewer calls or fewer tools offered to a role cut it. Up to 20,000 of whole
+  results, the last four turns and anything asked for twice stay: the workers' figures
+  (`-Dswarmcoder.roles.tidyAboveTokens=12000 -Dswarmcoder.roles.tidyToTokens=3000`) would take
+  roughly 5,000 to 8,000 a call off. The architect made 150 lookups for a three-class project
+  and was stopped four times for making the same call a fourth time.
+- **Left.** A per-call record of what a role's request held, so this table is measured.
+
+**3. The demo's contract** had no `browser` block; it has the one proved in the container now
+(the demo's own repository). The public repository does not hold the demo: it ignores
+`dev/bookshelf-demo/`, ships its two requirement documents and a script that expects it, and
+no document says where to get it.
+
+**Tests.** `TheFirstDiscoveredTypeOfAProjectIsNotRefusedTest`; cases in
+`ARunThatAddsCodeNothingReachesIsNotDeliveredTest`,
+`OldLookupResultsAreReplacedByTheirFirstLinesTest`.

@@ -65,6 +65,10 @@ class ARunThatAddsCodeNothingReachesIsNotDeliveredTest {
     private Task task;
     private String base;
     private String diff;
+    /** What stands before the added class: nothing, or an annotation. */
+    private String mark = "";
+    /** What final integration sent to the run's own record. */
+    private final List<String> record = new java.util.ArrayList<>();
 
     @AfterEach
     void switchBackOn() {
@@ -97,10 +101,10 @@ class ARunThatAddsCodeNothingReachesIsNotDeliveredTest {
         git("checkout -q -b swarm/" + task.id() + "/0");
         write(SRC + "Report.java", """
             package com.desk;
-            public class Report {
+            %spublic class Report {
                 public String text() { return "report"; }
             }
-            """);
+            """.formatted(mark));
         diff = "--- /dev/null\n+++ b/" + SRC + "Report.java\n@@ -0,0 +1 @@\n+x\n";
         if (usedFromTheDesk) {
             write(SRC + "Menu.java", """
@@ -130,7 +134,8 @@ class ARunThatAddsCodeNothingReachesIsNotDeliveredTest {
                         diff, null, null, null, CandidateState.SELECTED, null)));
                 return null;
             }).get();
-            return new FinalIntegrator(new GitService(repo), store).integrate(run);
+            return new FinalIntegrator(new GitService(repo), store)
+                .tellingTheRun(record::add).integrate(run);
         }
     }
 
@@ -155,6 +160,26 @@ class ARunThatAddsCodeNothingReachesIsNotDeliveredTest {
         FinalIntegrator.Result result = integrate();
 
         assertThat(result.ok()).as(String.valueOf(result.failure())).isTrue();
+    }
+
+    /**
+     * Live run 93 (2026-10-08): the first type of a project that a framework finds by its
+     * annotation. Nothing that was there before shows how types are found, so it is not
+     * refused - and the run's record says what was not established.
+     */
+    @Test
+    void theFirstAnnotatedTypeNothingUsesIsDeliveredAndTheRunSaysWhatItDidNotEstablish()
+            throws Exception {
+        mark = "@fw.Scheduled ";
+        aWinnerThatAddsAReport(false);
+
+        FinalIntegrator.Result result = integrate();
+
+        assertThat(result.ok()).as(String.valueOf(result.failure())).isTrue();
+        assertThat(record).singleElement().asString()
+            .startsWith("FINAL_INTEGRATION: Not established: whether the application reaches "
+                + "Report (@Scheduled, " + SRC + "Report.java)")
+            .contains("taken as found by the framework and not refused");
     }
 
     @Test
