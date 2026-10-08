@@ -17,11 +17,17 @@
  */
 package com.swarmcoder.lsp;
 
+import org.eclipse.lsp4j.Position;
+import org.eclipse.lsp4j.Range;
+import org.eclipse.lsp4j.TextEdit;
+import org.eclipse.lsp4j.WorkspaceEdit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -79,5 +85,30 @@ class JdtLanguageServerTest {
         assertThat(LspService.UNAVAILABLE.isAvailable()).isFalse();
         assertThat(LspService.UNAVAILABLE.diagnostics(workspace.resolve("A.java"))).isEmpty();
         assertThatCode(LspService.UNAVAILABLE::close).doesNotThrowAnyException();
+    }
+
+    /**
+     * Containment, unrelated to which task holds what: an edit the server proposes for a file
+     * outside the worker's own checkout is refused as a whole, and nothing is written - not even
+     * the part of it that lies inside.
+     */
+    @Test
+    void anEditOutsideTheCheckoutIsRefusedAsAWholeAndNothingIsWritten(@TempDir Path root)
+            throws Exception {
+        Path workspace = Files.createDirectories(root.resolve("repo"));
+        Path inside = Files.writeString(workspace.resolve("App.java"), "class App {}\n");
+        Path outside = Files.writeString(root.resolve("Outside.java"), "class Outside {}\n");
+        TextEdit edit = new TextEdit(new Range(new Position(0, 6), new Position(0, 9)), "Renamed");
+        WorkspaceEdit proposed = new WorkspaceEdit(Map.of(
+            inside.toUri().toString(), List.of(edit), outside.toUri().toString(), List.of(edit)));
+        try (JdtLanguageServer lsp = new JdtLanguageServer(null, workspace)) {
+            LspResult result = lsp.apply(proposed, "rename", null);
+
+            assertThat(result.status()).isEqualTo(LspResult.Status.FAILED);
+            assertThat(result.note()).contains("outside this workspace")
+                .contains("nothing was changed");
+            assertThat(Files.readString(inside)).isEqualTo("class App {}\n");
+            assertThat(Files.readString(outside)).isEqualTo("class Outside {}\n");
+        }
     }
 }

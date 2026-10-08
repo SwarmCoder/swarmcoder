@@ -702,7 +702,7 @@ public final class JdtLanguageServer implements LspService {
      * Writes a workspace edit, all of it or none of it: every file it names is checked to lie
      * inside the workspace before the first byte is written.
      */
-    private LspResult apply(WorkspaceEdit edit, String what,
+    LspResult apply(WorkspaceEdit edit, String what,
                             java.util.function.Function<String, String> refusal) throws Exception {
         List<Step> steps = new ArrayList<>();
         if (edit != null && edit.getDocumentChanges() != null) {

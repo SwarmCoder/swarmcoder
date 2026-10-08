@@ -138,19 +138,51 @@ class AWorkerChangesOneMemberWithoutTheFileTest {
         }
     }
 
+    /** Section 73: a file no other task holds is the task's now; the edit is kept and recorded. */
     @Test
-    void aMemberEditIsHeldToTheWritePolicy() throws Exception {
+    void aMemberEditOfAFreeFileIsKeptAndRecordedAsTheTasksNow() throws Exception {
         WorkerToolbox toolbox = new WorkerToolbox(checkout, task(), staleTree);
-        assertThat(toolbox.replaceMember("Other#x", "int x() {\n    return 2;\n}"))
-            .as("outside the write set: written, and noted for the reviewer")
-            .startsWith("replaced x in " + OTHER).contains("outside your write set");
+        toolbox.setOtherTasks(path -> null);
 
-        WorkerToolbox locked = new WorkerToolbox(checkout, task(), staleTree, null, null,
-            List.of(OTHER));
-        assertThat(locked.replaceMember("Other#x", "int x() {\n    return 3;\n}"))
-            .startsWith("error:");
-        assertThat(Files.readString(checkout.resolve(OTHER))).contains("return 2;")
+        assertThat(toolbox.replaceMember("Other#x", "int x() {\n    return 2;\n}"))
+            .startsWith("replaced x in " + OTHER).contains("[write policy]")
+            .contains("KEPT").contains("no other task holds that file");
+        assertThat(Files.readString(checkout.resolve(OTHER))).contains("return 2;");
+        assertThat(toolbox.outOfWriteSetPaths()).containsExactly(OTHER);
+    }
+
+    @Test
+    void aMemberEditOfAFileAnotherTaskHoldsIsRefusedNamingThatTask() throws Exception {
+        WorkerToolbox toolbox = new WorkerToolbox(checkout, task(), staleTree);
+        toolbox.setOtherTasks(path -> path.equals(OTHER)
+            ? "held by the task 'Other screen', built at the same time; was not written" : null);
+
+        assertThat(toolbox.replaceMember("Other#x", "int x() {\n    return 3;\n}"))
+            .startsWith("error:").contains("'Other screen'");
+        assertThat(Files.readString(checkout.resolve(OTHER))).contains("return 1;")
             .doesNotContain("return 3;");
+        assertThat(toolbox.outOfWriteSetPaths()).isEmpty();
+    }
+
+    @Test
+    void aMemberEditOfAProtectedFileIsRefusedWhoeverHoldsWhat() throws Exception {
+        String accept = "src/test/java/swarm/accept/OrderTest.java";
+        write(accept, "package swarm.accept;\n\npublic class OrderTest {\n    void check() {\n"
+            + "        int a = 1;\n    }\n}\n");
+        // Nobody holds anything: the answer from the plan must not matter for a protected file.
+        WorkerToolbox toolbox = new WorkerToolbox(checkout, task(), staleTree, null, null,
+            List.of(OTHER));
+        toolbox.setOtherTasks(path -> null);
+
+        assertThat(toolbox.replaceMember("OrderTest#check", "void check() {\n    int a = 2;\n}"))
+            .as("the acceptance tests").startsWith("error:").contains("protected");
+        assertThat(Files.readString(checkout.resolve(accept))).contains("int a = 1;");
+        assertThat(toolbox.replaceMember("Other#x", "int x() {\n    return 3;\n}"))
+            .as("an operator-locked path").startsWith("error:");
+        assertThat(Files.readString(checkout.resolve(OTHER))).contains("return 1;")
+            .doesNotContain("return 3;");
+        assertThat(toolbox.outOfWriteSetPaths()).isEmpty();
+        assertThat(toolbox.blockingViolations()).isEqualTo(2);
     }
 
     @Test
