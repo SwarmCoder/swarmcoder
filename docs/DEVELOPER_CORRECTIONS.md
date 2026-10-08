@@ -6496,3 +6496,83 @@ and that the journey must first add the record through the screen when the store
 with a browser); the decision, the step number and the stop message are tested on their own.
 
 **Tests.** Cases in `AFailedJourneyGoesBackToItsAuthorTest`.
+
+## 72. A run stopped for a library that was an adjective; what the planning roles' calls were made of (run 98, 2026-10-08)
+
+Run 98 built a small new project from two documents, every role on the local model, and parked
+at PLAN: "it uses `TeaVM-compilable` ... Install `TeaVM-compilable` into that repository".
+
+**Cause.** `RulesVersusManifest` takes the token after "through / module / dependency / uses /
+via" for a dependency's name. A rule's purpose line read "... and only uses TeaVM-compilable
+classes". `BuildFilesInTheJob.declareMissing` parked on every such name the local repository's
+catalog did not hold. The name was decided to be a dependency from the wording alone.
+
+**Rule** (`BuildFilesInTheJob.resolvesToAnArtifact`). The extractor is unchanged and only
+proposes names. A name is a missing dependency when it resolves to something a build can declare:
+
+| the name | what happens |
+|---|---|
+| managed by an inherited BOM or parent pom, files in the local repository | work in the plan (as before) |
+| managed by an inherited BOM or parent pom, files not there | the run stops; the message gives group, artifact and version (`Catalog.managedNotOnDisk`) |
+| written with its group, `group:artifact` (`Finding.group`) | the run stops if it is not declarable; a person can install coordinates |
+| anything else | `PLAN: note — ...` in the run's log; nothing added, nothing stopped |
+
+No word list and no test of how a token is spelled. **Still caught:** the case the check was
+built for (run `ede2068b`, 2026-09-03, recorded in the javadoc of `RulesVersusManifest` and
+`BuildFilesInTheJob`, not in this document: a rule names the persistence artifact, the BOM
+manages it, the server pom does not declare it, and no worker could add it), with the files
+present or absent. **Let through:** a bare name that no inherited
+dependency management knows, including a real library whose BOM is itself not in the local
+repository. Nobody can be told what to install for a name with no group, so a stop for it could
+not be acted on; the note says to write `group:artifact`.
+
+**Checked against the saved stage** (the run's project files after design, its stored rules,
+this machine's Maven repository): two names found, the persistence artifact becomes a
+declaration in the server module's pom, the adjective is a note, no park.
+
+**What the calls were made of.** The server's totals per role are exact. The split is an
+estimate: output tokens by the time each phase took, at the role's own measured rate; input
+tokens by what the conversation held when the drafts were written (about 59,000).
+
+| role, phase | calls | input tokens | output tokens |
+|---|---|---|---|
+| architect, lookup turns (129 lookups) | 47 | about 1,920,000 | about 32,800 |
+| architect, draft 1 (7,516 chars), refused by `check_design` | 1 | | about 7,500 |
+| architect, draft 2 (7,674 chars), refused with an answer of the same length | 1 | | about 2,400 |
+| architect, draft 3 (7,919 chars), passed | 1 | | about 2,500 |
+| architect, hand-in | 1 | | about 2,600 |
+| architect, revision after the reviewer (10,050 chars), passed, and hand-in | 2 | | about 4,100 |
+| architect, drafts and hand-ins together | 6 | about 350,000 | about 19,100 |
+| **architect** | **53** | **2,268,502** | **51,879** |
+| planner, story planning before the run | 2 | | about 8,600 |
+| planner, lookup turns (78 lookups) | 28 | | about 26,900 |
+| planner, the one draft (6,003 chars), passed first time, and hand-in | 2 | | about 8,400 |
+| **planner** | **32** | **1,154,233** | **43,936** |
+
+- **Send-backs: two for the architect, none for the planner.** `check_design` refused drafts 1
+  and 2 with an answer of the same length, 622 characters; which check spoke was not logged, so
+  whether its wording could be acted on cannot be established. Now logged (`DraftTools`). The
+  design reviewer sent the design back once, with two objections: the design had no screen
+  (right, and the revision added one), and a check about a list on a screen was proved at the
+  service (what the architect had been told to do, because no test can execute the browser
+  module). The second came back after the revision and was recorded. The reviewer is now told
+  the same fact (`AcceptanceTestReach.reviewerBrief`, `DesignReviewerClient.review` with a build
+  fact).
+- **Most calls were lookups, and that is the job on this model.** A new project on a library the
+  model does not know: 34 of the architect's 49 whole-file reads (254,990 of 305,327 characters)
+  and 33 of the planner's 44 were the reference project's examples and sources. A lookup turn
+  cost about 700 output tokens for the architect and 960 for the planner, nearly all reasoning.
+- **Not changed, measured for a decision.** (a) After old results were shortened (section 67),
+  the architect made 23 lookups again (147,919 of 403,254 characters returned to it) and the
+  planner 9 (43,353 of 212,348); 6 architect calls and 2 planner calls did nothing else. The
+  mark is the owner's decision and `-Dswarmcoder.roles.tidyAboveTokens` already sets it per
+  run. (b) 31 of the planner's 69 distinct lookups (89,075 of 168,872 characters) were ones the
+  architect had made minutes before; nothing carries a lookup from one role to the next. (c) A
+  revision writes the whole design again (about 2,800 output tokens here); a partial revision
+  needs a patch format for decisions and contracts and was not built. (d) `report_done("")`
+  already hands in the checked draft without writing it again; the call itself remains.
+
+**Tests.** `ANameInARuleIsADependencyOnlyWhenABuildCanDeclareItTest`,
+`TheDesignReviewerKnowsWhatATestCanExecuteTest`; existing `BuildFilesInTheJobTest`,
+`TheSwarmDeclaresItsOwnDependencyTest`, `RulesVersusManifestTest`,
+`TheDesignReviewerPutsRulesAboveTheGoalTest`, `AnAcceptanceTestMayNotCallBrowserOnlyCodeTest`.

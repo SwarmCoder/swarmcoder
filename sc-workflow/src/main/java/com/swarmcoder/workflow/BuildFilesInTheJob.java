@@ -219,7 +219,13 @@ final class BuildFilesInTheJob {
      *
      * @param parkBrief null when the run may proceed
      */
-    record Outcome(TaskGraph graph, List<Declaration> declarations, String parkBrief) {
+    record Outcome(TaskGraph graph, List<Declaration> declarations, String parkBrief,
+                   List<Note> notes) {
+
+        Outcome(TaskGraph graph, List<Declaration> declarations, String parkBrief) {
+            this(graph, declarations, parkBrief, List.of());
+        }
+
         static Outcome nothingToDo(TaskGraph graph) {
             return new Outcome(graph, List.of(), null);
         }
@@ -227,6 +233,55 @@ final class BuildFilesInTheJob {
         boolean parks() {
             return parkBrief != null;
         }
+
+        /** True when {@code name} was taken as wording, not as a dependency. */
+        boolean noted(String name) {
+            return notes.stream().anyMatch(note -> note.name().equals(name));
+        }
+    }
+
+    /**
+     * A name the rules use that resolves to nothing a build can declare, so it was taken as
+     * ordinary wording: said in the run, never a reason to stop it.
+     *
+     * @param name the token as the text wrote it
+     * @param text the sentence for the run's log
+     */
+    record Note(String name, String text) {}
+
+    /**
+     * Whether a name the rules use is a dependency this build is missing, decided from facts and
+     * never from how the word is written (live run 98, 2026-10-08: "the client only uses
+     * TeaVM-compilable classes" stopped a run for a library called {@code TeaVM-compilable}).
+     *
+     * <p>A name is a dependency when it resolves to something a build can declare:
+     * <ol>
+     *   <li>an inherited BOM or parent pom manages an artifact of that name and the local
+     *       repository holds it - it becomes work in the plan;</li>
+     *   <li>an inherited BOM or parent pom manages an artifact of that name and the repository
+     *       does not hold it - a person can install it, nothing inside a run can, so the run
+     *       stops and says which artifact and where;</li>
+     *   <li>the text wrote it with its group, {@code group:artifact} - the same stop: those are
+     *       coordinates whoever wrote the rule meant, and a person can install them.</li>
+     * </ol>
+     * Anything else is a word. Nobody can install a name that has no group and that no
+     * dependency management knows, so stopping for it asks a person for something that cannot
+     * be done; it is a {@link Note}.
+     */
+    private static boolean resolvesToAnArtifact(RulesVersusManifest.Finding finding,
+                                                DeclarableArtifacts.Catalog catalog) {
+        return finding.statedAsCoordinate()
+            || catalog.managedNotOnDisk(finding.artifact()).isPresent();
+    }
+
+    private static Note noteFor(RulesVersusManifest.Finding finding) {
+        return new Note(finding.artifact(), "`" + finding.artifact() + "` is used in "
+            + finding.sourceLabel() + " (\"" + finding.ruleExcerpt() + "\") where a dependency's "
+            + "name could stand, but it is not the name of anything this build can declare: no "
+            + "BOM or parent pom this build inherits manages an artifact called that, and the "
+            + "text gives no group for it. Taken as ordinary wording: nothing is added to the "
+            + "plan and the run goes on. If it IS a library the build must declare, write it as "
+            + "group:artifact there.");
     }
 
     /**
@@ -263,11 +318,16 @@ final class BuildFilesInTheJob {
             return Outcome.nothingToDo(graph);
         }
         List<Declaration> declarations = new ArrayList<>();
+        List<Note> notes = new ArrayList<>();
         StringBuilder park = new StringBuilder();
         for (RulesVersusManifest.Finding finding : findings) {
             Optional<DeclarableArtifacts.Artifact> offline = catalog == null
                 ? Optional.empty() : catalog.byArtifactId(finding.artifact());
             if (offline.isEmpty()) {
+                if (!resolvesToAnArtifact(finding, catalog)) {
+                    notes.add(noteFor(finding));
+                    continue;
+                }
                 if (park.length() > 0) {
                     park.append("\n\n");
                 }
@@ -295,20 +355,30 @@ final class BuildFilesInTheJob {
                 finding.ruleExcerpt(), finding.source()));
         }
         if (park.length() > 0) {
-            return new Outcome(graph, declarations, park.toString());
+            return new Outcome(graph, declarations, park.toString(), notes);
         }
         TaskGraph withWork = graph;
         for (Declaration declaration : declarations) {
             withWork = attach(withWork, declaration, layout);
         }
-        return new Outcome(withWork, declarations, null);
+        return new Outcome(withWork, declarations, null, notes);
     }
 
-    /** The brief for the one case a run still parks on: the artifact is not on the disk. */
+    /**
+     * The brief for the one case a run still parks on: a real artifact that is not on the disk.
+     * It names the artifact by its coordinates and its version when dependency management gives
+     * them, so the person reading it knows exactly what to install.
+     */
     private static String parkBrief(RulesVersusManifest.Finding finding,
                                     DeclarableArtifacts.Catalog catalog) {
         String repository = catalog == null || catalog.localRepository() == null
             ? "the local Maven repository" : catalog.localRepository().toString();
+        Optional<DeclarableArtifacts.Artifact> managed = catalog == null
+            ? Optional.empty() : catalog.managedNotOnDisk(finding.artifact());
+        String what = managed
+            .map(artifact -> artifact.coordinate() + ":" + artifact.version() + " (the version "
+                + artifact.managedBy() + " fixes)")
+            .orElse(finding.named());
         return "This project says — in " + finding.sourceLabel() + " — it uses `"
             + finding.artifact() + "`, no module of this "
             + "build declares it (checked: " + String.join(", ", finding.inspectedPoms())
@@ -316,7 +386,7 @@ final class BuildFilesInTheJob {
             + "in " + repository + ".\n\nA worker could add the dependency; it could not obtain "
             + "the files. Candidate builds run in a container with NO network, resolving against "
             + "that directory alone, so nothing inside the run can fetch it. Install "
-            + "`" + finding.artifact() + "` into that repository (for a local project, `mvn "
+            + "`" + what + "` into that repository (for a local project, `mvn "
             + "install` it), or change the rule, then build it again.\n\nSaid there: \""
             + finding.ruleExcerpt() + "\"";
     }

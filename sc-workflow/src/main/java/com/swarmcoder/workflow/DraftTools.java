@@ -20,6 +20,8 @@ package com.swarmcoder.workflow;
 import com.swarmcoder.knowledge.ExpertTools;
 import com.swarmcoder.knowledge.LookupAgent;
 import com.swarmcoder.runtime.AgentRuntime.ToolBinding;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.function.Function;
@@ -41,6 +43,8 @@ import java.util.function.Function;
  * anywhere by this class.
  */
 public final class DraftTools {
+
+    private static final Logger log = LoggerFactory.getLogger(DraftTools.class);
 
     /**
      * What the mechanical checks said about a draft.
@@ -108,6 +112,19 @@ public final class DraftTools {
             Checked result = check.apply(draft);
             String remaining = checks < maxChecks ? ""
                 : "\n\n(That was your last check: call report_done now.)";
+            // What sent a draft back is on the log, objection by objection (live run 98: two
+            // drafts were refused with an answer of the same length and nothing recorded which
+            // check had spoken, so nobody could tell whether its wording could be acted on).
+            if (!result.readable()) {
+                log.info("{} draft {} ({} chars) could not be read: {}", tool, checks,
+                    draft.length(), result.objections());
+            } else {
+                log.info("{} draft {} ({} chars): {} objection(s)", tool, checks, draft.length(),
+                    result.objections().size());
+                for (String objection : result.objections()) {
+                    log.info("{} draft {} objection: {}", tool, checks, objection);
+                }
+            }
             if (!result.readable()) {
                 return "NOT READ: " + String.join("; ", result.objections()) + "\nGive " + tool
                     + " the complete JSON object described in your instructions, as its one "
