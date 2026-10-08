@@ -254,6 +254,32 @@ public final class WorkerToolbox {
      */
     private final List<String> protectedPaths;
 
+    /**
+     * Who else of the plan holds a file this task did not reserve (section 73); null asks
+     * nobody, and a write outside the write set is then written and recorded as it always was.
+     * Given by the engine from the plan it holds; nothing a worker can write decides it.
+     */
+    private volatile PathPolicy.OtherTasks otherTasks;
+
+    public void setOtherTasks(PathPolicy.OtherTasks otherTasks) {
+        this.otherTasks = otherTasks;
+    }
+
+    /**
+     * The one decision every write of this worker is held to: protected, inside the task's
+     * reservation, free to take, or held by another task of the plan.
+     */
+    private PathPolicy.Verdict verdictFor(String canonical) {
+        return PathPolicy.check(canonical, task.writeSet(), task.acceptanceTestDir(),
+            protectedPaths, otherTasks);
+    }
+
+    /** What a worker is told when the file it wrote to is held by another task of the plan. */
+    private String heldRefusal(PathPolicy.Verdict verdict) {
+        log.warn("Refused a write in task '{}': {}", task.title(), verdict.reason());
+        return "error: " + verdict.reason();
+    }
+
     public WorkerToolbox(Path worktree, Task task) {
         this(worktree, task, ApiLookup.UNAVAILABLE, null);
     }
@@ -800,11 +826,20 @@ public final class WorkerToolbox {
         }
         List<String> reverted = new ArrayList<>();
         List<String> noted = new ArrayList<>();
+        List<String> held = new ArrayList<>();
         for (String path : changed) {
             String canonical = PathPolicy.canonicalize(worktree, path);
-            PathPolicy.Verdict verdict = PathPolicy.check(canonical, task.writeSet(),
-                task.acceptanceTestDir(), protectedPaths);
+            PathPolicy.Verdict verdict = verdictFor(canonical);
             if (verdict.allowed()) {
+                continue;
+            }
+            if (verdict.heldByAnotherTask()) {
+                // Another task of the plan holds it: put back as it was, and not counted
+                // toward the kill - the worker is told which task, once per command.
+                revert(path);
+                held.add(verdict.reason());
+                log.warn("Reverted a shell command's change in task '{}': {}", task.title(),
+                    verdict.reason());
                 continue;
             }
             if (!verdict.lethal()) {
@@ -829,6 +864,10 @@ public final class WorkerToolbox {
             note.append("\n\n[write policy] That command changed protected files, so those changes "
                 + "were REVERTED: ").append(String.join(", ", reverted))
                 .append("\nThose paths can never be modified by a worker. Do not try again.");
+        }
+        if (!held.isEmpty()) {
+            note.append("\n\n[write policy] That command changed a file another task holds, so "
+                + "the change was put back: ").append(String.join(" ", held));
         }
         if (!noted.isEmpty()) {
             note.append(outOfSetNote(noted));
@@ -858,11 +897,13 @@ public final class WorkerToolbox {
      * before any code existed.
      */
     private String outOfSetNote(List<String> paths) {
-        return "\n\n[write policy] This is outside your write set " + task.writeSet()
-            + ": " + String.join(", ", paths)
-            + "\nThe change was KEPT - you are not being stopped. It is recorded against this "
-            + "candidate and the reviewer will see it, so go outside your own paths only when the "
-            + "task genuinely cannot be done inside them, and put nothing there you do not need.";
+        return "\n\n[write policy] This is outside the paths reserved for your task "
+            + task.writeSet() + ": " + String.join(", ", paths)
+            + "\nThe change was KEPT - no other task holds " + (paths.size() == 1 ? "that file"
+            + ", so it is" : "those files, so they are") + " this task's now. It is recorded "
+            + "against this candidate and the reviewer will see it, so go outside your own "
+            + "paths only when the task cannot be done inside them, and put nothing there you "
+            + "do not need.";
     }
 
     /** Repo-relative paths git reports as modified, added, deleted or untracked. */
@@ -1022,13 +1063,15 @@ public final class WorkerToolbox {
     private String writeUnderPolicy(String rel, String content, StringBuilder outside)
             throws IOException {
         String canonical = PathPolicy.canonicalize(worktree, rel);
-        PathPolicy.Verdict verdict = PathPolicy.check(canonical, task.writeSet(),
-            task.acceptanceTestDir(), protectedPaths);
+        PathPolicy.Verdict verdict = verdictFor(canonical);
         if (!verdict.allowed() && verdict.lethal()) {
             blockingViolations.incrementAndGet();
             log.warn("Blocked write ({} total) in task '{}': {}",
                 blockingViolations.get(), task.title(), verdict.reason());
             return "error: " + verdict.reason();
+        }
+        if (verdict.heldByAnotherTask()) {
+            return heldRefusal(verdict);
         }
         Path root = worktree.toAbsolutePath().normalize();
         Path target = root.resolve(canonical).normalize();
@@ -1111,8 +1154,7 @@ public final class WorkerToolbox {
         List<String> outside = new ArrayList<>();
         for (String path : touched) {
             String canonical = PathPolicy.canonicalize(worktree, path);
-            PathPolicy.Verdict verdict = PathPolicy.check(canonical, task.writeSet(),
-                task.acceptanceTestDir(), protectedPaths);
+            PathPolicy.Verdict verdict = verdictFor(canonical);
             if (verdict.allowed()) {
                 continue;
             }
@@ -1124,6 +1166,10 @@ public final class WorkerToolbox {
                 log.warn("Blocked write ({} total) in task '{}': {}",
                     blockingViolations.get(), task.title(), verdict.reason());
                 return "error: " + verdict.reason();
+            }
+            if (verdict.heldByAnotherTask()) {
+                // Like a protected path, one held file refuses the whole diff.
+                return heldRefusal(verdict);
             }
             outside.add(canonical);
         }
@@ -1225,13 +1271,15 @@ public final class WorkerToolbox {
             return "error: " + outsideRefusal(path);
         }
         String canonical = PathPolicy.canonicalize(worktree, rel);
-        PathPolicy.Verdict verdict = PathPolicy.check(canonical, task.writeSet(),
-            task.acceptanceTestDir(), protectedPaths);
+        PathPolicy.Verdict verdict = verdictFor(canonical);
         if (!verdict.allowed() && verdict.lethal()) {
             blockingViolations.incrementAndGet();
             log.warn("Blocked write ({} total) in task '{}': {}",
                 blockingViolations.get(), task.title(), verdict.reason());
             return "error: " + verdict.reason();
+        }
+        if (verdict.heldByAnotherTask()) {
+            return heldRefusal(verdict);
         }
         try {
             Path root = worktree.toAbsolutePath().normalize();
@@ -1791,10 +1839,10 @@ public final class WorkerToolbox {
             }
             ApiLookup.InCheckout done = apiLookup.inCheckout(worktree, action, first, second,
                 relative -> {
-                    PathPolicy.Verdict verdict = PathPolicy.check(
-                        PathPolicy.canonicalize(worktree, relative), task.writeSet(),
-                        task.acceptanceTestDir(), protectedPaths);
-                    return !verdict.allowed() && verdict.lethal() ? verdict.reason() : null;
+                    PathPolicy.Verdict verdict =
+                        verdictFor(PathPolicy.canonicalize(worktree, relative));
+                    return !verdict.allowed() && (verdict.lethal()
+                        || verdict.heldByAnotherTask()) ? verdict.reason() : null;
                 });
             String answer = truncate(done.answer(), room.chars(MAX_TOOL_OUTPUT_CHARS));
             com.swarmcoder.inference.LookupMeter.record("worker",
@@ -1807,8 +1855,8 @@ public final class WorkerToolbox {
             List<String> outside = new ArrayList<>();
             for (String file : done.filesWritten()) {
                 String canonical = PathPolicy.canonicalize(worktree, file);
-                if (!PathPolicy.check(canonical, task.writeSet(), task.acceptanceTestDir(),
-                        protectedPaths).allowed() && record(canonical)) {
+                PathPolicy.Verdict written = verdictFor(canonical);
+                if (!written.allowed() && !written.heldByAnotherTask() && record(canonical)) {
                     outside.add(canonical);
                 }
             }

@@ -127,6 +127,23 @@ public class SwarmDispatcher {
         this.testsCommitOf = testsCommitOf == null ? id -> null : testsCommitOf;
     }
 
+    /**
+     * The run's reservations, by run id: who of the plan holds which file (section 73). Null,
+     * or a run it knows nothing of, asks nobody.
+     */
+    private volatile java.util.function.Function<UUID, ReservationBook> reservationsOf = id -> null;
+
+    void setReservationsOf(java.util.function.Function<UUID, ReservationBook> reservationsOf) {
+        this.reservationsOf = reservationsOf == null ? id -> null : reservationsOf;
+    }
+
+    /** The decision a worker's writes outside its task's reservation are held to; may be null. */
+    private com.swarmcoder.runtime.PathPolicy.OtherTasks otherTasksFor(UUID runId, Task task,
+                                                                      int worker) {
+        ReservationBook book = runId == null ? null : reservationsOf.apply(runId);
+        return book == null ? null : book.forWorker(task, String.valueOf(worker));
+    }
+
     /** One file of the run's tests commit as text, or null; evaluated when the worker asks. */
     java.util.function.Function<String, String> acceptanceSourceOf(UUID runId) {
         return path -> {
@@ -393,6 +410,7 @@ public class SwarmDispatcher {
                                 startPoint, seat.signal, apiLookup, sandbox, protectedPaths);
                             loop.withReferenceRoots(referenceRoots);
                             loop.withAcceptanceSource(acceptanceSourceOf(runId));
+                            loop.withOtherTasks(otherTasksFor(runId, task, idx));
                             loop.withLease(places.lease);
                             loop.whenSessionIsOver(() -> group.sessionOver(seat));
                             // A fresh desk per worker — see expertFactory's javadoc on why one
@@ -607,6 +625,7 @@ public class SwarmDispatcher {
                     seedBranch, signal, apiLookup, sandbox, protectedPaths);
                 loop.withReferenceRoots(referenceRoots);
                 loop.withAcceptanceSource(acceptanceSourceOf(runId));
+                loop.withOtherTasks(otherTasksFor(runId, task, idx));
                 loop.withExpert(expertFor(runId, idx, bundle, task), frameworkPackages);
                 String label = "Repair worker " + idx + " of '" + task.title() + "'";
                 // Repair workers count against the same ceiling as first-wave ones: they are the
@@ -784,7 +803,16 @@ public class SwarmDispatcher {
         com.swarmcoder.inference.RunMeter.span(WORKER_OPENING_SPAN + task.id() + "|" + dispatch
             + "|" + bundle.estimatedTokens() + "|" + bundle.sizeSummary(),
             System.currentTimeMillis());
+        // How much of the opening is the architect's findings (section 73):
+        // worker handover|<task>|first or repair|<findings>|<characters>.
+        com.swarmcoder.inference.RunMeter.span(WORKER_HANDOVER_SPAN + task.id() + "|" + dispatch
+            + "|" + task.architectFindings().size() + "|"
+            + com.swarmcoder.domain.DesignFinding.sizeOf(task.architectFindings()),
+            System.currentTimeMillis());
     }
+
+    /** The span a run report reads the architect's findings given to a task's workers from. */
+    public static final String WORKER_HANDOVER_SPAN = "worker handover|";
 
     /**
      * Deterministic shared segments for the task's whole group.
@@ -810,10 +838,26 @@ public class SwarmDispatcher {
         StringBuilder instructions = new StringBuilder();
         instructions.append("Task: ").append(task.title()).append('\n')
             .append(task.instructions() == null ? "" : task.instructions()).append('\n');
+        // What the architect established for this task, word for word (owner's decision,
+        // 2026-10-08; section 73). The task's instructions say WHAT it delivers; how this
+        // project and its framework do it comes from the role that looked it up, not from the
+        // planner's prose. Nothing for a task the architect kept nothing about - it starts
+        // from the librarian's brief, as before.
+        String established = com.swarmcoder.domain.DesignFinding.renderAll(
+            task.architectFindings());
+        if (!established.isEmpty()) {
+            instructions.append('\n').append(established).append('\n');
+        }
         if (task.writeSet() != null && !task.writeSet().isEmpty()) {
             // Sorted: write sets are Sets — iteration order must not perturb the prefix hash.
-            instructions.append("You may ONLY modify these paths: ")
-                .append(task.writeSet().stream().sorted().toList()).append('\n');
+            // A reservation, not a wall (section 73): a file outside it that no other task of
+            // the plan holds is the task's when it needs it. The sentence is a courtesy; the
+            // decision is made at the write, from the plan.
+            instructions.append("These paths are reserved for this task: ")
+                .append(task.writeSet().stream().sorted().toList())
+                .append(". When the task cannot be done without a file outside them, write "
+                    + "it: a file no other task holds becomes this task's and is recorded; a "
+                    + "file another task holds is refused, and the refusal names that task.\n");
         }
         if (task.acceptanceTestDir() != null && !task.acceptanceTestDir().isBlank()) {
             // Owner's decision 2026-10-05 (section 61): a worker may READ the test its task

@@ -165,6 +165,28 @@ public class Task {
      * can reach) has sent the task back to the workers; it is sent once (section 69).
      */
     private boolean integrationRepairAttempted;
+    /**
+     * The architect's findings that travel with this task, verbatim: those about the contracts
+     * it delivers and the types whose files it reserves, then those about the whole project, as
+     * many as fit the per-task bound (section 73). Chosen with no model when the plan is
+     * accepted. The workers and the test author of the task are opened with them. Null in every
+     * store written before the field existed, which reads as none.
+     */
+    private List<DesignFinding> architectFindings;
+    /**
+     * The entries of {@link #writeSet} that were computed, with no model, from what the task
+     * claims: the files of the contracts it delivers and every existing file the project's own
+     * types say stops compiling with them (section 73). A record for the run report; the write
+     * set is what is enforced. Null for a task planned before the field existed.
+     */
+    private List<String> computedReservation;
+    /**
+     * Files the selected candidate changed outside the reservation the plan gave this task,
+     * allowed by rule because no other task of the plan held them and nothing protects them
+     * (section 73). They are added to {@link #writeSet} when the candidate is selected; this
+     * list is the record that the reservation grew. Null until it did.
+     */
+    private List<String> takenBeyondPlan;
 
     public Task() {}
 
@@ -316,6 +338,33 @@ public class Task {
         this.integrationRepairAttempted = integrationRepairAttempted;
     }
 
+    /** Never null: empty when the architect kept nothing that concerns this task. */
+    public List<DesignFinding> architectFindings() {
+        return architectFindings == null ? List.of() : architectFindings;
+    }
+    public List<DesignFinding> getArchitectFindings() { return architectFindings; }
+    public void setArchitectFindings(List<DesignFinding> architectFindings) {
+        this.architectFindings = architectFindings;
+    }
+
+    /** Never null: the write-set entries that were computed rather than planned. */
+    public List<String> computedReservation() {
+        return computedReservation == null ? List.of() : computedReservation;
+    }
+    public List<String> getComputedReservation() { return computedReservation; }
+    public void setComputedReservation(List<String> computedReservation) {
+        this.computedReservation = computedReservation;
+    }
+
+    /** Never null: empty until the selected candidate took a file beyond the plan. */
+    public List<String> takenBeyondPlan() {
+        return takenBeyondPlan == null ? List.of() : takenBeyondPlan;
+    }
+    public List<String> getTakenBeyondPlan() { return takenBeyondPlan; }
+    public void setTakenBeyondPlan(List<String> takenBeyondPlan) {
+        this.takenBeyondPlan = takenBeyondPlan;
+    }
+
     public boolean journeyRepairAttempted() { return journeyRepairAttempted; }
     public boolean getJourneyRepairAttempted() { return journeyRepairAttempted; }
     public void setJourneyRepairAttempted(boolean journeyRepairAttempted) {
@@ -334,7 +383,10 @@ public class Task {
             && this.journeySentBack == that.journeySentBack
             && Objects.equals(this.journeyReviewNote, that.journeyReviewNote)
             && Objects.equals(this.journeyReviews(), that.journeyReviews())
-            && this.integrationRepairAttempted == that.integrationRepairAttempted;
+            && this.integrationRepairAttempted == that.integrationRepairAttempted
+            && Objects.equals(this.architectFindings(), that.architectFindings())
+            && Objects.equals(this.computedReservation(), that.computedReservation())
+            && Objects.equals(this.takenBeyondPlan(), that.takenBeyondPlan());
     }
 
     @Override

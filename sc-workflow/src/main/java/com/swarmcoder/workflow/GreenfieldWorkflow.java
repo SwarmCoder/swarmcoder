@@ -197,10 +197,11 @@ public class GreenfieldWorkflow {
      * reaches could use (see {@link PlanConnectsWhatItAdds}); the verdict as it is otherwise.
      */
     private TaskGraphValidator.Verdict connectingWhatItAdds(TaskGraphValidator.Verdict verdict,
-                                                           TaskGraph plan) {
+                                                           TaskGraph plan, DesignDocument design) {
         String objection;
         try {
-            objection = PlanConnectsWhatItAdds.objection(plan, startTreeGraph(), repoPath);
+            objection = PlanConnectsWhatItAdds.objection(plan, startTreeGraph(), repoPath,
+                design);
         } catch (RuntimeException e) {
             return verdict; // what cannot be read is not held against the plan
         }
@@ -912,6 +913,12 @@ public class GreenfieldWorkflow {
                         }
                         TaskGraph candidate = result.graph();
                         withAcceptanceTestDir(candidate, acceptance.protectedDir());
+                        // What each task starts with is computed from the contracts it
+                        // delivers and the project's own types, not guessed (section 73).
+                        // Before validation, so what is checked is what runs.
+                        for (String line : ComputedReservation.apply(candidate, layout, repoPath)) {
+                            log("PLAN attempt " + attempt + ": reservation - " + line);
+                        }
                         // The build file of every module a task may write is part of that task's
                         // job (2026-09-03). Before validation, so what is checked is what runs.
                         BuildFilesInTheJob.expandWriteSets(candidate, layout, repoPath);
@@ -919,7 +926,7 @@ public class GreenfieldWorkflow {
                         // there (2026-10-05)? See PlanConnectsWhatItAdds.
                         TaskGraphValidator.Verdict verdict = connectingWhatItAdds(
                             planValidator.validate(candidate, planScope, layout, design, repoPath),
-                            candidate);
+                            candidate, design);
                         verdict.warnings().forEach(w -> log("PLAN warning: " + w));
                         if (!verdict.ok() && lastTry) {
                             // The last attempt's only fault is work no check needs: drop it rather
@@ -1038,6 +1045,12 @@ public class GreenfieldWorkflow {
                             + ") — " + declaration.reason());
                     }
 
+                    // What the architect established goes to the tasks it concerns, word for
+                    // word (section 73). Before the briefs: a task the architect covered is
+                    // not also pasted the librarian's example.
+                    for (String line : ArchitectHandover.attach(tg, design)) {
+                        log("PLAN: " + line);
+                    }
                     tg = attachKnowledgeBriefs(run, tg, offlineLibraries(build));
                     // The last of the three sizing layers. The project's and the settings file's
                     // numbers were already resolved when this project's engine was built; the
@@ -2190,9 +2203,11 @@ public class GreenfieldWorkflow {
 
     private static DesignDocument withVerdict(
             DesignDocument design, ReviewVerdict verdict) {
-        return new DesignDocument(design.id(), design.revision(), design.goal(),
-            design.requirements(), design.decisions(), design.contracts(), design.risks(),
-            verdict, design.createdAt());
+        DesignDocument reviewed = new DesignDocument(design.id(), design.revision(),
+            design.goal(), design.requirements(), design.decisions(), design.contracts(),
+            design.risks(), verdict, design.createdAt());
+        reviewed.setFindings(design.findings().isEmpty() ? null : design.findings());
+        return reviewed;
     }
 
     /**
@@ -5547,10 +5562,11 @@ public class GreenfieldWorkflow {
                 StoryScope scope = scopeFor(run);
                 BuildLayout.Layout layout = repoLayout();
                 withAcceptanceTestDir(draft, AcceptanceTestLocation.resolve(layout).protectedDir());
+                ComputedReservation.apply(draft, layout, repoPath);
                 BuildFilesInTheJob.expandWriteSets(draft, layout, repoPath);
                 TaskGraphValidator.Verdict verdict = connectingWhatItAdds(
                     new TaskGraphValidator(browserOnlySurvey(layout))
-                        .validate(draft, scope, layout, design, repoPath), draft);
+                        .validate(draft, scope, layout, design, repoPath), draft, design);
                 List<String> objections = new ArrayList<>(verdict.violations());
                 String rules = scope == null ? "" : scope.constraintBrief();
                 if (verdict.ok() && !rules.isEmpty() && draft.tasks() != null) {
@@ -5607,9 +5623,11 @@ public class GreenfieldWorkflow {
         say.accept("Design: " + outcome.existing().size() + " contract(s) name a type the library "
             + "already has — an existing type, not something a task delivers; taken out of the "
             + "contracts: " + outcome.existing().stream().map(c -> c.typeName().strip()).toList());
-        return new DesignDocument(design.id(), design.revision(), design.goal(),
+        DesignDocument trimmed = new DesignDocument(design.id(), design.revision(), design.goal(),
             design.requirements(), design.decisions(), outcome.remaining(design), design.risks(),
             design.review(), design.createdAt());
+        trimmed.setFindings(design.findings().isEmpty() ? null : design.findings());
+        return trimmed;
     }
 
     /**

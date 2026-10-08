@@ -48,7 +48,7 @@ class HarnessRoleServersTest {
                                      AgentModelConfig chat, AgentModelConfig analyst,
                                      AgentModelConfig planner) {
         return new RolesConfig(architect, null, null, null, null, null, null, utility, chat,
-            analyst, planner, null);
+            analyst, planner, null, null);
     }
 
     private static Set<HarnessRoleServers.Role> set(String flag) {

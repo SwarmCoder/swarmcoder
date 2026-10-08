@@ -437,4 +437,37 @@ class HarnessRunReportTest {
             .contains("| Task b | 2 | 1 | yes | worker 0 passed; no other candidate was needed |")
             .contains("only a later candidate passed: the swarm rescued this task");
     }
+
+    /**
+     * Section 73: per task, how many of the architect's findings its workers were given and
+     * their size, how many of its files were computed, and which the selected candidate took
+     * beyond the plan.
+     */
+    @Test
+    void aTaskShowsTheArchitectsFindingsItsWorkersWereGivenAndTheFilesTakenBeyondThePlan() {
+        Task task = task("Order service");
+        task.setWriteSet(Set.of("server/src/main/java/OrderService.java",
+            "server/src/main/java/OrderServiceImpl.java", "server/src/main/java/OrderIds.java"));
+        task.setComputedReservation(List.of("server/src/main/java/OrderService.java",
+            "server/src/main/java/OrderServiceImpl.java"));
+        task.setTakenBeyondPlan(List.of("server/src/main/java/OrderIds.java"));
+        Task other = task("Order screen");
+
+        String shown = HarnessRunReport.handoverOf(List.of(
+            new RunMeter.Span("worker handover|" + task.id() + "|first|3|2400", T0, T0),
+            new RunMeter.Span("worker handover|" + task.id() + "|repair|3|2400", T0 + 9, T0 + 9),
+            new RunMeter.Span("worker handover|" + other.id() + "|first|0|0", T0, T0)), task);
+
+        assertThat(shown)
+            .contains("Architect's findings given to the workers: first dispatch 3 finding(s), "
+                + "2400 characters, about 600 tokens; repair dispatch 3 finding(s), 2400 "
+                + "characters, about 600 tokens")
+            .contains("Files reserved for the task: 3, 2 of them computed from its contracts "
+                + "and the project's types")
+            .contains("Files taken beyond the plan: server/src/main/java/OrderIds.java");
+
+        assertThat(HarnessRunReport.handoverOf(List.of(), other))
+            .contains("Architect's findings given to the workers: not recorded")
+            .contains("Files taken beyond the plan: none");
+    }
 }

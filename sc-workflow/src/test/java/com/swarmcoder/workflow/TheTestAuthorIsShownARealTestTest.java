@@ -100,7 +100,7 @@ class TheTestAuthorIsShownARealTestTest {
     }
 
     @Test
-    void thePlannerIsShownTheExamplesItsWorkersWillGet() throws Exception {
+    void thePlannerIsNotShownExamplesItWritesNoHowTo() throws Exception {
         List<String> prompts = new CopyOnWriteArrayList<>();
         try (ScriptedLlm llm = new ScriptedLlm(conversation -> {
             prompts.add(conversation);
@@ -128,7 +128,11 @@ class TheTestAuthorIsShownARealTestTest {
             architect.plan(design, "Keep a list of orders");
 
             assertThat(prompts).isNotEmpty();
-            assertThat(prompts.get(0)).contains("WORKED EXAMPLES").contains("TestLedger.start(");
+            // Until section 73 (2026-10-08) the planner was shown these and told to write each
+            // task's instructions to agree with them. It splits and orders now; how the work
+            // is built reaches the workers from the architect.
+            assertThat(prompts.get(0)).contains("You are an AI planner")
+                .doesNotContain("WORKED EXAMPLES").doesNotContain("TestLedger.start(");
         }
     }
 

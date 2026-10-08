@@ -53,8 +53,8 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
     // nothing per role, so a new entry here is a new editable row with no UI change.
     private static final List<String> NAMED_ROLES = List.of(
         "vision", "requirementsAnalyst", "storyPlanner",
-        "architect", "designReviewer", "testAuthor", "judge", "approver", "librarian",
-        "utility", "chat");
+        "architect", "taskPlanner", "designReviewer", "testAuthor", "judge", "approver",
+        "librarian", "utility", "chat");
 
     private final DependencyGraph graph;
 
@@ -189,6 +189,7 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
             named.put("vision", roles.vision());
             named.put("requirementsAnalyst", roles.requirementsAnalyst());
             named.put("storyPlanner", roles.storyPlanner());
+            named.put("taskPlanner", roles.taskPlanner());
         }
         for (String roleId : NAMED_ROLES) {
             entries.add(entry(roleId, named.get(roleId)));
@@ -259,7 +260,7 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
             named.get("librarian"), named.get("designReviewer"), named.get("judge"),
             named.get("approver"), workers, named.get("utility"), named.get("chat"),
             named.get("requirementsAnalyst"), named.get("storyPlanner"),
-            named.get("vision"));
+            named.get("vision"), named.get("taskPlanner"));
     }
 
     /** An entry with no endpoint at all means "unset/inherit" — stored as null. */

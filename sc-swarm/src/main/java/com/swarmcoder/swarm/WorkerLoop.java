@@ -153,6 +153,17 @@ public class WorkerLoop {
     /** The run's acceptance test file by path, for the worker's read-only lookup; may be null. */
     private volatile java.util.function.Function<String, String> acceptanceSource;
 
+    /**
+     * Who else of the plan holds a file this task did not reserve (section 73); null asks
+     * nobody. See {@link ReservationBook}.
+     */
+    private volatile com.swarmcoder.runtime.PathPolicy.OtherTasks otherTasks;
+
+    public WorkerLoop withOtherTasks(com.swarmcoder.runtime.PathPolicy.OtherTasks otherTasks) {
+        this.otherTasks = otherTasks;
+        return this;
+    }
+
     public WorkerLoop withReferenceRoots(java.util.Map<String, Path> roots) {
         this.referenceRoots = roots == null ? java.util.Map.of() : java.util.Map.copyOf(roots);
         return this;
@@ -378,6 +389,7 @@ public class WorkerLoop {
         toolbox.setReferenceHint(referenceHint(bundle));
         toolbox.setExpert(expert);
         toolbox.setAcceptanceSource(acceptanceSource);
+        toolbox.setOtherTasks(otherTasks);
         toolbox.setReferenceRoots(referenceRoots);
         toolbox.setFrameworkPackages(frameworkPackages);
         // This worker's own room — the one its session is compacted against — so a lookup answer

@@ -243,6 +243,53 @@ class AWorkerIsShownHowThisCodebaseDoesItTest {
             .contains("Reference documentation you can read");
     }
 
+    /**
+     * Section 73 (owner's decision, 2026-10-08): where the architect kept findings with real
+     * code about every contract a task delivers, they are in the task and the example chosen
+     * here by name and shape is not pasted beside them. Where it kept nothing for a contract,
+     * this example is still what the worker has.
+     */
+    @Test
+    void aTaskTheArchitectCoveredIsNotAlsoPastedAnExampleAndOneItDidNotCoverStillIs() {
+        Task covered = taskWithContracts();
+        covered.setArchitectFindings(List.of(new com.swarmcoder.domain.DesignFinding(
+            UUID.fromString("00000000-0000-0000-0000-0000000000c3"), "OrderServiceImpl",
+            "body_of com.ledgerworks.sample.PayslipServiceImpl#save",
+            "A service appends an entry to its session and commits.",
+            "session.append(new PayslipEntries.Recorded(payslip));")));
+        String brief = librarian.assembleBrief(project, covered).renderedMarkdown();
+
+        assertThat(brief)
+            .contains("How to build this is in your task")
+            .doesNotContain("How this codebase does this")
+            .as("and what an example displaces does not come back in its place")
+            .doesNotContain("Reference sources relevant to this task")
+            .doesNotContain("Documentation relevant to this task")
+            .as("the catalogue and the libraries stay")
+            .contains("Reference documentation you can read");
+        assertThat(brief.length())
+            .as("the brief is smaller by the example")
+            .isLessThan(librarian.assembleBrief(project, taskWithContracts())
+                .renderedMarkdown().length());
+
+        Task elsewhere = taskWithContracts();
+        elsewhere.setArchitectFindings(List.of(new com.swarmcoder.domain.DesignFinding(
+            UUID.fromString("00000000-0000-0000-0000-0000000000c4"), "SomethingElse",
+            "body_of com.ledgerworks.sample.PayslipServiceImpl#save", "About another type.",
+            "session.commit();")));
+        assertThat(librarian.assembleBrief(project, elsewhere).renderedMarkdown())
+            .as("nothing was kept for the contract this task delivers: the fallback stands")
+            .contains("How this codebase does this");
+
+        Task sentenceOnly = taskWithContracts();
+        sentenceOnly.setArchitectFindings(List.of(new com.swarmcoder.domain.DesignFinding(
+            UUID.fromString("00000000-0000-0000-0000-0000000000c5"), "OrderServiceImpl",
+            "docs_for services", "Services are singletons.", null)));
+        assertThat(librarian.assembleBrief(project, sentenceOnly).renderedMarkdown())
+            .as("a sentence is not code: the example stands")
+            .contains("How this codebase does this");
+    }
+
     @Test
     void everyWorkerOfOneTaskGetsTheSameBytes() {
         String first = librarian.assembleBrief(project, taskWithContracts()).renderedMarkdown();

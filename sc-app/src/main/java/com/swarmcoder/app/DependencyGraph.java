@@ -928,7 +928,10 @@ public class DependencyGraph {
             clientFor(orElse(resolveRole(over, global, RolesConfig::requirementsAnalyst), chatRole)),
             clientFor(orElse(resolveRole(over, global, RolesConfig::storyPlanner), chatRole)),
             roleConfigured(utilityRole),
-            roleConfigured(architectRole));
+            roleConfigured(architectRole),
+            // The task planner's own model when one is named, else the architect's - the
+            // model it has always run on, so an unchanged configuration is unchanged.
+            clientFor(orElse(resolveRole(over, global, RolesConfig::taskPlanner), architectRole)));
     }
 
     /**
@@ -1576,6 +1579,7 @@ public class DependencyGraph {
             list.add(roles.requirementsAnalyst());
             list.add(roles.storyPlanner());
             list.add(roles.architect());
+            list.add(roles.taskPlanner());
             list.add(roles.designReviewer());
             list.add(roles.testAuthor());
             list.add(roles.judge());

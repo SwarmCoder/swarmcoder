@@ -55,5 +55,12 @@ public record RolesConfig(
      * are not vision-capable, so silently substituting one would produce a confident description of
      * an image the model never saw. Unset means image upload is refused with an explicit message.
      */
-    AgentModelConfig vision
+    AgentModelConfig vision,
+    /**
+     * The task planner: splits an accepted design into tasks and orders them (section 73). It
+     * writes no how-to and learns no framework, so it can run on a modest model while
+     * {@link #architect} keeps a strong one. Falls back to {@link #architect}, which is the
+     * model it always ran on: a configuration that does not name it behaves as before.
+     */
+    AgentModelConfig taskPlanner
 ) {}

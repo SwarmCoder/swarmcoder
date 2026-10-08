@@ -615,6 +615,12 @@ public class Librarian {
     private String workedExample(Path repoRoot, Task task, int budgetChars, ChangeRequest change) {
         List<ApiContract> contracts = task.deliveredContracts();
         Set<String> writeSet = task.writeSet() == null ? Set.<String>of() : task.writeSet();
+        if (coveredByTheArchitect(task)) {
+            log.info("no worked example for task '{}': the architect kept {} finding(s) for it, "
+                + "with real code, about every contract it delivers", task.title(),
+                task.architectFindings().size());
+            return THE_ARCHITECT_COVERED_IT;
+        }
         if (change == null && createsNoFile(repoRoot, writeSet)) {
             log.info("no worked example for task '{}': every file it may write already exists, "
                 + "so it changes code and builds no new type; the code it changes is its example",
@@ -705,6 +711,37 @@ public class Librarian {
         + "returns the code you are changing. When you want to see how something is written in "
         + "this project or its library, call find_example with the types you are working with: "
         + "it returns one whole file of real code that uses them.\n";
+
+    /**
+     * What stands in the worked example's place for a task the architect covered (section 73).
+     * Not blank, for the reason {@link #CHANGES_EXISTING_CODE} is not.
+     */
+    static final String THE_ARCHITECT_COVERED_IT = "\n### How to build this is in your task\n"
+        + "The architect looked up how this project and its framework do what this task builds "
+        + "and its findings, with the code it found, are in your task above; no other example "
+        + "is pasted here. Each finding names the lookup it came from. When you want one whole "
+        + "file of real code that uses the types you are working with, call find_example.\n";
+
+    /**
+     * True when the architect's findings stand in for the worked example: the task carries at
+     * least one finding with code, and every contract it delivers has a finding about it. The
+     * example chosen here is matched by a contract's name and shape and has been irrelevant
+     * (run 90: four files of a reference chat client for two screens the project already had);
+     * a finding was chosen by the role that designed the task. Where the architect kept
+     * nothing for a contract, the example is still what the worker has.
+     */
+    static boolean coveredByTheArchitect(Task task) {
+        List<com.swarmcoder.domain.DesignFinding> findings = task.architectFindings();
+        if (findings.stream().noneMatch(f -> f != null && f.hasSnippet())) {
+            return false;
+        }
+        for (ApiContract contract : task.deliveredContracts()) {
+            if (findings.stream().noneMatch(f -> f != null && f.isAbout(contract))) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * True when every entry of the write set is a file the tree already holds: read from the

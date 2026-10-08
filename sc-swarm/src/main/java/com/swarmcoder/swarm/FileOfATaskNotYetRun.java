@@ -54,6 +54,12 @@ import java.util.Set;
  * file is that worker's mistake (live run 74). It takes two candidates that agree on the file,
  * or one whose task itself names that file in its read set.
  *
+ * <p><b>Since section 73</b> such a write is refused when the worker makes it
+ * ({@link ReservationBook}), so the candidate carries no record of it. The refusals are what is
+ * counted then: no candidate passed, and the worker of every candidate that was verified - two
+ * of them, or one when the read set names the file - was refused the same file because a task
+ * not yet run holds it.
+ *
  * <p>Pure functions over what verification recorded and the plan; nothing here reads a tree or
  * calls a model.
  */
@@ -67,7 +73,11 @@ final class FileOfATaskNotYetRun {
      *                   that a task not yet run owns, with the title of that task
      * @param candidates how many candidates were verified and failed this way
      */
-    record Finding(Map<String, String> files, int candidates) {
+    record Finding(Map<String, String> files, int candidates, boolean refused) {
+
+        Finding(Map<String, String> files, int candidates) {
+            this(files, candidates, false);
+        }
 
         /** The titles of the tasks that own the files, in the order found. */
         List<String> owners() {
@@ -83,6 +93,49 @@ final class FileOfATaskNotYetRun {
      *                 them; null when the plan cannot be read
      */
     static Finding find(Task task, List<CandidateSolution> verified, List<List<Task>> waves) {
+        return find(task, verified, waves, null);
+    }
+
+    /**
+     * @param book the run's reservations, which remember the writes refused for a task not yet
+     *             run; null looks at what the candidates wrote only
+     */
+    static Finding find(Task task, List<CandidateSolution> verified, List<List<Task>> waves,
+                        ReservationBook book) {
+        Finding wrote = wroteIt(task, verified, waves);
+        if (wrote != null || book == null || task == null || verified == null) {
+            return wrote;
+        }
+        if (verified.stream().anyMatch(c -> c != null && c.state() == CandidateState.SURVIVED)) {
+            return null;
+        }
+        // As for a file that was written: every candidate that was verified must be one whose
+        // worker was refused the file, so a candidate that failed for something else leaves
+        // the task to the repair round.
+        Set<String> verifiedWorkers = new LinkedHashSet<>();
+        for (CandidateSolution candidate : verified) {
+            if (candidate != null && candidate.verification() != null) {
+                verifiedWorkers.add(String.valueOf(candidate.workerIndex()));
+            }
+        }
+        if (verifiedWorkers.isEmpty()) {
+            return null;
+        }
+        Map<String, String> owned = new LinkedHashMap<>();
+        for (Map.Entry<String, ReservationBook.RefusedForLater> refused
+                : book.refusedForLater(task.id()).entrySet()) {
+            int needed = inReadSet(task, refused.getKey()) ? 1 : 2;
+            if (verifiedWorkers.size() >= needed
+                    && refused.getValue().by().containsAll(verifiedWorkers)) {
+                owned.put(refused.getKey(), refused.getValue().holder());
+            }
+        }
+        return owned.isEmpty() ? null
+            : new Finding(Map.copyOf(owned), verifiedWorkers.size(), true);
+    }
+
+    private static Finding wroteIt(Task task, List<CandidateSolution> verified,
+                                   List<List<Task>> waves) {
         if (task == null || verified == null || waves == null || task.writeSet() == null
                 || task.writeSet().isEmpty()) {
             return null;
@@ -159,9 +212,14 @@ final class FileOfATaskNotYetRun {
             + owner + "', which the plan runs beside or after this task"));
         boolean one = finding.files().size() == 1;
         return "Task BLOCKED by its plan, not by its candidates: '" + task.title() + "'\n\n"
-            + "Every candidate that was verified (" + finding.candidates() + ") wrote "
-            + (one ? "a source file" : "source files") + " outside the task's write set that "
-            + "another task of this plan owns and has not run yet:\n" + String.join("\n", lines)
+            + (finding.refused()
+                ? finding.candidates() + " worker(s) of this task tried to write "
+                    + (one ? "a source file" : "source files") + " that another task of this "
+                    + "plan holds and has not run yet, and were refused:\n"
+                : "Every candidate that was verified (" + finding.candidates() + ") wrote "
+                    + (one ? "a source file" : "source files") + " outside the task's write set "
+                    + "that another task of this plan owns and has not run yet:\n")
+            + String.join("\n", lines)
             + "\n\nThe task cannot be done without " + (one ? "that file" : "those files")
             + ", and " + (one ? "it does" : "they do") + " not exist until "
             + String.join(", ", finding.owners().stream().map(o -> "'" + o + "'").toList())

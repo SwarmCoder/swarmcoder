@@ -179,7 +179,9 @@ class TheArchitectAndThePlannerLookThingsUpAndCheckTheirDraftsTest {
 
             assertThat(llm.sessionRequests).hasSize(5);
             assertThat(llm.sessionRequests.get(0)).contains("You are an AI planner")
-                .contains("CHECK EVERY FACT BEFORE YOU RELY ON IT").contains("check_plan");
+                .as("told what it is for, and what it is not (section 73)")
+                .contains("YOU SPLIT THE DESIGN INTO TASKS AND ORDER THEM. NOTHING ELSE.")
+                .contains("check_plan").doesNotContain("keep_for_workers");
             assertThat(llm.sessionRequests.get(1))
                 .as("the listing is the real checkout").contains("Catalog.java");
             assertThat(llm.sessionRequests.get(2))
@@ -288,13 +290,14 @@ class TheArchitectAndThePlannerLookThingsUpAndCheckTheirDraftsTest {
 
             assertThat(llm.sessionRequests).isNotEmpty();
             assertThat(llm.sessionRequests.get(0))
-                .as("the session is told the material is a lookup away, and is not sent it")
-                .contains("are not attached here")
+                .as("the session is told it has no framework material and needs none")
+                .contains("is attached here, and you need neither")
                 .doesNotContain("FRAMEWORK REFERENCE").doesNotContain("PRIMER:");
             assertThat(llm.oneReplyRequests).isNotEmpty();
             assertThat(llm.oneReplyRequests.get(0))
-                .as("the reply without tools cannot look anything up, so it is sent it whole")
-                .contains("FRAMEWORK REFERENCE").contains("PRIMER:");
+                .as("nor is the reply without tools: the planner writes no how-to (section "
+                    + "73), so the framework reference has nothing to inform")
+                .doesNotContain("FRAMEWORK REFERENCE").doesNotContain("PRIMER:");
         }
     }
 
