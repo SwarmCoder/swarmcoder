@@ -6299,3 +6299,84 @@ no document says where to get it.
 **Tests.** `TheFirstDiscoveredTypeOfAProjectIsNotRefusedTest`; cases in
 `ARunThatAddsCodeNothingReachesIsNotDeliveredTest`,
 `OldLookupResultsAreReplacedByTheirFirstLinesTest`.
+
+## 69. A failed journey goes back to its author first; a journey must create what it expects (owner's decisions, 2026-10-08)
+
+From run 93 (section 68): the journey looked for a text box named "Search books by title or
+author" where the screen set the placeholder "Search books...", and expected a book's title on
+a store that starts empty. No worker could repair either. Nothing below was measured in a live
+run. The page reading was made once by hand in the browser image on a static page; the rest is
+tested with a scripted model and with what a browser would answer given as a function.
+
+**1. Back to the author before any worker** (`FinalIntegrator.JourneySendBack`,
+`GreenfieldWorkflow.sendJourneyBackToItsAuthor`, `TestAuthorClient.reviewFailedJourney`).
+
+- The page checker (`check.js`, `pageSeen`) reads the page when a step fails: elements by role
+  and accessible name (at most 100), the fields' placeholders with their labels (20), visible
+  text (1,200 characters), 4,000 characters in all. No model. It travels as one more entry of
+  the page's assertions (`page-seen`, marked passed), so no stored type changed, and is
+  `JourneyFile.Result.seen`.
+- The author is asked in its own session - the conversation that wrote the journey when it is
+  kept - with its lookups, `texts_of` and `check_journey`; without a session, in one reply. Its
+  opening holds the journey, the failing step and the page reading: evidence of the failure,
+  bounded, not project material. No new tool, so the lookups-by-kind table needs no new kind
+  (`check_journey` is a journey check, `texts_of` a tree query, as before).
+- What it came to is read from what the session did: a journey `check_journey` called valid
+  at the journey's own path is a correction; a hand-in with nothing checked is the author
+  standing by its journey; neither is no usable answer.
+- A correction is taken only when `JourneysOfAPlan.correctionRefused` finds nothing, cheapest
+  check first: well formed; not weaker by its form (`JourneyExpectations.weakened`: at least
+  one fill, click or press, and no fewer such steps and no fewer fills than the journey it
+  replaces); passes on the merged tree, in the container that still holds it; fails on the
+  start tree (`journeysOnTheStartTree`, the red check's own build), and its last expectation
+  alone does not already pass on the entry page there. Then it is committed on the run's tests
+  ref and the integration is made again from the start. No worker is started.
+- Anything else leaves the journey as written, and the repair round of section 63 runs with
+  the author's answer added to its evidence (`JourneysOfAPlan.repairEvidence`).
+- Once per task (`Task.journeySentBack`); the outcome is `Task.journeyReviewNote`, in the log
+  and in the run report under the task, with what the journey ended on before and after.
+- The author's endpoint being down pauses the stage, as for a repair round; the task is not
+  marked as asked.
+
+**What a weakened journey still gets through with.** As many steps, ending on something the
+story adds but the criteria do not ask for (the new screen's heading in place of the search
+result): it fails before and passes after. Only the note shows it. Also not checked: an ending
+of `expectHidden` on the start tree's entry page (something not there is hidden everywhere);
+the application's data between the failed journey and the correction in the same container
+(the correction runs on what the first attempt left); a task with two failed journeys is asked
+about both in one go and marked once.
+
+**2. A journey must create what it expects** (`JourneyExpectations.unentered`,
+`ProjectTexts.heldIn`). An `expectVisible` text (`text=...`, `:has-text("...")`; not a role's
+name, not a pattern) that no earlier `fill` value contains or is contained in, and that no
+string literal of the project's shipped Java code and no page or message file holds, is either
+shown by the new screen itself or is data nobody entered. `check_journey` asks once and does
+not keep the draft; the same file given again is the author's answer that the screen shows it,
+and is kept (logged). The brief and the tool's VALID answer say the application starts with no
+data of its own. The journeys' red check logs a NOTE for such a journey. Cost: a journey that
+ends on a new label costs its author one more `check_journey` call. Not seen: data expected
+through a role's name (`role=cell[name="..."]`); a journey handed in as a file in one reply is
+not asked, only noted at the red check.
+
+**3. Selectors.** `SwarmDispatcher.buildBundle`: a task that claims a journey gets one sentence
+- the screen must expose exactly the roles, accessible names and texts the journey's selectors
+use. The repair evidence says the same. Journeys are still not made per candidate.
+
+**4. A refusal at final integration returns to the owning task once**
+(`FinalIntegrator.OwnedRefusal`, `GreenfieldWorkflow.repairAfterOwnedRefusal`): for added code
+nothing can reach, the task whose chosen change added the first file named gets the one repair
+round a failed journey gets, with the refusal as evidence (`Task.integrationRepairAttempted`).
+A repaired candidate is still only asked about files its own change adds (section 68), so a
+repair that does not fix it is refused again at final integration and the run parks. Other
+final-integration failures (a merge conflict, a red verification after a merge) name no single
+task and still park.
+
+**Not exercised by any test:** the two call sites that need a container with a browser - the
+send-back inside `FinalIntegrator.makeJourneys` and `sendJourneyBackToItsAuthor` with its
+commit - and `repairAfterOwnedRefusal`. They compile and follow the paths of section 63.
+
+**Tests.** `WhatAJourneyExpectsIsJudgedWithNoModelTest`,
+`WhetherTheProjectHoldsATextIsAskedWithNoModelTest`, `AFailedJourneyGoesBackToItsAuthorTest`;
+cases in `AWorkerReadsTheAcceptanceTestItMustMeetTest`, `HarnessRunReportTest`.
+
+**Left.** A live run with a screen.

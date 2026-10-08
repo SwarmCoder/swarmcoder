@@ -293,8 +293,35 @@ public final class JourneyFile {
      * @param passed  every step was done and every expectation held
      * @param failure null when passed; otherwise the failing step, by number and in words, with
      *                what the browser said - the sentence a worker is given to repair from
+     * @param seen    what the page showed when the step failed (section 69): the roles and
+     *                accessible names of its elements, its fields' placeholders and its visible
+     *                text, as the browser in the container read them - no model, at most
+     *                {@link #MAX_SEEN} characters. Null when the journey passed or the browser
+     *                gave no reading
      */
-    public record Result(Journey journey, boolean passed, String failure) {}
+    public record Result(Journey journey, boolean passed, String failure, String seen) {
+
+        public Result(Journey journey, boolean passed, String failure) {
+            this(journey, passed, failure, null);
+        }
+    }
+
+    /** The checker's mark for its reading of the page at a failed step; never a failure. */
+    static final String PAGE_SEEN = "page-seen";
+
+    /** The checker cuts its reading at this; cut here again, whatever a container sent. */
+    public static final int MAX_SEEN = 4000;
+
+    private static String seenIn(List<AssertionResult> assertions) {
+        for (AssertionResult assertion : assertions) {
+            if (PAGE_SEEN.equals(assertion.selector()) && assertion.message() != null
+                    && !assertion.message().isBlank()) {
+                String seen = assertion.message().strip();
+                return seen.length() <= MAX_SEEN ? seen : seen.substring(0, MAX_SEEN);
+            }
+        }
+        return null;
+    }
 
     /** Reads the browser's result for {@code journey}; {@code check} is that journey's page. */
     public static Result resultOf(Journey journey, PageCheck check) {
@@ -317,7 +344,8 @@ public final class JourneyFile {
             String selector = assertion.selector() == null ? "" : assertion.selector();
             int number = stepNumber(selector);
             if (number < 1 || number > total) {
-                return new Result(journey, false, selector + " - " + firstLine(assertion.message()));
+                return new Result(journey, false, selector + " - " + firstLine(assertion.message()),
+                    seenIn(assertions));
             }
             StringBuilder text = new StringBuilder("step " + number + " of " + total
                 + " failed: `" + journey.steps().get(number - 1).describe() + "` - "
@@ -332,7 +360,7 @@ public final class JourneyFile {
                 text.append(" It is the first step, made on the entry page ").append(check.url())
                     .append('.');
             }
-            return new Result(journey, false, text.toString());
+            return new Result(journey, false, text.toString(), seenIn(assertions));
         }
         return new Result(journey, true, null);
     }

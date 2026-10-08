@@ -341,6 +341,111 @@ final class JourneysOfAPlan {
             .toString();
     }
 
+    static String lastStepOf(JourneyFile.Journey journey) {
+        return journey.steps().isEmpty() ? "nothing"
+            : journey.steps().get(journey.steps().size() - 1).describe();
+    }
+
+    /**
+     * Why a corrected journey is not taken; null when it is. The guard against an author that
+     * makes its journey pass by asking for less (section 69):
+     *
+     * <ol>
+     *   <li>it is a well-formed journey;</li>
+     *   <li>it is not weaker by its form ({@code JourneyExpectations.weakened}): it still
+     *       changes something, with no fewer changing steps and no fewer fills;</li>
+     *   <li>it PASSES on the merged tree, in the container that holds it;</li>
+     *   <li>it FAILS on the tree the run started from, built and started as the red check
+     *       does; and what its last step expects is not already on the entry page there.</li>
+     * </ol>
+     *
+     * <p>The cheap checks come first: the start tree is built only for a correction that
+     * passed the three before it.
+     *
+     * <p>Not caught: a correction with as many steps that ends on something the story adds
+     * but the criteria do not ask for (the new screen's heading in place of the search result).
+     * It fails before and passes after. The note on the task says what the journey ended on
+     * before and after, so a person can see it.
+     *
+     * @param onMergedTree makes journeys on the merged, built tree
+     * @param onStartTree  makes journeys on the tree the run started from
+     */
+    static String correctionRefused(JourneyFile.Journey original, String path, String corrected,
+                                    java.util.function.Function<List<JourneyFile.Journey>,
+                                        JourneyRunner.Outcome> onMergedTree,
+                                    java.util.function.Function<List<JourneyFile.Journey>,
+                                        JourneyRunner.Outcome> onStartTree) {
+        JourneyFile.Read read = JourneyFile.read(path, corrected);
+        if (!read.ok()) {
+            return "it is not a well-formed journey: " + read.objection().replace('\n', ' ');
+        }
+        List<String> weaker =
+            com.swarmcoder.verify.JourneyExpectations.weakened(original, read.journey());
+        if (!weaker.isEmpty()) {
+            return "it asks for less than the journey it replaces: " + String.join("; ", weaker);
+        }
+        JourneyRunner.Outcome merged = onMergedTree.apply(List.of(read.journey()));
+        if (merged == null || !merged.made() || merged.results().isEmpty()) {
+            return "it could not be made on the merged tree: " + whyNot(merged);
+        }
+        if (!merged.results().get(0).passed()) {
+            return "it fails on the merged tree too - " + merged.results().get(0).failure();
+        }
+        List<JourneyFile.Journey> onStart = new ArrayList<>(List.of(read.journey()));
+        JourneyFile.Journey ending =
+            com.swarmcoder.verify.JourneyExpectations.lastExpectationAlone(read.journey());
+        if (ending != null) {
+            onStart.add(ending);
+        }
+        JourneyRunner.Outcome before = onStartTree.apply(onStart);
+        if (before == null || !before.made() || before.results().isEmpty()) {
+            return "it could not be made on the tree the run started from: " + whyNot(before);
+        }
+        if (before.results().get(0).passed()) {
+            return "it passes on the application as it was before the story, so it shows "
+                + "nothing about what the story adds";
+        }
+        if (before.results().size() > 1 && before.results().get(1).passed()) {
+            return "what its last step expects (`" + lastStepOf(read.journey()) + "`) is "
+                + "already on the entry page of the application as it was before the story, "
+                + "so its ending shows nothing about what the story adds";
+        }
+        return null;
+    }
+
+    private static String whyNot(JourneyRunner.Outcome outcome) {
+        return outcome == null ? "no result"
+            : outcome.couldNotRun() != null ? outcome.couldNotRun()
+            : outcome.didNotStart() != null ? outcome.didNotStart() : "no result";
+    }
+
+    /**
+     * What the author of a failed journey is shown (section 69): the journey in words, the
+     * failing step with what the browser said, and what the page showed at that step - read by
+     * the browser in the container, bounded there and here.
+     */
+    static String sendBackEvidence(JourneyFile.Result failed) {
+        return failed.journey().describe() + "\nMade in a real browser on the merged tree, from "
+            + "the application's entry page: " + failed.failure()
+            + "\n\nWHAT THE PAGE SHOWED AT THAT STEP (read by the browser; every element with "
+            + "a role and an accessible name, the fields' placeholders, the visible text):\n"
+            + (failed.seen() == null || failed.seen().isBlank()
+                ? "(the browser gave no reading of the page)" : failed.seen());
+    }
+
+    /**
+     * The same paragraph, with what the journey's author answered when it was asked first
+     * (section 69). The workers are told the author's reason exactly as it gave it.
+     */
+    static String repairEvidence(String evidence, String authorNote) {
+        if (authorNote == null || authorNote.isBlank()) {
+            return evidence;
+        }
+        return (evidence == null ? "" : evidence)
+            + "\nTHE JOURNEY'S AUTHOR WAS ASKED FIRST whether the journey or the screen is "
+            + "wrong. " + authorNote.strip() + "\n";
+    }
+
     /** The paragraph a repair worker is given when the journey its task claims failed. */
     static String repairEvidence(List<JourneyFile.Result> failed) {
         StringBuilder text = new StringBuilder("--- a journey failed in a real browser ---\n"
@@ -357,6 +462,7 @@ final class JourneysOfAPlan {
             + "missing is on the screen or on the way to it: the element the failing step names "
             + "is not there, is not visible, is not reachable by the steps before it, or is "
             + "named differently from the journey's selector. Make the application match the "
-            + "journey, step by step.\n").toString();
+            + "journey, step by step: every role, accessible name and text a selector of the "
+            + "journey uses must be on the screen exactly as the journey writes it.\n").toString();
     }
 }

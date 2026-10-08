@@ -2089,6 +2089,15 @@ public class SwarmEngineImpl implements SwarmEngine {
      * @return the task's new choice, or null when nothing survived; the earlier choice then
      *         stands and the caller stops the run on the journey's failure
      */
+    /**
+     * The same one repair round for any failure of final integration that names this task and
+     * a reason (section 69): a refusal for code the task added and nothing can reach. Seeded
+     * from the task's chosen candidate, with {@code evidence} as what the workers are told.
+     */
+    public CandidateSolution repairAfterFinalIntegration(Task task, UUID runId, String evidence) {
+        return repairAfterFailedJourney(task, runId, evidence);
+    }
+
     public CandidateSolution repairAfterFailedJourney(Task task, UUID runId, String evidence) {
         CandidateSolution chosen = archivedWinner(task);
         if (chosen == null || chosen.branch() == null || chosen.verification() == null

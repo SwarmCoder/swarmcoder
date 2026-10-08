@@ -81,12 +81,17 @@ public class FinalIntegrator {
      *                     (the M1 allowance) — in both cases nobody ran anything against the tree.
      */
     public record Result(String integrationBranch, String failure, VerificationReport verification,
-                         JourneyFailure journeyFailure) {
+                         JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
+                         boolean journeyCorrected) {
         public Result(String integrationBranch, String failure) {
-            this(integrationBranch, failure, null, null);
+            this(integrationBranch, failure, null, null, null, false);
         }
         public Result(String integrationBranch, String failure, VerificationReport verification) {
-            this(integrationBranch, failure, verification, null);
+            this(integrationBranch, failure, verification, null, null, false);
+        }
+        public Result(String integrationBranch, String failure, VerificationReport verification,
+                      JourneyFailure journeyFailure) {
+            this(integrationBranch, failure, verification, journeyFailure, null, false);
         }
         public boolean ok() {
             return failure == null;
@@ -104,6 +109,37 @@ public class FinalIntegrator {
      */
     public record JourneyFailure(UUID taskId, String evidence) {}
 
+    /**
+     * A refusal of this stage that names files one task of this run added - code nothing can
+     * reach (section 69). Like a failed journey it has an owner and a reason, so the owner can
+     * go back to the workers once before the run stops; before this it could only park.
+     *
+     * @param taskId   the task whose chosen candidate added the first file named
+     * @param evidence what a repair worker is told: the refusal as the run was told it
+     */
+    public record OwnedRefusal(UUID taskId, String evidence) {}
+
+    /**
+     * Where a failed journey goes before any worker repairs anything: back to its author
+     * (owner's decision, 2026-10-08, section 69). Asked while the container that holds the
+     * merged, built tree is still there, so a correction can be made in it at once.
+     */
+    public interface JourneySendBack {
+        /**
+         * @param task         the task that claims the failed journeys
+         * @param failed       its journeys that failed, each with the failing step and what the
+         *                     page showed
+         * @param onMergedTree makes journeys in the merged tree's container: the application
+         *                     is started again and a browser carries them out
+         * @return true when a corrected journey was taken and committed with the run's tests -
+         *         the integration is then made again from the start; false when the journeys
+         *         stand as they were
+         */
+        boolean review(Task task, List<JourneyFile.Result> failed,
+                       java.util.function.Function<List<JourneyFile.Journey>,
+                           JourneyRunner.Outcome> onMergedTree);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(FinalIntegrator.class);
     private static final Path WORKTREE_ROOT = Path.of(System.getProperty("user.home"), ".swarmcoder", "wt");
 
@@ -115,6 +151,14 @@ public class FinalIntegrator {
     private final BuildBoxes boxes;
     /** Where a sentence for the run's own record goes; nothing by default. */
     private java.util.function.Consumer<String> runRecord = sentence -> { };
+    /** Who is asked about a failed journey before a worker is; nobody by default. */
+    private JourneySendBack journeySendBack;
+
+    /** A failed journey of this run goes back to its author through {@code sendBack} first. */
+    public FinalIntegrator sendingJourneysBackTo(JourneySendBack sendBack) {
+        this.journeySendBack = sendBack;
+        return this;
+    }
 
     /**
      * Sends what this stage could not establish and did not refuse to the run's own record
@@ -364,9 +408,17 @@ public class FinalIntegrator {
             // Every winner is merged and the merged tree is green. One thing no test of it can
             // show is still asked: can the application reach what the run added (the seven
             // accepted stories whose screens no user could open, 2026-10-05)?
-            String unreachable = unreachableAddedCode(run, worktree, winners.values());
+            UUID[] addedBy = new UUID[1];
+            String unreachable = unreachableAddedCode(run, worktree, winners.values(), addedBy);
             if (unreachable != null) {
-                return new Result(integrationBranch, unreachable, lastVerification[0]);
+                return new Result(integrationBranch, unreachable, lastVerification[0], null,
+                    addedBy[0] == null ? null : new OwnedRefusal(addedBy[0],
+                        "--- final integration refused what this task added ---\n"
+                            + "Every task of this run was merged and every acceptance test "
+                            + "passed. Then this was found, on the merged tree:\n" + unreachable
+                            + "\n\nYour checkout holds this task's chosen change. Make the "
+                            + "application reach what it added - from code this task may "
+                            + "write - or take out what nothing needs.\n"), false);
             }
             // And the other thing no test of the code can show: that a person can reach and use
             // what was built. The journeys are made here, once, in a real browser (section 63).
@@ -392,7 +444,8 @@ public class FinalIntegrator {
      * {@code -Dswarmcoder.verify.unreachableAddedCode=off} switches it off.
      */
     private String unreachableAddedCode(Run run, Path worktree,
-                                        java.util.Collection<CandidateSolution> winners) {
+                                        java.util.Collection<CandidateSolution> winners,
+                                        UUID[] addedBy) {
         String base = run.baseCommit();
         if (!ReachableCode.enabled() || base == null || base.isBlank()) {
             return null;
@@ -424,6 +477,16 @@ public class FinalIntegrator {
             String objection = ReachableCode.objection(finding, "This run adds");
             if (objection != null) {
                 log.warn("Run {}: {}", run.id(), objection);
+                // Whose it is: the task whose chosen change added the first file named.
+                for (ReachableCode.Orphan orphan : finding.orphans()) {
+                    String file = orphan.file().replace((char) 92, '/');
+                    for (CandidateSolution winner : winners) {
+                        if (addedBy[0] == null && WorkerToolbox.touchedPaths(winner.diffUnified())
+                                .stream().anyMatch(path -> path.replace((char) 92, '/').equals(file))) {
+                            addedBy[0] = winner.taskId();
+                        }
+                    }
+                }
                 return objection + ".\n\nEvery acceptance test passed, and none of them shows "
                     + "this: a test that calls the new code directly is green whether or not the "
                     + "application ever does. (-D" + ReachableCode.SWITCH + "=off accepts the "
@@ -518,10 +581,11 @@ public class FinalIntegrator {
         Optional<VerifySpec> spec = VerifySpecLoader.loadTrusted(gitService.repoPath(), worktree);
         StringBuilder browserLog = new StringBuilder();
         JourneyRunner.Outcome outcome;
+        ExecTarget target = null;
         if (spec.isEmpty() || !JourneyFile.canRun(spec.get())) {
             outcome = JourneyRunner.run(null, spec.orElse(null), journeys, BlobSink.NONE, browserLog);
         } else {
-            ExecTarget target = boxes.use(worktree, "Final integration", true);
+            target = boxes.use(worktree, "Final integration", true);
             outcome = JourneyRunner.run(target, spec.get(), journeys, BlobSink.NONE, browserLog);
         }
         if (outcome.couldNotRun() != null || outcome.didNotStart() != null) {
@@ -561,6 +625,19 @@ public class FinalIntegrator {
         text.append("\n\nA journey fails when a person cannot do what it describes: the screen "
             + "is not reachable from the entry page, or what the step names is not on it.");
         log.warn("Run {}: {}", run.id(), text);
+        // Back to its author before any worker (section 69), while this container still holds
+        // the built tree: a correction is made in it at once.
+        if (owner != null && journeySendBack != null && target != null) {
+            ExecTarget live = target;
+            VerifySpec contract = spec.get();
+            if (journeySendBack.review(owner, List.copyOf(ofOwner), again -> JourneyRunner.run(
+                    live, contract, again, BlobSink.NONE, new StringBuilder()))) {
+                return new Result(integrationBranch, text + "\n\nThe journey went back to its "
+                    + "author, who corrected it. The correction is committed with the run's "
+                    + "tests and the integration is made again.", verification, null, null,
+                    true);
+            }
+        }
         return new Result(integrationBranch, text.toString(), verification, owner == null ? null
             : new JourneyFailure(owner.id(), JourneysOfAPlan.repairEvidence(ofOwner)));
     }

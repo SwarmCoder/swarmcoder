@@ -95,6 +95,11 @@ class HarnessRunReportTest {
     void theReportCarriesEverySectionFromWhatWasRecorded() {
         Task rescued = task("Rescued task");
         Task easy = task("Easy task");
+        // Section 69: a failed journey went back to its author first, then to the workers.
+        rescued.setJourneySentBack(true);
+        rescued.setJourneyReviewNote("The journey's author answered that the journey is right "
+            + "and the screen is wrong: the box has no label.");
+        rescued.setJourneyRepairAttempted(true);
         CandidateSolution r0 = candidate(rescued, 0, CandidateState.FAILED, 0);
         CandidateSolution r1 = candidate(rescued, 1, CandidateState.SELECTED, 0.8);
         CandidateSolution e0 = candidate(easy, 0, CandidateState.SELECTED, 0.9);
@@ -138,6 +143,11 @@ class HarnessRunReportTest {
             .as("a role whose calls reported no usage says so").contains("| judge | 1 | not recorded | not recorded | not recorded | 1.0 |")
             .contains("| analyst | 0 | 0 | 0 | 0 |")
             .contains("Candidates dispatched 2, survived verification 1, selected 1")
+            .contains("Journey sent back to its author before any worker repair (it failed in "
+                + "the browser at final integration): The journey's author answered that the "
+                + "journey is right and the screen is wrong: the box has no label.")
+            .contains("Returned to the workers once from final integration: its journey failed "
+                + "in the browser\n")
             .contains("| run stage EXECUTING | 4.3 | 1.0 |")
             .contains("| wave 1 of 1 | 3.3 | 0.0 |")
             .contains("main code: 1 file(s) +20 -1; test code: 1 file(s) +10 -0; build files: 1 file(s) +2 -0")

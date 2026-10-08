@@ -1177,14 +1177,47 @@ public class GreenfieldWorkflow {
                 }
                 case FINAL_INTEGRATION -> {
                     log("Processing FINAL_INTEGRATION...");
+                    // A failed journey goes back to its author before any worker (section 69).
+                    // The author is a model: when its endpoint is down nothing was learned, and
+                    // the stage runs again when it answers - said after the integrator has
+                    // cleaned up, not thrown through it.
+                    final Run integrating = run;
+                    EndpointOutage[] authorUnreachable = new EndpointOutage[1];
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
                             .tellingTheRun(this::log)
+                            .sendingJourneysBackTo((task, failed, onMergedTree) -> {
+                                try {
+                                    return sendJourneyBackToItsAuthor(integrating, task, failed,
+                                        onMergedTree);
+                                } catch (EndpointOutage outage) {
+                                    authorUnreachable[0] = outage;
+                                    return false;
+                                } catch (RuntimeException e) {
+                                    // The journey stands; the repair round follows as before.
+                                    log("FINAL_INTEGRATION: the failed journey could not be "
+                                        + "sent back to its author: " + e);
+                                    return false;
+                                }
+                            })
                             .integrate(run);
+                    if (authorUnreachable[0] != null) {
+                        throw authorUnreachable[0];
+                    }
+                    if (!integration.ok() && integration.journeyCorrected()) {
+                        // Stays in FINAL_INTEGRATION: the corrected journey is on the run's
+                        // tests commit, and the run is merged, verified and its journeys made
+                        // again from there. No worker was started.
+                        persister.save(run);
+                        return run;
+                    }
                     if (!integration.ok() && repairAfterFailedJourney(run, integration)) {
                         // Stays in FINAL_INTEGRATION: the run is merged and verified again with
                         // the repaired candidate, and the journeys are made again.
                         return run;
+                    }
+                    if (!integration.ok() && repairAfterOwnedRefusal(run, integration)) {
+                        return run; // as above, for a refusal that names one task's own files
                     }
                     if (!integration.ok()) {
                         log("Integration FAILED — parking run: " + integration.failure());
@@ -1406,7 +1439,9 @@ public class GreenfieldWorkflow {
             + failed.evidence());
         CandidateSolution repaired = null;
         try {
-            repaired = engine.repairAfterFailedJourney(task, run.id(), failed.evidence());
+            // With what the journey's author answered when it was asked first (section 69).
+            repaired = engine.repairAfterFailedJourney(task, run.id(),
+                JourneysOfAPlan.repairEvidence(failed.evidence(), task.journeyReviewNote()));
         } catch (EndpointOutage outage) {
             throw outage; // nothing was learned: the stage runs again when the endpoint answers
         } catch (RuntimeException e) {
@@ -1424,6 +1459,157 @@ public class GreenfieldWorkflow {
             + "verification and is the task's choice now. The run is merged and verified "
             + "again, and the journeys are made again.");
         return true;
+    }
+
+    /**
+     * A refusal at final integration that names files one task added - code nothing can reach -
+     * returns to that task ONCE, with the refusal as the workers' evidence (section 69; section
+     * 68 "seen, not changed": after a real refusal there was no repair path and the run parked).
+     * The same repair round a failed journey gets, bounded by its own mark on the task.
+     *
+     * @return true when a repaired candidate is the task's choice now and the integration is
+     *         made again; false when the run stops on the refusal
+     */
+    private boolean repairAfterOwnedRefusal(Run run, FinalIntegrator.Result integration) {
+        FinalIntegrator.OwnedRefusal refusal = integration.ownedRefusal();
+        if (refusal == null || refusal.taskId() == null
+                || !(swarmEngine instanceof SwarmEngineImpl engine)) {
+            return false;
+        }
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        Task task = graph == null ? null : graph.tasks().stream()
+            .filter(t -> t.id().equals(refusal.taskId())).findFirst().orElse(null);
+        if (task == null) {
+            return false;
+        }
+        if (task.integrationRepairAttempted()) {
+            log("FINAL_INTEGRATION: what task '" + task.title() + "' added was refused again "
+                + "after its one repair round; the run stops on it.");
+            return false;
+        }
+        log("FINAL_INTEGRATION: the merged tree was refused for what task '" + task.title()
+            + "' added. The task goes back to the workers once, with the reason:\n"
+            + refusal.evidence());
+        CandidateSolution repaired = null;
+        try {
+            repaired = engine.repairAfterFinalIntegration(task, run.id(), refusal.evidence());
+        } catch (EndpointOutage outage) {
+            throw outage; // nothing was learned: the stage runs again when the endpoint answers
+        } catch (RuntimeException e) {
+            log("FINAL_INTEGRATION: the repair round after the refusal did not finish: "
+                + e.getMessage());
+        }
+        task.setIntegrationRepairAttempted(true);
+        artifactStore.saveTask(task);
+        if (repaired == null) {
+            log("FINAL_INTEGRATION: no repaired candidate of '" + task.title() + "' passed "
+                + "verification; the run stops on the refusal.");
+            return false;
+        }
+        log("FINAL_INTEGRATION: a repaired candidate of '" + task.title() + "' passed "
+            + "verification and is the task's choice now. The run is merged and verified again.");
+        return true;
+    }
+
+    /**
+     * A journey of this run failed in the browser after the last merge, and before any worker
+     * is sent after it its AUTHOR is asked which side is wrong (owner's decision, 2026-10-08;
+     * section 69). Live run 93's journey could not be repaired by any worker: it looked for a
+     * text box by a name the screen did not use, and expected a record nobody had entered.
+     *
+     * <p>Once per task. The author is shown the journey, the failing step and what the page
+     * showed there. A corrected journey is taken only when
+     * {@link JourneysOfAPlan#correctionRefused} finds
+     * nothing: it is then written to the run's tests ref and committed, and the caller makes
+     * the integration again. Anything else leaves the journey as written, and the author's
+     * answer goes to the workers of the repair round that follows.
+     *
+     * @param onMergedTree makes journeys in the container that holds the merged, built tree
+     * @return true when a correction was committed
+     */
+    boolean sendJourneyBackToItsAuthor(Run run, Task task, List<JourneyFile.Result> failed,
+                                       java.util.function.Function<List<JourneyFile.Journey>,
+                                           JourneyRunner.Outcome> onMergedTree) {
+        if (task.journeySentBack() || failed == null || failed.isEmpty()
+                || roles.testAuthor() == null || repoPath == null || !gitService.isEnabled()) {
+            return false;
+        }
+        String branch = testsBranch(run);
+        Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
+        DesignDocument design = run.designId() == null ? null
+            : artifactStore.root().designs.get(run.designId());
+        List<String> notes = new ArrayList<>();
+        List<String> taken = new ArrayList<>();
+        try {
+            removeTree(worktree); // a leftover from a killed attempt, if any
+            gitService.addWorktreeAt(branch, worktree);
+            for (JourneyFile.Result result : failed) {
+                String path = result.journey().path();
+                String content = Files.readString(worktree.resolve(path));
+                log("FINAL_INTEGRATION: the journey \"" + result.journey().name() + "\" ("
+                    + path + ") of task '" + task.title() + "' failed in the browser. Before "
+                    + "any worker repairs anything it goes back to its author, with the "
+                    + "failing step and what the page showed.");
+                TestAuthorClient.JourneyReviewed reviewed = roles.testAuthor()
+                    .reviewFailedJourney(worktree, task, design, path, content,
+                        JourneysOfAPlan.sendBackEvidence(result));
+                String note;
+                if (!reviewed.answered()) {
+                    note = "The journey's author gave no usable answer (" + reviewed.reason()
+                        + "), so the journey stands as written.";
+                } else if (!reviewed.journeyIsWrong()) {
+                    note = "The journey's author answered that the journey is right and the "
+                        + "screen is wrong: " + reviewed.reason();
+                } else {
+                    String refused = JourneysOfAPlan.correctionRefused(result.journey(), path,
+                        reviewed.corrected(), onMergedTree, journeys -> {
+                            try {
+                                return journeysOnTheStartTree(run, journeys, "journey-review")
+                                    .outcome();
+                            } catch (Exception e) {
+                                return new JourneyRunner.Outcome(String.valueOf(e.getMessage()),
+                                    null, List.of());
+                            }
+                        });
+                    if (refused == null) {
+                        Files.writeString(worktree.resolve(path), reviewed.corrected());
+                        taken.add(path);
+                        JourneyFile.Journey now =
+                            JourneyFile.read(path, reviewed.corrected()).journey();
+                        note = "The journey's author answered that the journey was wrong and "
+                            + "corrected it: " + reviewed.reason() + " The correction fails on "
+                            + "the tree the run started from and passes on the merged tree, "
+                            + "and replaces the journey. It ended on `"
+                            + JourneysOfAPlan.lastStepOf(result.journey())
+                            + "` and now ends on `" + JourneysOfAPlan.lastStepOf(now) + "`, with " + now.steps().size() + " step(s) "
+                            + "where it had " + result.journey().steps().size() + ".";
+                    } else {
+                        note = "The journey's author answered that the journey was wrong: "
+                            + reviewed.reason() + " Its correction was not taken (" + refused
+                            + "), so the journey stands as first written.";
+                    }
+                }
+                log("FINAL_INTEGRATION: " + note);
+                notes.add(note);
+            }
+            if (!taken.isEmpty()) {
+                gitService.commitAll(worktree, "Correct journey(s) " + taken + " for run "
+                    + run.id() + "\n\nSent back to their author after failing in the browser "
+                    + "at final integration.");
+                run.setAcceptanceTestsCommit(gitService.headSha(branch));
+            }
+        } catch (IOException e) {
+            notes.add("The journey could not be read from or written to the run's tests ("
+                + e.getMessage() + "), so it stands as written.");
+            taken.clear();
+        } finally {
+            removeTree(worktree); // the branch stays; a correction is on it
+        }
+        task.setJourneySentBack(true);
+        task.setJourneyReviewNote(String.join(" ", notes));
+        artifactStore.saveTask(task);
+        return !taken.isEmpty();
     }
 
     private boolean recordDelivery(Run run, FinalIntegrator.Result integration) {
@@ -3501,11 +3687,72 @@ public class GreenfieldWorkflow {
         if (claimed.isEmpty()) {
             return null;
         }
-        VerifySpec spec = VerifySpecLoader.load(repoPath).orElse(null);
         List<JourneyFile.Journey> journeys = claimed.stream()
             .map(JourneysOfAPlan.Claimed::journey).toList();
-        String branch = "swarm/redcheck/" + run.id() + "/journeys";
-        Path worktree = WORKTREE_ROOT.resolve("redcheck-" + run.id() + "-journeys");
+        try {
+            OnStartTree made = journeysOnTheStartTree(run, journeys, "journeys");
+            JourneyRunner.Outcome outcome = made.outcome();
+            String notRed = JourneysOfAPlan.notRed(claimed, outcome, made.buildFailed());
+            if (notRed == null) {
+                for (JourneyFile.Result result : outcome.results()) {
+                    log("Red-check of the journeys: \"" + result.journey().name() + "\" ("
+                        + result.journey().path() + ") fails on the start tree, as it must - "
+                        + result.failure());
+                    // Red for the right reason? A text it expects that no step types and the
+                    // start tree does not hold is either shown by the new screen itself or is
+                    // data nobody entered - and then it fails on a correct screen too (section
+                    // 69). Its author was asked when it wrote the journey in a session; said
+                    // here so the run's own record has it.
+                    List<com.swarmcoder.verify.JourneyExpectations.Unentered> unentered =
+                        made.unentered().getOrDefault(result.journey().path(), List.of());
+                    if (!unentered.isEmpty()) {
+                        log("Red-check of the journeys: NOTE - \"" + result.journey().name()
+                            + "\" expects to see " + unentered.stream().map(one -> "\""
+                                + one.text() + "\" (step " + one.step() + ")").toList()
+                            + ", which no step of it types and no code of the start tree "
+                            + "holds. The application starts with no data of its own: unless "
+                            + "the new screen shows that text by itself, this journey fails "
+                            + "on a correct implementation too, not only because the screen "
+                            + "is missing.");
+                    }
+                }
+            }
+            return notRed;
+        } catch (com.swarmcoder.sandbox.DockerSandboxManager.SandboxException e) {
+            log("Red-check of the journeys was not run: " + e.getMessage());
+            return noContainerPark("The red check of the journeys", e);
+        } catch (Exception e) {
+            // Not passed over for good: the journeys are made after the last merge, and a
+            // journey that cannot be made there stops the run.
+            log("Red-check of the journeys could not be run (" + e.getMessage() + "); they are "
+                + "made after the last merge");
+            return null;
+        }
+    }
+
+    /**
+     * What a browser made of journeys on the tree the run started from.
+     *
+     * @param buildFailed null when the start tree built; otherwise the end of what the build said
+     * @param unentered   by journey path: the texts it expects that no step of it types and no
+     *                    code of the start tree holds (section 69); a journey with none is absent
+     */
+    record OnStartTree(JourneyRunner.Outcome outcome, String buildFailed,
+                       Map<String, List<com.swarmcoder.verify.JourneyExpectations.Unentered>> unentered) {}
+
+    /**
+     * Makes journeys on the tree the run STARTED from: a throwaway worktree at the start point,
+     * built with the contract's {@code compile} and {@code existing} commands, the application
+     * started the way the contract says, a real browser in the container. No model. Used by the
+     * red check of the journeys and to try a corrected journey (section 69).
+     *
+     * @param label keeps this worktree and branch apart from another use in the same run
+     */
+    OnStartTree journeysOnTheStartTree(Run run, List<JourneyFile.Journey> journeys, String label)
+            throws Exception {
+        VerifySpec spec = VerifySpecLoader.load(repoPath).orElse(null);
+        String branch = "swarm/redcheck/" + run.id() + "/" + label;
+        Path worktree = WORKTREE_ROOT.resolve("redcheck-" + run.id() + "-" + label);
         try {
             removeTree(worktree); // a leftover from a killed attempt, if any
             gitService.addOrResumeWorktree(branch, worktree, run.startPoint(), run.id().toString());
@@ -3538,24 +3785,19 @@ public class GreenfieldWorkflow {
                 outcome = JourneyRunner.run(target, spec, journeys, com.swarmcoder.verify.BlobSink.NONE,
                     new StringBuilder());
             }
-            String notRed = JourneysOfAPlan.notRed(claimed, outcome, buildFailed);
-            if (notRed == null) {
-                for (JourneyFile.Result result : outcome.results()) {
-                    log("Red-check of the journeys: \"" + result.journey().name() + "\" ("
-                        + result.journey().path() + ") fails on the start tree, as it must - "
-                        + result.failure());
+            // Read while the tree is still there, and only when a journey gives a reason to.
+            Map<String, List<com.swarmcoder.verify.JourneyExpectations.Unentered>> unentered =
+                new LinkedHashMap<>();
+            java.util.function.Predicate<String> held =
+                com.swarmcoder.knowledge.ProjectTexts.heldIn(worktree);
+            for (JourneyFile.Journey journey : journeys) {
+                List<com.swarmcoder.verify.JourneyExpectations.Unentered> found =
+                    com.swarmcoder.verify.JourneyExpectations.unentered(journey, held);
+                if (!found.isEmpty()) {
+                    unentered.putIfAbsent(journey.path(), found);
                 }
             }
-            return notRed;
-        } catch (com.swarmcoder.sandbox.DockerSandboxManager.SandboxException e) {
-            log("Red-check of the journeys was not run: " + e.getMessage());
-            return noContainerPark("The red check of the journeys", e);
-        } catch (Exception e) {
-            // Not passed over for good: the journeys are made after the last merge, and a
-            // journey that cannot be made there stops the run.
-            log("Red-check of the journeys could not be run (" + e.getMessage() + "); they are "
-                + "made after the last merge");
-            return null;
+            return new OnStartTree(outcome, buildFailed, unentered);
         } finally {
             removeTree(worktree);
             gitService.deleteCandidateBranch(branch);

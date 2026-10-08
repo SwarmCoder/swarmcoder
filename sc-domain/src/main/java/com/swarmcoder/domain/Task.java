@@ -143,6 +143,22 @@ public class Task {
      * object graph shows no browser code using what the task writes.
      */
     private String journeyWaiver;
+    /**
+     * True once a journey this task claims failed in the browser and went back to its author
+     * (section 69). It goes back once, before any worker repairs anything.
+     */
+    private boolean journeySentBack;
+    /**
+     * What sending the journey back to its author came to, in a sentence or two: the author's
+     * answer, and whether its correction was taken. Null until a journey was sent back. Shown
+     * in the run report and given to the workers when a repair round follows.
+     */
+    private String journeyReviewNote;
+    /**
+     * True once a refusal at final integration that names this task's own files (code nothing
+     * can reach) has sent the task back to the workers; it is sent once (section 69).
+     */
+    private boolean integrationRepairAttempted;
 
     public Task() {}
 
@@ -268,6 +284,24 @@ public class Task {
     public String getJourneyWaiver() { return journeyWaiver; }
     public void setJourneyWaiver(String journeyWaiver) { this.journeyWaiver = journeyWaiver; }
 
+    public boolean journeySentBack() { return journeySentBack; }
+    public boolean getJourneySentBack() { return journeySentBack; }
+    public void setJourneySentBack(boolean journeySentBack) {
+        this.journeySentBack = journeySentBack;
+    }
+
+    public String journeyReviewNote() { return journeyReviewNote; }
+    public String getJourneyReviewNote() { return journeyReviewNote; }
+    public void setJourneyReviewNote(String journeyReviewNote) {
+        this.journeyReviewNote = journeyReviewNote;
+    }
+
+    public boolean integrationRepairAttempted() { return integrationRepairAttempted; }
+    public boolean getIntegrationRepairAttempted() { return integrationRepairAttempted; }
+    public void setIntegrationRepairAttempted(boolean integrationRepairAttempted) {
+        this.integrationRepairAttempted = integrationRepairAttempted;
+    }
+
     public boolean journeyRepairAttempted() { return journeyRepairAttempted; }
     public boolean getJourneyRepairAttempted() { return journeyRepairAttempted; }
     public void setJourneyRepairAttempted(boolean journeyRepairAttempted) {
@@ -282,7 +316,10 @@ public class Task {
         return Objects.equals(this.id, that.id) && this.revision == that.revision && Objects.equals(this.title, that.title) && Objects.equals(this.instructions, that.instructions) && Objects.equals(this.writeSet, that.writeSet) && Objects.equals(this.readSet, that.readSet) && Objects.equals(this.criteria, that.criteria) && Objects.equals(this.acceptanceTestDir, that.acceptanceTestDir) && Objects.equals(this.knowledgeBriefId, that.knowledgeBriefId) && Objects.equals(this.budget, that.budget) && Objects.equals(this.swarmPolicy, that.swarmPolicy) && Objects.equals(this.state, that.state) && Objects.equals(this.requirementIds, that.requirementIds) && Objects.equals(this.storyId, that.storyId) && Objects.equals(this.criterionIds(), that.criterionIds()) && Objects.equals(this.selectedCandidateId, that.selectedCandidateId) && Objects.equals(this.commitSha, that.commitSha) && Objects.equals(this.authoredTests, that.authoredTests) && Objects.equals(this.authoredTestPaths(), that.authoredTestPaths()) && Objects.equals(this.checksAlreadyProved, that.checksAlreadyProved) && Objects.equals(this.deliveredContracts(), that.deliveredContracts()) && this.testRepairAttempted == that.testRepairAttempted && Objects.equals(this.siblingRepairPaths(), that.siblingRepairPaths())
             && Objects.equals(this.journeyPaths(), that.journeyPaths())
             && this.journeyRepairAttempted == that.journeyRepairAttempted
-            && Objects.equals(this.journeyWaiver, that.journeyWaiver);
+            && Objects.equals(this.journeyWaiver, that.journeyWaiver)
+            && this.journeySentBack == that.journeySentBack
+            && Objects.equals(this.journeyReviewNote, that.journeyReviewNote)
+            && this.integrationRepairAttempted == that.integrationRepairAttempted;
     }
 
     @Override

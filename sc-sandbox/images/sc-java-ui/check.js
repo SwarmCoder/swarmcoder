@@ -149,6 +149,13 @@ async function checkOne(context, check, baseUrl, navTimeout) {
           passed: false,
           message: String(e && e.message ? e.message : e).split('\n')[0] + where
         });
+        // What the page showed when the step failed, for the journey's author: the journey was
+        // written before the screen existed, so its selectors are guesses. Not a result, and
+        // marked passed so that nothing counts it as a failure.
+        const seen = await pageSeen(page);
+        if (seen) {
+          assertions.push({ selector: 'page-seen', passed: true, message: seen });
+        }
       }
     }
     if (check.assertNoConsoleErrors) {
@@ -182,6 +189,76 @@ async function checkOne(context, check, baseUrl, navTimeout) {
     assertions,
     screenshotBase64
   };
+}
+
+/*
+ * The page as a person and a selector meet it, read from the browser with no model: the roles
+ * and accessible names of what is on it, the placeholders of its fields (a placeholder is often
+ * taken for a name), and its visible text. Bounded, because it travels through the exec channel
+ * and is then shown to a model: at most 100 elements, 20 placeholders, 1,200 characters of text
+ * and 4,000 characters in all. Never throws; '' when nothing could be read.
+ */
+async function pageSeen(page) {
+  const parts = [];
+  const clean = (text, max) =>
+    String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, max);
+  try {
+    const lines = [];
+    if (page.accessibility && typeof page.accessibility.snapshot === 'function') {
+      const tree = await page.accessibility.snapshot({ interestingOnly: true });
+      const walk = (node, depth) => {
+        if (!node || lines.length >= 100) {
+          return;
+        }
+        const name = clean(node.name, 120);
+        const value = clean(node.value, 60);
+        const root = node.role === 'WebArea' || node.role === 'RootWebArea';
+        if (node.role && !root && (name || value)) {
+          lines.push('  '.repeat(Math.min(depth, 5)) + node.role + (name ? ' "' + name + '"' : '')
+            + (value ? ' value="' + value + '"' : '') + (node.disabled ? ' (disabled)' : ''));
+        }
+        for (const child of node.children || []) {
+          walk(child, root ? depth : depth + 1);
+        }
+      };
+      walk(tree, 0);
+    } else if (typeof page.locator('body').ariaSnapshot === 'function') {
+      // A newer driver has no accessibility.snapshot; its own outline says the same.
+      const outline = await page.locator('body').ariaSnapshot();
+      for (const line of String(outline).split('\n').slice(0, 100)) {
+        lines.push(line.slice(0, 200));
+      }
+    }
+    if (lines.length) {
+      parts.push('elements, as role "accessible name":\n' + lines.join('\n'));
+    }
+  } catch (ignored) {
+    // a reading, not a result
+  }
+  try {
+    const placeholders = await page.evaluate(() => Array.from(
+      document.querySelectorAll('[placeholder]')).slice(0, 20).map((field) => {
+        const label = field.getAttribute('aria-label')
+          || (field.labels && field.labels[0] ? field.labels[0].innerText : '');
+        return [field.getAttribute('placeholder'), label];
+      }));
+    const lines = placeholders.filter((pair) => clean(pair[0], 120)).map((pair) =>
+      '  placeholder "' + clean(pair[0], 120) + '"'
+        + (clean(pair[1], 120) ? ' on the field labelled "' + clean(pair[1], 120) + '"'
+          : ' on a field with no label'));
+    if (lines.length) {
+      parts.push('placeholders (a placeholder is not a label):\n' + lines.join('\n'));
+    }
+  } catch (ignored) {
+    // a reading, not a result
+  }
+  try {
+    const text = clean(await page.locator('body').innerText(), 1200);
+    parts.push(text ? 'visible text: ' + text : 'visible text: (none)');
+  } catch (ignored) {
+    // a reading, not a result
+  }
+  return parts.join('\n').slice(0, 4000);
 }
 
 main().catch((e) => {

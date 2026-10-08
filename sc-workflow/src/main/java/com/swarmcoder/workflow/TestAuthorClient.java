@@ -443,7 +443,9 @@ public class TestAuthorClient {
                     if (call.journeyDue()) {
                         own[0].expectingAJourney((path, content) ->
                             earlierJourneyObjection(call.repoRoot(), path, content))
-                            .journeyMayBeWaived(call.journeyWaivable());
+                            .journeyMayBeWaived(call.journeyWaivable())
+                            .knowingTheProjectsTexts(
+                                com.swarmcoder.knowledge.ProjectTexts.heldIn(call.repoRoot()));
                     }
                     return own[0].bindings();
                 }));
@@ -1851,6 +1853,220 @@ public class TestAuthorClient {
             + reason);
     }
 
+    /** The reply to {@link #reviewFailedJourney} when it is asked in one reply. */
+    public static class LlmJourneyReview {
+        public Boolean journeyIsWrong;
+        public String reason;
+        public String journey;
+    }
+
+    /**
+     * What the test author answered about a journey that failed in the browser.
+     *
+     * @param answered       false when the call failed or its reply could not be used; the
+     *                       caller then carries on as if nobody had been asked
+     * @param journeyIsWrong true when the author says the journey, not the screen, is wrong
+     * @param reason         the author's reason, in its own words; the failure when not answered
+     * @param corrected      the corrected journey's YAML; null unless the journey is wrong.
+     *                       Nothing is written here: whether it is taken is the caller's to
+     *                       decide, in a browser
+     */
+    public record JourneyReviewed(boolean answered, boolean journeyIsWrong, String reason,
+                                  String corrected) {
+
+        static JourneyReviewed unanswered(String why) {
+            return new JourneyReviewed(false, false, why, null);
+        }
+    }
+
+    static final String JOURNEY_REVIEW_BRIEF = "You are a test author. You wrote a journey for "
+        + "this task - what a person does in a browser - BEFORE the screen existed, so the "
+        + "names in its selectors were your choice. Every task of the story is now built and "
+        + "merged, the application was started, and a real browser made your journey from the "
+        + "entry page. It failed. Either the screen is wrong, or your journey asks for "
+        + "something the criteria and the design do not. Decide which, from the criteria, the "
+        + "design and what the page showed at the failing step - its elements by role and "
+        + "accessible name, its fields' placeholders and its visible text are below, read by "
+        + "the browser. Ways a journey is wrong: it finds an element by words the criteria do "
+        + "not fix, where the screen names the same element differently; it expects to see "
+        + "data no step of it enters, on an application that starts with no data of its own; "
+        + "it leaves out a step a person needs. Ways the screen is wrong: what a criterion "
+        + "asks for is not on it, cannot be reached from the entry page, or does nothing. If "
+        + "the journey is wrong, correct it so that it proves the same criteria: it keeps "
+        + "every use it makes of the screen (no fewer fill, click and press steps), it must "
+        + "still FAIL on the application as it was before the story, and it must pass on the "
+        + "built one - both are tried in a browser, and a correction that passes by asking for "
+        + "less is refused and your first journey stands. If the journey is right, change "
+        + "nothing and say what the screen got wrong: the workers repairing it are told "
+        + "exactly that.";
+
+    static final String JOURNEY_REVIEW_HOW = "\n\nHOW TO ANSWER. You have your lookup tools "
+        + "(texts_of <Type> gives the texts a screen holds), check_journey and report_done. "
+        + "Look up whatever the question turns on before you decide.\n"
+        + "- THE JOURNEY IS WRONG: give the corrected journey, complete, to check_journey at "
+        + "the same path until it answers VALID, then call report_done with two or three "
+        + "sentences saying what was wrong with the journey.\n"
+        + "- THE JOURNEY IS RIGHT: give check_journey nothing, and call report_done with two "
+        + "or three sentences saying what the screen got wrong.";
+
+    static final String JOURNEY_REVIEW_FINISH_ADVICE = "Stop looking things up. If the journey "
+        + "is wrong, give the corrected journey to check_journey and call report_done with "
+        + "what was wrong. If it is right, call report_done with what the screen got wrong.";
+
+    /**
+     * Asks the author of a journey which side is wrong (owner's decision, 2026-10-08, after
+     * live run 93): the journey failed in a real browser after the last merge. Before this a
+     * failed journey went straight to a worker repair round, and run 93's could not be repaired
+     * by any worker - it looked for a text box by a name the criteria did not fix, and expected
+     * a record nobody had entered. Not a repair call: the author may answer that the journey
+     * is right, and its reason is then what the repair workers are told.
+     *
+     * <p>In the author's own session when one can run - the conversation that wrote the journey
+     * when it is still kept - with its lookups and {@code check_journey}; what it came to is
+     * read from what the session DID, as for a suspect test. Otherwise one reply. No retry:
+     * an unusable answer is {@link JourneyReviewed#unanswered}.
+     *
+     * @param repoRoot     a tree of the project as it was before the story (the run's tests
+     *                     worktree); only read, to know which texts the project already holds
+     * @param whatHappened the failing step, what the browser said and what the page showed
+     */
+    public JourneyReviewed reviewFailedJourney(Path repoRoot, Task task, DesignDocument design,
+                                               String journeyPath, String journeyContent,
+                                               String whatHappened) {
+        String path = journeyPath.replace((char) 92, '/');
+        try {
+            String user = "Task: " + task.title() + "\n" + task.instructions()
+                + (task.criteria() == null || task.criteria().isEmpty() ? ""
+                    : "\n\nCriteria:\n" + String.join("\n", task.criteria().stream()
+                        .map(criterion -> "- " + criterion.text()).toList()))
+                + (design == null ? "" : "\n\nDesign contracts:\n"
+                    + ArchitectClient.designSummary(design))
+                + "\n\nThe journey, " + path + ":\n" + journeyContent
+                + "\n\nWHAT HAPPENED:\n" + (whatHappened == null ? "" : whatHappened);
+            LookupAgent agent = lookupAgent;
+            if (agent != null && task.acceptanceTestDir() != null) {
+                JourneyReviewed inSession = reviewJourneyInSession(agent, repoRoot, task, design,
+                    path, user);
+                if (inSession != null) {
+                    return inSession;
+                }
+            }
+            String system = JOURNEY_REVIEW_BRIEF + " Respond ONLY with JSON: "
+                + "{\"journeyIsWrong\":true|false,\"reason\":\"<two or three sentences>\","
+                + "\"journey\":\"<the complete corrected YAML; empty when the journey is "
+                + "right>\"}";
+            String response = oneShot(system, user, LlmJourneyReview.class);
+            LlmJourneyReview parsed;
+            try {
+                parsed = LlmJson.parse(mapper, response, LlmJourneyReview.class);
+            } catch (IOException parseFailure) {
+                return JourneyReviewed.unanswered(LlmReplyBlobs.describeFailure(
+                    blobs, "the test author's review of its journey", response,
+                    parseFailure.getMessage()));
+            }
+            if (parsed == null || parsed.journeyIsWrong == null) {
+                return JourneyReviewed.unanswered("the test author's review did not say which "
+                    + "side is wrong");
+            }
+            String reason = parsed.reason == null || parsed.reason.isBlank()
+                ? "(it gave no reason)" : parsed.reason.strip();
+            if (!parsed.journeyIsWrong) {
+                log.info("Test author reviewed the journey of task '{}' and stands by it: {}",
+                    task.title(), reason);
+                return new JourneyReviewed(true, false, reason, null);
+            }
+            if (parsed.journey == null || parsed.journey.isBlank()) {
+                return JourneyReviewed.unanswered("the test author said the journey is wrong ("
+                    + reason + ") but handed in no corrected journey");
+            }
+            log.info("Test author reviewed the journey of task '{}', found it wrong and "
+                + "corrected it: {}", task.title(), reason);
+            return new JourneyReviewed(true, true, reason, parsed.journey);
+        } catch (EndpointOutage outage) {
+            throw outage;
+        } catch (Exception e) {
+            log.warn("Journey review failed for task '{}': {}", task.title(), e.getMessage());
+            return JourneyReviewed.unanswered("the test author's review call failed: "
+                + e.getMessage());
+        }
+    }
+
+    /** @return null when no session could run at all; the caller then asks in one reply */
+    private JourneyReviewed reviewJourneyInSession(LookupAgent agent, Path repoRoot, Task task,
+                                                   DesignDocument design, String path,
+                                                   String user) {
+        String protectedDir = task.acceptanceTestDir();
+        String writeDir = ArchitectClient.acceptanceWriteDir(protectedDir);
+        java.util.function.Predicate<String> held =
+            com.swarmcoder.knowledge.ProjectTexts.heldIn(repoRoot);
+        TestAuthorTools[] own = new TestAuthorTools[1];
+        LookupAgent.Outcome outcome = null;
+        try {
+            KeptConversations.Held prior = kept.take(keyOf(task));
+            // The conversation that wrote the journey, when it is kept and was given
+            // check_journey then: its tools are bound for good, so one without it starts anew.
+            if (prior != null && prior.tools() instanceof TestAuthorTools again
+                    && again.journeyDue()) {
+                again.reviewingAJourney(path).knowingTheProjectsTexts(held);
+                outcome = agent.resume(client, prior.conversation(),
+                    "THIS IS THE SAME CONVERSATION, NOT A NEW TASK. Everything you looked up "
+                        + "above is still true. The journey you handed in is now in question. "
+                        + JOURNEY_REVIEW_BRIEF + "\n\n" + user + JOURNEY_REVIEW_HOW
+                        + " compile_test is not used in this review.").orElse(null);
+                own[0] = outcome == null ? null : again;
+            } else if (prior != null) {
+                prior.conversation().close();
+            }
+            if (outcome == null) {
+                outcome = agent.run(client, new LookupAgent.Ask("test author",
+                    JOURNEY_REVIEW_BRIEF, user + JOURNEY_REVIEW_HOW,
+                    LookupAgent.Limits.configured(), JOURNEY_REVIEW_FINISH_ADVICE,
+                    design == null ? List.of() : design.contracts(),
+                    session -> {
+                        own[0] = new TestAuthorTools(session, protectedDir, writeDir,
+                            files -> new TestAuthorTools.Verdict(false, ""))
+                            .reviewingAJourney(path).knowingTheProjectsTexts(held);
+                        return own[0].bindings();
+                    }));
+            }
+        } catch (EndpointOutage outage) {
+            throw outage;
+        } catch (RuntimeException e) {
+            log.warn("The test author's journey review session for task '{}' failed ({}); "
+                + "asking in one reply without tools", task.title(), e.toString());
+            return null;
+        }
+        TestAuthorTools tools = own[0];
+        if (outcome.conversation() != null) {
+            if (tools != null) {
+                kept.keep(keyOf(task), new KeptConversations.Held(outcome.conversation(), tools));
+            } else {
+                outcome.conversation().close();
+            }
+        }
+        if (tools == null || outcome.neverRan()) {
+            return null;
+        }
+        String said = tools.wrote().isBlank() ? oneLineOf(outcome.finalText()) : tools.wrote().strip();
+        String reason = said.isBlank() ? "(it gave no reason)" : said;
+        String corrected = tools.journeys().get(path);
+        if (corrected != null) {
+            log.info("Test author reviewed the journey of task '{}' in its session ({} "
+                + "turn(s)), found it wrong and corrected it: {}", task.title(),
+                outcome.turns(), reason);
+            return new JourneyReviewed(true, true, reason, corrected);
+        }
+        if (tools.handedIn()) {
+            log.info("Test author reviewed the journey of task '{}' in its session ({} "
+                + "turn(s)) and stands by it: {}", task.title(), outcome.turns(), reason);
+            return new JourneyReviewed(true, false, reason, null);
+        }
+        return JourneyReviewed.unanswered("the test author's review session ended after "
+            + outcome.turns() + " turn(s)" + outcome.stopped().map(k -> " (" + k.name() + ")")
+                .orElse("") + " with neither a corrected journey nor a hand-in; it ended on: "
+            + reason);
+    }
+
     private static String oneLineOf(String text) {
         String flat = text == null ? "" : text.strip().replaceAll("\\s+", " ");
         return flat.length() <= 600 ? flat : flat.substring(0, 600) + "...";
@@ -2212,6 +2428,9 @@ public class TestAuthorClient {
             + "application as it is today and pass when this task is done: go through what the "
             + "task adds or changes, use it, and end with expectVisible or expectHidden of what "
             + "the person sees when it has worked (what was just typed, shown where it belongs). "
+            + "The application is started with NO DATA of its own unless the project's contract "
+            + "says otherwise: what the journey expects to see, one of its own steps types or "
+            + "the new screen shows by itself - a record nobody entered is not there. "
             + "(3) Selectors are the browser driver's: role=button[name=\"Save\"], "
             + "role=link[name=\"Orders\"], role=textbox[name=\"Name\"], text=..., or CSS. Prefer "
             + "role and text selectors, worded as the criteria word it: a person finds things by "
