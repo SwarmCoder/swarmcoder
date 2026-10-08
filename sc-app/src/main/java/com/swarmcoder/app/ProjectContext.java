@@ -399,9 +399,15 @@ public final class ProjectContext {
                 }
             };
 
+        ArchitectClient architectAndPlanner = new ArchitectClient(roles.architect(),
+            shared.cloudGate(), taskPolicy, research, shared.blobSink());
+        // The task planner on its own model when roles.taskPlanner names one (section 73); it
+        // is the architect's own client otherwise, and then nothing changes.
+        if (roles.taskPlanner() != null && roles.taskPlanner() != roles.architect()) {
+            architectAndPlanner.setPlannerClient(roles.taskPlanner());
+        }
         this.cloudRoles = new CloudRoles(
-            new ArchitectClient(roles.architect(), shared.cloudGate(), taskPolicy, research,
-                shared.blobSink()),
+            architectAndPlanner,
             new DesignReviewerClient(roles.reviewer(), shared.cloudGate()),
             new TestAuthorClient(roles.testAuthor(), shared.cloudGate(), shared.blobSink()));
 

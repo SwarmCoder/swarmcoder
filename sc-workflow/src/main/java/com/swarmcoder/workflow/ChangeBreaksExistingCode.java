@@ -116,77 +116,109 @@ final class ChangeBreaksExistingCode {
                 continue; // an empty write set is unrestricted
             }
             for (ApiContract contract : task.deliveredContracts()) {
-                if (contract == null || !contract.namesAType()) {
+                Broken broken = brokenBy(types, subtypes, repoRoot, contract);
+                if (broken == null) {
                     continue;
                 }
-                String fullName = contract.typeName().strip();
-                if (!types.declares(fullName) || !types.bodyWasRead(fullName)) {
-                    continue;
-                }
-                List<String> added = addedMembers(types, contract);
-                if (added.isEmpty()) {
-                    continue;
-                }
-                String kind = types.kindOf(fullName);
-                Map<String, String> broken = new LinkedHashMap<>(); // path -> why
-                List<String> breaking = new ArrayList<>();
-                if ("record".equals(kind)) {
-                    List<String> components = added.stream()
-                        .filter(m -> ContractMember.parse(m, simple(fullName)).map(p -> !p.method()).orElse(false))
-                        .toList();
-                    if (!components.isEmpty()) {
-                        breaking.addAll(components);
-                        for (Path caller : constructorCallers(types, fullName)) {
-                            broken.put(relative(repoRoot, caller), "constructs it");
-                        }
-                    }
-                } else {
-                    boolean isInterface = "interface".equals(kind);
-                    boolean isAbstractClass = "class".equals(kind)
-                        && declaredAbstract(types.fileOf(fullName), simple(fullName));
-                    if (!isInterface && !isAbstractClass) {
-                        continue;
-                    }
-                    List<ContractMember> abstractMethods = new ArrayList<>();
-                    for (String member : added) {
-                        Optional<ContractMember> parsed = ContractMember.parse(member);
-                        if (parsed.isEmpty() || !parsed.get().method()
-                                || parsed.get().name().equals(simple(fullName))) {
-                            continue;
-                        }
-                        boolean isAbstract = isInterface
-                            ? !NON_ABSTRACT_IN_INTERFACE.matcher(member).find()
-                            : ABSTRACT.matcher(member).find();
-                        if (isAbstract) {
-                            abstractMethods.add(parsed.get());
-                            breaking.add(member.strip());
-                        }
-                    }
-                    if (abstractMethods.isEmpty()) {
-                        continue;
-                    }
-                    for (String implementor : concreteImplementors(types, subtypes, fullName)) {
-                        Set<String> has = types.membersOf(implementor).stream()
-                            .filter(JavaSourceFacts.Declared::method)
-                            .map(JavaSourceFacts.Declared::name).collect(Collectors.toSet());
-                        boolean lacksOne = abstractMethods.stream()
-                            .anyMatch(m -> !has.contains(m.name()));
-                        Path file = types.fileOf(implementor);
-                        if (lacksOne && file != null) {
-                            broken.put(relative(repoRoot, file),
-                                (isInterface ? "implements it" : "extends it"));
-                        }
-                    }
-                }
-                List<String> outside = broken.keySet().stream()
+                List<String> outside = broken.files().keySet().stream()
                     .filter(path -> !covered(task.writeSet(), path)).toList();
                 if (outside.isEmpty()) {
                     continue;
                 }
-                objections.add(message(graph, task, fullName, kind, breaking, outside, broken));
+                objections.add(message(graph, task, broken.fullName(), broken.kind(),
+                    broken.breaking(), outside, broken.files()));
             }
         }
         return objections;
+    }
+
+    /**
+     * What one contract's change to an existing type breaks.
+     *
+     * @param fullName the existing type the contract changes
+     * @param kind     what that type is: interface, class or record
+     * @param breaking the members the contract adds that break other code
+     * @param files    every existing file that stops compiling, repo-relative, with why
+     */
+    record Broken(String fullName, String kind, List<String> breaking, Map<String, String> files) {
+    }
+
+    /** Full name of a type the tree declares, to the types that name it in their header. */
+    static Map<String, List<String>> subtypesIn(ProjectTypes types) {
+        return directSubtypes(types);
+    }
+
+    /**
+     * The existing files that stop compiling when {@code contract} is delivered on a type the
+     * start tree already declares, or null when it breaks nothing that can be read from the
+     * tree. The same reading the objection is made from; {@code ComputedReservation} reserves
+     * these files for the task that delivers the contract (section 73).
+     */
+    static Broken brokenBy(ProjectTypes types, Map<String, List<String>> subtypes, Path repoRoot,
+                           ApiContract contract) {
+        if (types == null || contract == null || !contract.namesAType()) {
+            return null;
+        }
+        String fullName = contract.typeName().strip();
+        if (!types.declares(fullName) || !types.bodyWasRead(fullName)) {
+            return null;
+        }
+        List<String> added = addedMembers(types, contract);
+        if (added.isEmpty()) {
+            return null;
+        }
+        String kind = types.kindOf(fullName);
+        Map<String, String> broken = new LinkedHashMap<>(); // path -> why
+        List<String> breaking = new ArrayList<>();
+        if ("record".equals(kind)) {
+            List<String> components = added.stream()
+                .filter(m -> ContractMember.parse(m, simple(fullName)).map(p -> !p.method()).orElse(false))
+                .toList();
+            if (!components.isEmpty()) {
+                breaking.addAll(components);
+                for (Path caller : constructorCallers(types, fullName)) {
+                    broken.put(relative(repoRoot, caller), "constructs it");
+                }
+            }
+        } else {
+            boolean isInterface = "interface".equals(kind);
+            boolean isAbstractClass = "class".equals(kind)
+                && declaredAbstract(types.fileOf(fullName), simple(fullName));
+            if (!isInterface && !isAbstractClass) {
+                return null;
+            }
+            List<ContractMember> abstractMethods = new ArrayList<>();
+            for (String member : added) {
+                Optional<ContractMember> parsed = ContractMember.parse(member);
+                if (parsed.isEmpty() || !parsed.get().method()
+                        || parsed.get().name().equals(simple(fullName))) {
+                    continue;
+                }
+                boolean isAbstract = isInterface
+                    ? !NON_ABSTRACT_IN_INTERFACE.matcher(member).find()
+                    : ABSTRACT.matcher(member).find();
+                if (isAbstract) {
+                    abstractMethods.add(parsed.get());
+                    breaking.add(member.strip());
+                }
+            }
+            if (abstractMethods.isEmpty()) {
+                return null;
+            }
+            for (String implementor : concreteImplementors(types, subtypes, fullName)) {
+                Set<String> has = types.membersOf(implementor).stream()
+                    .filter(JavaSourceFacts.Declared::method)
+                    .map(JavaSourceFacts.Declared::name).collect(Collectors.toSet());
+                boolean lacksOne = abstractMethods.stream()
+                    .anyMatch(m -> !has.contains(m.name()));
+                Path file = types.fileOf(implementor);
+                if (lacksOne && file != null) {
+                    broken.put(relative(repoRoot, file),
+                        (isInterface ? "implements it" : "extends it"));
+                }
+            }
+        }
+        return broken.isEmpty() ? null : new Broken(fullName, kind, breaking, broken);
     }
 
     private static String message(TaskGraph graph, Task task, String fullName, String kind,
@@ -343,7 +375,7 @@ final class ChangeBreaksExistingCode {
         return p.endsWith("/") ? p.substring(0, p.length() - 1) : p;
     }
 
-    private static String relative(Path root, Path file) {
+    static String relative(Path root, Path file) {
         return root.toAbsolutePath().normalize().relativize(file.toAbsolutePath().normalize())
             .toString().replace('\\', '/');
     }

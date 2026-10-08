@@ -119,9 +119,24 @@ public final class PathPolicy {
      *       turn 10 with the evidence thrown away.</li>
      * </ul>
      */
-    public record Verdict(String reason, boolean lethal) {
+    public record Verdict(String reason, boolean lethal, boolean heldByAnotherTask) {
+
+        public Verdict(String reason, boolean lethal) {
+            this(reason, lethal, false);
+        }
+
         public boolean allowed() {
             return reason == null;
+        }
+
+        /**
+         * The path is outside the task's own reservation and another task of the plan holds it
+         * (section 73): the write does not happen and the reason names that task. It is not
+         * {@link #lethal()} - a worker is not stopped for asking - and it is not the plain
+         * "outside the write set", which is written and recorded.
+         */
+        public static Verdict heldByAnotherTask(String reason) {
+            return new Verdict(reason, false, true);
         }
 
         public static final Verdict ALLOWED = new Verdict(null, false);
@@ -247,6 +262,48 @@ public final class PathPolicy {
         }
         // NOT lethal — see Verdict. The write happens and the path is recorded.
         return Verdict.outsideWriteSet(path + " is outside your write set " + writeSet);
+    }
+
+    /**
+     * Who else of the plan holds a path a task did not reserve (owner's decision, 2026-10-08;
+     * section 73).
+     *
+     * <p>A task's write set is a reservation, not a wall: a file outside it that no other task
+     * of the plan holds, and that nothing protects, is the task's when a worker writes it. The
+     * answer is given from the plan, which the orchestrator holds in memory and in its store -
+     * never from anything in the worker's tree, so the rule of section 13 stands: policy is
+     * resolved from a tree the restrained party cannot write. What is protected is decided
+     * before this is ever asked and is refused whoever holds what.
+     */
+    public interface OtherTasks {
+        /**
+         * Takes {@code path} for the asking task, or says why it may not have it.
+         *
+         * @param path canonical, repo-relative, outside the asking task's own reservation and
+         *             not protected
+         * @return null when no other task holds it - it is now the asking task's; otherwise the
+         *         refusal, naming the task that holds it
+         */
+        String take(String path);
+    }
+
+    /**
+     * {@link #check(String, Collection, String, Collection)}, and for a path that is merely
+     * outside the task's reservation, whether another task of the plan holds it. Everything
+     * that check refuses is refused here first and in the same words; {@code others} is asked
+     * only about a path that would otherwise have been written and recorded.
+     *
+     * @param others null asks nobody: outside the write set is written and recorded, as before
+     */
+    public static Verdict check(String relPath, Collection<String> writeSet,
+                                String acceptanceTestDir, Collection<String> protectedPaths,
+                                OtherTasks others) {
+        Verdict verdict = check(relPath, writeSet, acceptanceTestDir, protectedPaths);
+        if (verdict.allowed() || verdict.lethal() || others == null || relPath == null) {
+            return verdict;
+        }
+        String refusal = others.take(relPath.replace('\\', '/'));
+        return refusal == null ? verdict : Verdict.heldByAnotherTask(refusal);
     }
 
     /** Prefix containment on whole path segments, so "src" never matches "srcgen/x". */

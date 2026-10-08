@@ -46,5 +46,19 @@ public record RoleClients(
      */
     boolean utilityConfigured,
     /** Same as {@link #utilityConfigured}, for {@code roles.architect} — the desk's fallback role. */
-    boolean architectConfigured
-) {}
+    boolean architectConfigured,
+    /**
+     * The task planner, which splits a design into tasks and orders them —
+     * {@code roles.taskPlanner}, falling back to the architect's own client (section 73).
+     */
+    VllmClient taskPlanner
+) {
+    /** The clients as they were before the task planner had its own: it is the architect's. */
+    public RoleClients(VllmClient architect, VllmClient reviewer, VllmClient testAuthor,
+                       VllmClient judge, VllmClient utility, VllmClient chat,
+                       VllmClient requirementsAnalyst, VllmClient storyPlanner,
+                       boolean utilityConfigured, boolean architectConfigured) {
+        this(architect, reviewer, testAuthor, judge, utility, chat, requirementsAnalyst,
+            storyPlanner, utilityConfigured, architectConfigured, architect);
+    }
+}

@@ -40,13 +40,26 @@ import java.util.List;
  * could not separate; and the integrators dropped the files that are not source (a stray note, a
  * script). A source file outside the write set was merged like any other.
  *
- * <h2>The rule now</h2>
+ * <h2>The rule from 2026-10-03 to 2026-10-08</h2>
  *
- * <p>Source changes outside the write set fail the candidate at verification, so it never counts
- * as a candidate that passed and is never selected. The write set is the one the task has NOW:
- * when the product widened it ({@link RepairCannotHelp}, {@link SiblingDefects}), the files it
- * was widened to are inside it. Files that are not source keep being dropped at integration, and
- * a build file is left to the judge as before - a task may need to declare a dependency.
+ * <p>Every source change outside the write set failed the candidate at verification. That
+ * stopped run 74's fault and, with write sets guessed by the planner model, also stopped work
+ * that was right: run 90 lost a whole build to it.
+ *
+ * <h2>The rule now (owner's decision, 2026-10-08; section 73)</h2>
+ *
+ * <p>A write set is a reservation. A source file outside it that NO OTHER TASK of the plan
+ * holds is the task's to take: the candidate passes, the judge sees the real diff, and the file
+ * is recorded on the task when the candidate is selected. A source file that another task holds
+ * - one built at the same time, or one the plan runs later - still fails the candidate here,
+ * which is exactly run 74's case. The worker is refused such a write when it makes it
+ * ({@link ReservationBook}); this is the second place it is checked, for what a shell command
+ * wrote past the tools.
+ *
+ * <p>The write set is the one the task has NOW: when the product widened it
+ * ({@link RepairCannotHelp}, {@link SiblingDefects}), the files it was widened to are inside
+ * it. Files that are not source keep being dropped at integration, and a build file is left to
+ * the judge as before - a task may need to declare a dependency.
  */
 final class SourceOutsideWriteSet {
 
@@ -87,28 +100,84 @@ final class SourceOutsideWriteSet {
         return outside;
     }
 
-    /** The verdict sentence, or null when the candidate stayed inside its write set. */
-    static String objection(Task task, CandidateSolution candidate) {
-        List<String> outside = paths(task, candidate);
-        if (outside.isEmpty()) {
-            return null;
+    /**
+     * The source files outside the task's write set that another task of the plan holds, each
+     * with the title of that task. Empty when the candidate took only files nobody else holds.
+     *
+     * @param book who holds what in this run's plan; null knows of no other task, so nothing
+     *             is held
+     */
+    static java.util.Map<String, String> heldByOthers(Task task, CandidateSolution candidate,
+                                                       ReservationBook book) {
+        java.util.Map<String, String> held = new java.util.LinkedHashMap<>();
+        if (book == null) {
+            return held;
         }
-        StringBuilder named = new StringBuilder(String.join(", ",
-            outside.stream().limit(MAX_NAMED).toList()));
-        if (outside.size() > MAX_NAMED) {
-            named.append(" and ").append(outside.size() - MAX_NAMED).append(" more");
+        for (String path : paths(task, candidate)) {
+            ReservationBook.Decision decision = book.standing(task, path);
+            if (decision.standing() != ReservationBook.Standing.FREE) {
+                held.put(path, "'" + decision.holder().title() + "', "
+                    + (decision.standing() == ReservationBook.Standing.HELD_NOW
+                        ? "built at the same time" : "which the plan runs later"));
+            }
         }
-        return "the candidate changed " + (outside.size() == 1 ? "a source file" : outside.size()
-            + " source files") + " outside the task's write set " + task.writeSet() + ": " + named
-            + ". Another task may own " + (outside.size() == 1 ? "that file" : "those files")
-            + ", so a change there is never selected, whatever else it passes. Make the task's "
-            + "change inside its write set and leave " + (outside.size() == 1 ? "that file"
-            + " as it was" : "those files as they were") + "; if the task cannot be done without "
-            + (outside.size() == 1 ? "it" : "them") + ", say so in your report - that is a fault "
-            + "in the plan";
+        return held;
     }
 
-    private static boolean isBuildFile(String path) {
+    /**
+     * The verdict sentence, or null when every source file the candidate changed outside its
+     * write set is one no other task of the plan holds.
+     */
+    static String objection(Task task, CandidateSolution candidate, ReservationBook book) {
+        java.util.Map<String, String> held = heldByOthers(task, candidate, book);
+        if (held.isEmpty()) {
+            return null;
+        }
+        List<String> named = new ArrayList<>();
+        held.forEach((path, holder) -> {
+            if (named.size() < MAX_NAMED) {
+                named.add(path + " (held by " + holder + ")");
+            }
+        });
+        boolean one = held.size() == 1;
+        return "the candidate changed " + (one ? "a source file" : held.size() + " source files")
+            + " that another task of this plan holds: " + String.join(", ", named)
+            + (held.size() > MAX_NAMED ? " and " + (held.size() - MAX_NAMED) + " more" : "")
+            + ". A change there is never selected, whatever else it passes: the other task's "
+            + "work and this one could not both be merged. Make the task's change without "
+            + (one ? "that file and leave it as it was" : "those files and leave them as they "
+            + "were") + "; if the task cannot be done without " + (one ? "it" : "them")
+            + ", say so in your report - that is a fault in the plan";
+    }
+
+    /**
+     * The reservation of a task grows by what its selected candidate took: the source files it
+     * changed outside the write set - every one held by no other task, or verification would
+     * have failed it. They are added to the task's write set and to its record of files taken
+     * beyond the plan. Two candidates of one task may have taken different files; only the
+     * selected one's count.
+     *
+     * @return the files added now; empty when the candidate stayed inside the reservation
+     */
+    static List<String> growReservation(Task task, CandidateSolution selected) {
+        List<String> beyond = paths(task, selected);
+        if (beyond.isEmpty()) {
+            return beyond;
+        }
+        java.util.Set<String> grown = new java.util.LinkedHashSet<>(task.writeSet());
+        grown.addAll(beyond);
+        List<String> recorded = new ArrayList<>(task.takenBeyondPlan());
+        for (String path : beyond) {
+            if (!recorded.contains(path)) {
+                recorded.add(path);
+            }
+        }
+        task.setWriteSet(grown);
+        task.setTakenBeyondPlan(recorded);
+        return beyond;
+    }
+
+    static boolean isBuildFile(String path) {
         String name = path.substring(path.lastIndexOf('/') + 1);
         return "pom.xml".equals(name) || "build.gradle".equals(name)
             || "build.gradle.kts".equals(name) || "settings.gradle".equals(name)

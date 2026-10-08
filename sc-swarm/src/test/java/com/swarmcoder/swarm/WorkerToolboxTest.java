@@ -96,7 +96,7 @@ class WorkerToolboxTest {
         String result = toolbox.applyDiff(PATCH);
 
         assertThat(result).startsWith("applied cleanly").contains("[write policy]")
-            .contains("outside your write set").contains("KEPT");
+            .contains("outside the paths reserved for your task").contains("KEPT");
         assertThat(Files.readString(repo.resolve("src/App.java"))).contains("added by worker");
         assertThat(toolbox.outOfWriteSetPaths()).containsExactly("src/App.java");
         assertThat(toolbox.blockingViolations()).isZero();

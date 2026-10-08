@@ -62,6 +62,18 @@ final class PlanConnectsWhatItAdds {
      * @param repoPath  that tree, to tell a new file from one that is there
      */
     static String objection(TaskGraph plan, ReachableCode.Graph startTree, Path repoPath) {
+        return objection(plan, startTree, repoPath, null);
+    }
+
+    /**
+     * @param design the design the plan decomposes; null reads the tasks alone. What "its task
+     *               says" about a new type used to be the planner's how-to prose. Since section
+     *               73 the planner writes none: that a type carries a discovery annotation is
+     *               said by the contract or by a finding the architect kept about it, so those
+     *               findings are read here with the contracts they are about.
+     */
+    static String objection(TaskGraph plan, ReachableCode.Graph startTree, Path repoPath,
+                            com.swarmcoder.domain.DesignDocument design) {
         if (!ReachableCode.enabled() || plan == null || plan.tasks() == null || startTree == null
                 || repoPath == null) {
             return null;
@@ -77,6 +89,16 @@ final class PlanConnectsWhatItAdds {
                     : contract.signatureSketch());
                 if (contract.members() != null) {
                     contract.members().forEach(member -> told.append('\n').append(member));
+                }
+                if (design != null) {
+                    for (com.swarmcoder.domain.DesignFinding finding : design.findings()) {
+                        if (finding != null && finding.isAbout(contract)) {
+                            told.append('\n').append(finding.note() == null ? ""
+                                : finding.note());
+                            told.append('\n').append(finding.snippet() == null ? ""
+                                : finding.snippet());
+                        }
+                    }
                 }
             }
             tasks.add(new ReachableCode.PlannedTask(task.title(), task.writeSet(),

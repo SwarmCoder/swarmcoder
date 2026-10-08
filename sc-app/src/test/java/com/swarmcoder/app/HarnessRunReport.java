@@ -484,6 +484,7 @@ final class HarnessRunReport {
                     .append('\n');
             }
             sb.append(openingOf(in.spans(), task.id()));
+            sb.append(handoverOf(in.spans(), task));
             List<AgentSessionRecord> sessions = in.sessions().stream()
                 .filter(s -> task.id().equals(s.taskId()))
                 .sorted(Comparator.comparing(AgentSessionRecord::openedAt,
@@ -569,6 +570,43 @@ final class HarnessRunReport {
                 + ". Estimated at 4 characters a token, per part of the opening; the tool "
                 + "definitions are sent beside it and are not in this figure.")
             .append('\n');
+        return sb.toString();
+    }
+
+    /**
+     * What the task's workers were given of the architect's findings, and the files of the
+     * task: how many the plan reserved by computation, and which the selected candidate took
+     * beyond the plan (section 73). The findings are read from the span the dispatcher records
+     * at each dispatch; the files from the task.
+     */
+    static String handoverOf(List<RunMeter.Span> spans, Task task) {
+        List<String> given = new ArrayList<>();
+        for (RunMeter.Span span : spans) {
+            String name = span.name();
+            if (name.startsWith(com.swarmcoder.swarm.SwarmDispatcher.WORKER_HANDOVER_SPAN
+                    + task.id() + "|")) {
+                String[] parts = name.split("\\|");
+                if (parts.length >= 5) {
+                    long chars = 0;
+                    try {
+                        chars = Long.parseLong(parts[4]);
+                    } catch (NumberFormatException e) {
+                        // left at 0: the count is still shown
+                    }
+                    given.add(parts[2] + " dispatch " + parts[3] + " finding(s), " + parts[4]
+                        + " characters, about " + (chars + 3) / 4 + " tokens");
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder("Architect's findings given to the workers: ")
+            .append(given.isEmpty() ? NOT_RECORDED : String.join("; ", given)).append('\n');
+        sb.append("Files reserved for the task: ")
+            .append(task.writeSet() == null ? 0 : task.writeSet().size()).append(", ")
+            .append(task.computedReservation().size()).append(" of them computed from its "
+                + "contracts and the project's types\n");
+        sb.append("Files taken beyond the plan: ")
+            .append(task.takenBeyondPlan().isEmpty() ? "none"
+                : String.join(", ", task.takenBeyondPlan())).append('\n');
         return sb.toString();
     }
 

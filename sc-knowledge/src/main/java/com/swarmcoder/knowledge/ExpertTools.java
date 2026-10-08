@@ -269,6 +269,67 @@ public final class ExpertTools {
         }
     }
 
+    /**
+     * What a lookup of this session returned, as the role saw it, for a role's own tool that
+     * keeps part of a result (section 73: the architect's findings are lines of its lookups,
+     * copied here and never typed again by the model).
+     *
+     * @param call the lookup as it was made: the tool's name, a space, its argument. The
+     *             argument alone is taken too. The latest call that matches and found something
+     *             answers; a call with several arguments is matched by its first.
+     * @return the call as recorded ({@code tool argument}) and its result; empty when no call of
+     *         this session that found something matches
+     */
+    public Optional<java.util.Map.Entry<String, String>> resultOf(String call) {
+        if (call == null || call.isBlank()) {
+            return Optional.empty();
+        }
+        String asked = call.strip();
+        int space = asked.indexOf(' ');
+        String tool = space < 0 ? "" : asked.substring(0, space);
+        String argument = space < 0 ? asked : asked.substring(space + 1).strip();
+        List<Found> all = lookups();
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = all.size() - 1; i >= 0; i--) {
+                Found found = all.get(i);
+                if (!found.foundSomething() || found.argument() == null
+                        || ownTools.contains(found.tool())) {
+                    continue;
+                }
+                String recorded = found.argument().strip();
+                boolean matches = pass == 0
+                    ? found.tool().equals(tool) && (recorded.equals(argument)
+                        || recorded.startsWith(argument + " ["))
+                    : recorded.equals(asked);
+                if (matches) {
+                    return Optional.of(java.util.Map.entry(found.tool() + " " + recorded,
+                        found.result()));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** The names of the role's own tools that ran in this session: they are not lookups. */
+    private final Set<String> ownTools = ConcurrentHashMap.newKeySet();
+
+    /** The latest lookups of this session that found something, as {@code tool argument}. */
+    public List<String> callsThatFound(int max) {
+        List<Found> all = lookups();
+        List<String> calls = new ArrayList<>();
+        for (int i = all.size() - 1; i >= 0 && calls.size() < max; i--) {
+            Found found = all.get(i);
+            if (found.foundSomething() && found.argument() != null
+                    && !ownTools.contains(found.tool())) {
+                String call = found.tool() + " " + found.argument().strip();
+                if (!calls.contains(call)) {
+                    calls.add(call);
+                }
+            }
+        }
+        return calls;
+    }
+
     /** Every lookup this expert made, in order — a name repeats when it was called twice. */
     public List<String> used() {
         synchronized (used) {
@@ -1594,6 +1655,9 @@ public final class ExpertTools {
                        java.util.function.Supplier<String> body) {
         synchronized (used) {
             used.add(tool);
+        }
+        if (kind == Kind.OWN) {
+            ownTools.add(tool);
         }
         if (cloudGate != null && cloudGate.exhausted()) {
             return "The budget for this run is spent, so no more can be looked up. Answer with "

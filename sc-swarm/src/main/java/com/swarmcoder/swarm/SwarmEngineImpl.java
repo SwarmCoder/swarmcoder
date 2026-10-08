@@ -246,6 +246,20 @@ public class SwarmEngineImpl implements SwarmEngine {
             Run run = artifactStore.root().runs.get(id);
             return run == null ? null : run.acceptanceTestsCommit();
         });
+        this.dispatcher.setReservationsOf(this::reservationsOf);
+    }
+
+    /**
+     * Who of a run's plan holds which file, for as long as the run is in flight (section 73).
+     * Made from the plan the first time a task of the run asks, so a run resumed from a
+     * snapshot, or one task built again on its own, has it too.
+     */
+    private final Map<UUID, ReservationBook> reservations =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    ReservationBook reservationsOf(UUID runId) {
+        return runId == null ? null
+            : reservations.computeIfAbsent(runId, id -> ReservationBook.of(wavesOf(id)));
     }
 
     /** For tests: a probe whose answers the test controls. */
@@ -486,6 +500,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             awaitCandidatesStillEnding(run.id());
             groupsOfRun.remove(run.id());
             runsInFlight.remove(run.id());
+            reservations.remove(run.id());
         }
     }
 
@@ -1568,13 +1583,14 @@ public class SwarmEngineImpl implements SwarmEngine {
                 // Every candidate wrote the same source file of a task that has not run yet
                 // (live run 90, 2026-10-07): the plan ran the two in the wrong order, and a
                 // repair round with the same order cannot succeed. See FileOfATaskNotYetRun.
-                FileOfATaskNotYetRun.Finding wrongOrder =
-                    FileOfATaskNotYetRun.find(task, verified, wavesOf(runId));
+                FileOfATaskNotYetRun.Finding wrongOrder = FileOfATaskNotYetRun.find(task,
+                    verified, wavesOf(runId), reservationsOf(runId));
                 if (wrongOrder != null) {
-                    log.warn("Task '{}': every verified candidate ({}) wrote {}, outside the "
+                    log.warn("Task '{}': {} candidate(s) {} {}, outside the "
                         + "task's write set and owned by {}, which the plan runs beside or after "
                         + "it. No repair round - it could not succeed. BLOCKED: the plan is at "
                         + "fault, not the candidates.", task.title(), wrongOrder.candidates(),
+                        wrongOrder.refused() ? "were refused" : "wrote",
                         wrongOrder.files().keySet(), wrongOrder.owners());
                     markTaskState(task, TaskState.BLOCKED);
                     queueBlockedDecision(task, runId, archivePool,
@@ -2398,6 +2414,9 @@ public class SwarmEngineImpl implements SwarmEngine {
         if (winner == null) {
             repairSiblingInsteadOfBlocking(task, runId, archivePool);
         }
+        if (winner != null) {
+            recordWhatWasTakenBeyondThePlan(task, winner);
+        }
         markTaskState(task, winner != null ? TaskState.SELECTED : TaskState.BLOCKED);
         if (winner == null) {
             // Selection refusing everything must reach the OPERATOR, not just the log. Without
@@ -2412,6 +2431,28 @@ public class SwarmEngineImpl implements SwarmEngine {
         }
         archiveCandidates(archivePool, winner);
         return winner;
+    }
+
+    /**
+     * The reservation of a task grows by what its selected candidate took (section 73): the
+     * source files it changed outside the write set, every one of them held by no other task or
+     * verification would have failed it. They are added to the write set and listed on the
+     * task, so the run report shows them and every later check reads one set. Two candidates of
+     * one task may have taken different files; only the selected one's count.
+     */
+    private void recordWhatWasTakenBeyondThePlan(Task task, CandidateSolution winner) {
+        List<String> beyond = SourceOutsideWriteSet.growReservation(task, winner);
+        if (beyond.isEmpty()) {
+            return;
+        }
+        log.info("Task '{}': the selected candidate took {} file(s) beyond the plan, held by "
+            + "no other task: {}", task.title(), beyond.size(), beyond);
+        try {
+            artifactStore.storeChanged(task).get();
+        } catch (Exception e) {
+            log.warn("Failed to persist what task '{}' took beyond the plan: {}", task.title(),
+                e.getMessage());
+        }
     }
 
     /**
@@ -3267,11 +3308,13 @@ public class SwarmEngineImpl implements SwarmEngine {
                 verdict = new Verdicts.Verdict(false, shortfall);
             }
         }
-        // Source files changed outside the task's write set (live run 74): such a candidate
-        // never counts as one that passed. Asked only of one that otherwise survived, so a
-        // candidate failing for another reason keeps that reason. See SourceOutsideWriteSet.
+        // Source files changed outside the task's write set that ANOTHER TASK of the plan holds
+        // (live run 74): such a candidate never counts as one that passed. A file nobody else
+        // holds is the task's to take (section 73). Asked only of one that otherwise survived,
+        // so a candidate failing for another reason keeps that reason. See
+        // SourceOutsideWriteSet.
         if (verdict.survived()) {
-            String outside = SourceOutsideWriteSet.objection(task, sol);
+            String outside = SourceOutsideWriteSet.objection(task, sol, reservationsOf(runId));
             if (outside != null) {
                 verdict = new Verdicts.Verdict(false, outside);
             }

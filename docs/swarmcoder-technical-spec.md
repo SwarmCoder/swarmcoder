@@ -732,6 +732,7 @@ roles:
   requirementsAnalyst: glm52   # BRD author: documents -> requirement graph. Unset -> chat -> utility
   storyPlanner: glm52          # agreed checks -> stories.            Unset -> chat -> utility
   architect: glm52
+  taskPlanner: glm52           # design -> tasks, in order. Writes no how-to. Unset -> architect
   testAuthor: glm52
   librarian: glm52
   designReviewer: deepseek     # de-correlated from architect

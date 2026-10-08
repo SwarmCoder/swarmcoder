@@ -1160,6 +1160,7 @@ public class TestAuthorClient {
                     + "or names a class this project does not have, can never pass however well it "
                     + "is written — and it will stop the run rather than fail honestly.\n\n";
             String user = rules + "Task: " + task.title() + "\n" + task.instructions()
+                + established(task)
                 + "\n\nAcceptance criteria:\n" + criteria
                 + (design == null ? "" : "\nDesign contracts:\n" + ArchitectClient.designSummary(design))
                 // The project's own existing types, with their real packages and members (live
@@ -2335,6 +2336,7 @@ public class TestAuthorClient {
         try {
             StringBuilder user = new StringBuilder("Task: ").append(task.title()).append('\n')
                 .append(task.instructions())
+                .append(established(task))
                 .append(design == null ? "" : "\n\nDesign contracts:\n" + ArchitectClient.designSummary(design))
                 .append(rulesForRepair())
                 .append(exampleFor(task, design))
@@ -2643,5 +2645,16 @@ public class TestAuthorClient {
             + "user interface does. This project starts its application and looks at it with a real "
             + "browser in a later stage, and THAT is what proves the screen half. Your job is "
             + "everything underneath it.";
+    }
+
+    /**
+     * What the architect established for this task, as the task's workers are given it (section
+     * 73): the test is written against the same facts the code will be. Nothing when the
+     * architect kept nothing that concerns the task.
+     */
+    static String established(Task task) {
+        String findings = task == null ? ""
+            : com.swarmcoder.domain.DesignFinding.renderAll(task.architectFindings());
+        return findings.isEmpty() ? "" : "\n\n" + findings;
     }
 }

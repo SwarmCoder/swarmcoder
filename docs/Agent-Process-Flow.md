@@ -1575,6 +1575,10 @@ instructions; call report_done when the change is complete and verified."*
 5. empty write set → allowed (unrestricted).
 6. inside the write set → allowed.
 7. otherwise → **outside the write set, and `lethal = false`**.
+8. for a path that reached step 7, when the run's plan is known (since 2026-10-08,
+   DEVELOPER_CORRECTIONS section 73): another task of the plan that is built at the same time,
+   or later, holds the path → **refused, naming that task, `lethal = false`**. No other task
+   holds it → step 7 stands, and the path is the task's from then on.
 
 Matching is whole-segment, so `src/main/javax` is not inside `src/main/java`.
 
@@ -1829,10 +1833,11 @@ Since 2026-09-02 there are two settings, and they are not alternatives for the s
 - **Protected paths** (escape, `.git/`, `.swarmcoder/`, a locked module, the acceptance tests): the
   write never happens; for `apply_diff` the *whole* diff is refused; `blockingViolations`
   increments; two of them kill the worker with `WRITESET_VIOLATION`.
-- **Merely outside the write set**: the write **happens and is kept**. The path is recorded once per
-  path, and the model is told: *"The change was KEPT — you are not being stopped. It is recorded
-  against this candidate and the reviewer will see it, so go outside your own paths only when the
-  task genuinely cannot be done inside them."*
+- **Merely outside the write set**: the write **happens and is kept** when no other task of the
+  plan holds the file. The path is recorded once per path, and the model is told the change was
+  kept, that the file is this task's now, and that the reviewer will see it. When a task built
+  at the same time or later holds the file, the write is refused and the refusal names that task
+  (section 73); that refusal does not count toward the kill.
 
 Shell commands are audited by **effect**, not by reading the command string: after every `exec`,
 `auditAndRevertStrayWrites()` runs `git status --porcelain --untracked-files=all` host-side on the

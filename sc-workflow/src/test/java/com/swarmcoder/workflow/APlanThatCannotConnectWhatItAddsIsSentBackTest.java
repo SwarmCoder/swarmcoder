@@ -101,4 +101,27 @@ class APlanThatCannotConnectWhatItAddsIsSentBackTest {
         assertThat(PlanConnectsWhatItAdds.objection(
             planWriting(SRC + "Report.java"), desk, repo)).isNull();
     }
+
+    /**
+     * Section 73: the planner writes no how-to, so that a new type is found by the framework is
+     * no longer in a task's instructions. The plan with and without the design's findings is
+     * judged the same when no finding is about what the task delivers, and reading the design
+     * never raises an objection the tasks alone would not.
+     */
+    @Test
+    void theArchitectsFindingsAreReadWithTheContractsTheyAreAbout() throws Exception {
+        ReachableCode.Graph desk = theDesk();
+        com.swarmcoder.domain.DesignDocument design = new com.swarmcoder.domain.DesignDocument(
+            UUID.randomUUID(), 1, "report", List.of(), List.of(), List.of(), List.of(), null,
+            null);
+        design.setFindings(List.of(new com.swarmcoder.domain.DesignFinding(UUID.randomUUID(),
+            "Report", "body_of com.desk.Menu", "A screen is listed in the menu.", null)));
+
+        TaskGraph connected = planWriting(SRC + "Report.java", SRC + "Menu.java");
+        assertThat(PlanConnectsWhatItAdds.objection(connected, desk, repo, design)).isNull();
+
+        TaskGraph loose = planWriting(SRC + "Report.java", "app/pom.xml");
+        assertThat(PlanConnectsWhatItAdds.objection(loose, desk, repo, design))
+            .isEqualTo(PlanConnectsWhatItAdds.objection(loose, desk, repo));
+    }
 }

@@ -40,6 +40,13 @@ public class DesignDocument {
      * unaffected (loads as null on old records — always read through {@link #brdRequirementIds()}).
      */
     private List<UUID> brdRequirementIds;
+    /**
+     * What the architect established about how this project and its framework do things, kept
+     * for the workers as it designed (section 73). Set through the setter, never the
+     * constructor; null in every design stored before the field existed - read it through
+     * {@link #findings()}.
+     */
+    private List<DesignFinding> findings;
 
     public DesignDocument() {}
 
@@ -112,6 +119,13 @@ public class DesignDocument {
     public List<UUID> getBrdRequirementIds() { return brdRequirementIds(); }
     public void setBrdRequirementIds(List<UUID> brdRequirementIds) { this.brdRequirementIds = brdRequirementIds; }
 
+    /** Null-safe: empty when the architect kept nothing, and for every design stored before. */
+    public List<DesignFinding> findings() {
+        return findings == null ? List.of() : findings;
+    }
+    public List<DesignFinding> getFindings() { return findings(); }
+    public void setFindings(List<DesignFinding> findings) { this.findings = findings; }
+
     // brdRequirementIds participates in equality: it was previously omitted, so two designs
     // differing only in their BRD links compared equal — which silently breaks anything that dedups
     // by equals(), including the reactive signals the Console renders from. Read through the
@@ -121,7 +135,8 @@ public class DesignDocument {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         DesignDocument that = (DesignDocument) o;
-        return Objects.equals(this.id, that.id) && this.revision == that.revision && Objects.equals(this.goal, that.goal) && Objects.equals(this.requirements, that.requirements) && Objects.equals(this.decisions, that.decisions) && Objects.equals(this.contracts, that.contracts) && Objects.equals(this.risks, that.risks) && Objects.equals(this.review, that.review) && Objects.equals(this.createdAt, that.createdAt) && Objects.equals(this.brdRequirementIds(), that.brdRequirementIds());
+        return Objects.equals(this.id, that.id) && this.revision == that.revision && Objects.equals(this.goal, that.goal) && Objects.equals(this.requirements, that.requirements) && Objects.equals(this.decisions, that.decisions) && Objects.equals(this.contracts, that.contracts) && Objects.equals(this.risks, that.risks) && Objects.equals(this.review, that.review) && Objects.equals(this.createdAt, that.createdAt) && Objects.equals(this.brdRequirementIds(), that.brdRequirementIds())
+            && Objects.equals(this.findings(), that.findings());
     }
 
     @Override

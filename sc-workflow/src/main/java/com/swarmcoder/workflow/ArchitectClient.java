@@ -71,6 +71,17 @@ public class ArchitectClient {
     private final BlobSink blobs;
     /** The architect model's own working room — what its reference material is sized by. */
     private final MaterialBudget room;
+    /**
+     * The model the task planner runs on; null is the architect's own, as it always was
+     * (section 73: the planner only splits and orders, so the owner may give it a modest model
+     * while the architect keeps a strong one). See {@link #setPlannerClient}.
+     */
+    private volatile VllmClient plannerClient;
+    /**
+     * What the architect kept for the workers in the last design session on this thread
+     * ({@code keep_for_workers}), until the call that ran the session attaches it to its design.
+     */
+    private final ThreadLocal<List<DesignFinding>> pendingFindings = new ThreadLocal<>();
     /** Lenient on a trailing comma, which a model with no structured-output support writes. */
     private final ObjectMapper mapper = JsonMapper.builder()
         .enable(JsonReadFeature.ALLOW_TRAILING_COMMA).build();
@@ -155,6 +166,46 @@ public class ArchitectClient {
      */
     public MaterialBudget room() {
         return room;
+    }
+
+    /**
+     * Puts the task planner on its own model: every plan call - the lookup session and the one
+     * reply it falls back to - goes to {@code planner}. Null (the default) leaves the planner on
+     * the architect's model, so nothing changes for a configuration that names no planner.
+     */
+    public void setPlannerClient(VllmClient planner) {
+        this.plannerClient = planner;
+    }
+
+    /** The client a call of this role goes to: the planner's own for a plan when one is set. */
+    private VllmClient clientOf(String role) {
+        VllmClient planner = plannerClient;
+        return "planner".equals(role) && planner != null ? planner : client;
+    }
+
+    /**
+     * What the last design session on this thread kept for the workers; taken once. Null when
+     * it kept nothing, which is what a design stored before findings existed holds too.
+     */
+    private List<DesignFinding> takeFindings() {
+        List<DesignFinding> kept = pendingFindings.get();
+        pendingFindings.remove();
+        return kept == null || kept.isEmpty() ? null : new ArrayList<>(kept);
+    }
+
+    /** {@code earlier} and then every finding of {@code later} it does not already hold. */
+    static List<DesignFinding> mergedFindings(List<DesignFinding> earlier,
+                                              List<DesignFinding> later) {
+        List<DesignFinding> all = new ArrayList<>(earlier == null ? List.of() : earlier);
+        for (DesignFinding finding : later == null ? List.<DesignFinding>of() : later) {
+            boolean held = all.stream().anyMatch(f -> java.util.Objects.equals(f.about(),
+                finding.about()) && java.util.Objects.equals(f.source(), finding.source())
+                && java.util.Objects.equals(f.snippet(), finding.snippet()));
+            if (!held) {
+                all.add(finding);
+            }
+        }
+        return all;
     }
 
     /** The policy stamped on planned tasks — also used for the workflow's fallback task. */
@@ -441,6 +492,7 @@ public class ArchitectClient {
                     return draft;
                 }, draft -> null, List.of()));
             DesignDocument document = toDesign(UUID.randomUUID(), goal, parsed, 1);
+            document.setFindings(takeFindings());
             keepPendingAs("design:" + document.id());
             dropAcceptanceTestClassContracts(document, List.of());
             warnOfContractsWithoutAType(document, "design");
@@ -546,6 +598,7 @@ public class ArchitectClient {
                 toDecisions(parsed.decisions), toContracts(parsed.contracts), toRisks(parsed.risks),
                 null, Instant.now());
             dropAcceptanceTestClassContracts(design, checkTestRefs(scope));
+            design.setFindings(takeFindings());
             keepPendingAs("design:" + design.id());
             warnOfContractsWithoutAType(design, "story design");
             missing = parsed.missingRequirements == null ? List.of() : parsed.missingRequirements;
@@ -661,48 +714,21 @@ public class ArchitectClient {
         return notes.toString().strip();
     }
 
-    /** The standing primer, ready to append to a prompt; empty when no context folders are set. */
-    /** What the planner may be shown of real code, at baseline; grows with the architect's room. */
-    private static final int PLAN_EXAMPLE_CHARS = 8_000;
-
     /**
-     * The worked examples the workers and the test author will be given, shown to the planner
-     * too: it writes the instructions those roles follow, and instructions written without having
-     * seen how the reference material does the thing describe an API that is guessed.
+     * What a planner working with lookup tools is told about the framework reference and the
+     * worked examples: that it has neither and needs neither. Harness run 79 (2026-10-04) took
+     * the two blocks out of its opening (about 14,000 tokens on each of 102 calls) and told it
+     * to fetch what its instructions relied on; run 98 (2026-10-08) showed what that cost - 78
+     * lookups in 28 calls, 31 of 69 a repeat of the architect's. Since section 73 the planner
+     * writes no how-to, so there is nothing for it to fetch.
      */
-    private String exampleBlock(DesignDocument design, String goal) {
-        if (design == null) {
-            return "";
-        }
-        try {
-            String examples = research.examples(design.contracts(), goal,
-                room.chars(PLAN_EXAMPLE_CHARS));
-            return examples == null || examples.isBlank() ? ""
-                : "\n\nWORKED EXAMPLES (read-only — real code from the reference material; the "
-                    + "workers and the test author are shown the same. Write each task's "
-                    + "instructions so that they agree with how this code does it, and name the "
-                    + "library types it uses where a task must use them):\n" + examples;
-        } catch (RuntimeException e) {
-            return ""; // never the reason a plan cannot be attempted
-        }
-    }
-
-    /**
-     * What a planner working with lookup tools is told in place of the framework reference and
-     * the worked examples. Harness run 79 (2026-10-04): the planner's fixed opening was about
-     * 14,000 tokens of a room that compacts at 24,576, sent again on each of 102 calls; up to
-     * 17,000 characters of it were these two blocks at the baseline room.
-     */
-    static final String LOOK_IT_UP = "\n\nThe framework reference and worked examples are not "
-        + "attached here: the documentation and real code that already does the kind of thing "
-        + "a task asks for are one lookup away (which tool is for what is listed at the end). "
-        + "Fetch the part a task's instructions rely on, not all of it.";
-
-    private String referenceBlock() {
-        String reference = research.reference(room.chars(REFERENCE_CHARS));
-        return reference == null || reference.isBlank() ? ""
-            : "\n\nFRAMEWORK REFERENCE (read-only — the APIs you must build against):\n" + reference;
-    }
+    static final String LOOK_IT_UP = "\n\nNo framework reference and no example code is "
+        + "attached here, and you need neither. How the work is built is not yours to say: the "
+        + "architect's findings (the FACT lines of the design) are given to the workers word for "
+        + "word with the tasks they concern, and a worker looks up the rest. What you may need "
+        + "to look up is where things are - the modules, the source directories, which existing "
+        + "type lives in which file, what uses what (which tool is for what is listed at the "
+        + "end).";
 
     /**
      * The prefix a research result is announced with — see the loop in {@link #researchNotes}.
@@ -934,6 +960,10 @@ public class ArchitectClient {
             // an accepted revision of a story-scoped design does not silently stop tracing to the
             // requirement graph it was scoped from.
             revised.setBrdRequirementIds(original.brdRequirementIds());
+            // What the architect kept for the workers is not part of the wire schema either: a
+            // revision keeps every finding the design had and adds what this round kept.
+            List<DesignFinding> carried = mergedFindings(original.findings(), takeFindings());
+            revised.setFindings(carried.isEmpty() ? null : carried);
             carryOverUnchangedSections(parsed, original, revised);
             String discardReason = discardReason(original, revised);
             if (discardReason == null) {
@@ -959,6 +989,7 @@ public class ArchitectClient {
                 DesignDocument revisedRetry =
                     toDesign(original.id(), original.goal(), retried, original.revision() + 1);
                 revisedRetry.setBrdRequirementIds(original.brdRequirementIds());
+                revisedRetry.setFindings(carried.isEmpty() ? null : carried);
                 carryOverUnchangedSections(retried, original, revisedRetry);
                 String retryDiscardReason = discardReason(original, revisedRetry);
                 if (retryDiscardReason == null) {
@@ -1166,14 +1197,14 @@ public class ArchitectClient {
             if (work != null && prior != null) {
                 work = work.continuing(prior, sentBack("plan", retry.strip()));
             }
-            // The primer only — planning decomposes a design that has already been
-            // researched, so paying for a second research phase here buys little.
-            // A planner with lookup tools is not sent it, nor the worked examples (run 79): they
-            // are resent on every one of its calls and it can fetch either with one lookup.
+            // Neither the framework reference nor example code (section 73): the planner
+            // splits and orders, and what a worker needs to know about how the work is built
+            // reaches it from the architect, not through the planner's words. Run 98: 33 of the
+            // planner's 44 whole-file reads were framework examples.
             LlmPlan parsed = callForJson(PLAN_SYSTEM_PROMPT,
-                head + referenceBlock() + exampleBlock(design, goal) + retry,
+                head + retry,
                 work == null ? null : head + LOOK_IT_UP + retry,
-                LlmPlan.class, LlmPlan.class, "the architect's", work);
+                LlmPlan.class, LlmPlan.class, "the planner's", work);
             keepPendingAs(planKey);
             return toTaskGraph(design, withRecoveredTasks(parsed), scope);
         } catch (EndpointOutage outage) {
@@ -1213,7 +1244,11 @@ public class ArchitectClient {
     }
 
     /**
-     * The scoped planner's system instructions — factored out of {@link #plan(DesignDocument,
+     * <b>Since section 73 (owner's decision, 2026-10-08)</b> the planner writes no how-to and
+     * does not have to guess write sets: instructions say what a task delivers, and the files
+     * of its contracts are computed ({@code ComputedReservation}).
+     *
+     * <p>The scoped planner's system instructions — factored out of {@link #plan(DesignDocument,
      * String, StoryScope, String)} so {@link #planAttempt} sends the retrying workflow loop exactly
      * the same rules on every attempt. Only the USER message changes between attempts (it grows the
      * previous reply and its objections); the rules the planner is held to do not.
@@ -1221,16 +1256,27 @@ public class ArchitectClient {
     private static final String PLAN_SYSTEM_PROMPT =
         "You are an AI planner. Decompose the work into a directed acyclic graph of "
         + "implementation tasks that together satisfy EXACTLY the acceptance criteria "
-        + "listed — no more and no less. RULES: decompose only to the smallest unit that "
+        + "listed — no more and no less. YOU SPLIT AND ORDER; YOU DO NOT SAY HOW. A task's "
+        + "\"instructions\" are one to three sentences that say WHAT the task delivers: which "
+        + "contracts, which checks, and what it leaves for a later task. Never write how to "
+        + "build it - no library types, no annotations, no steps: the design's FACT lines are "
+        + "what the architect established about that, they are handed to the workers word for "
+        + "word with the tasks they concern, and a worker looks up the rest itself. "
+        + "RULES: decompose only to the smallest unit that "
         + "still has a mechanically verifiable acceptance test and a clean write set — no "
         + "further. Tasks that can run concurrently MUST have disjoint writeSet paths "
         + "(repo-relative dirs or files). A CHANGE THAT BREAKS EXISTING CODE IS ONE TASK "
         + "WITH THAT CODE: a task that adds an abstract method to an existing interface or "
         + "abstract class, adds a constructor parameter or record component, or removes or "
-        + "changes a member other code uses, MUST have in its own writeSet every existing "
-        + "file that would stop compiling (every implementing class, every caller) and "
-        + "change them too, because each candidate is verified by compiling the whole "
-        + "build; never split such a change from its implementation. NO TASK REMOVES "
+        + "changes a member other code uses, also changes every existing file that would "
+        + "stop compiling (every implementing class, every caller), because each candidate "
+        + "is verified by compiling the whole build; never split such a change from its "
+        + "implementation. YOU DO NOT HAVE TO WORK OUT A TASK'S FILES: the file of every "
+        + "contract a task delivers, and every existing file that stops compiling with it, "
+        + "is added to the task's writeSet for you from the project's own types. Put in "
+        + "writeSet only what that cannot know - a file with no contract (a resource, a "
+        + "class no contract names) or the module directory a new type belongs in - and a "
+        + "worker that needs a file nobody else holds may take it. NO TASK REMOVES "
         + "EXISTING PUBLIC CODE - a public type, method or field the project already has - "
         + "unless a criterion says in so many words that something is to be removed: a "
         + "criterion that something is NOT offered is met by not offering it, and a candidate "
@@ -1589,9 +1635,8 @@ public class ArchitectClient {
                 + "\"edges\":[{\"from\":\"<id of the task that must FINISH FIRST>\","
                 + "\"to\":\"<id of the task that WAITS for it>\"}]}",
                 constraintPreamble(constraintBrief) + "Goal: " + goal + nullSafe(repoLayoutBrief)
-                    + (design == null ? "" : "\n\nDesign:\n" + designSummary(design))
-                    + exampleBlock(design, goal),
-                LlmPlan.class, LlmPlan.class, "the architect's", planWork(design, null));
+                    + (design == null ? "" : "\n\nDesign:\n" + designSummary(design)),
+                LlmPlan.class, LlmPlan.class, "the planner's", planWork(design, null));
             return toTaskGraph(design, withRecoveredTasks(parsed));
         } catch (EndpointOutage outage) {
             throw outage;
@@ -1649,24 +1694,34 @@ public class ArchitectClient {
         + "copy in a new package of a class this project already has - each of these has stopped "
         + "a build. Before you contract a NEW type, look whether the project already has one of "
         + "that name or purpose, and build on it where it is.\n"
-        + "2. CHECK YOUR DRAFT. Call check_design with the complete JSON object described above, "
+        + "2. KEEP WHAT THE WORKERS WILL NEED, AS YOU FIND IT. The code is written by workers on "
+        + "a smaller model. They are given the contracts and NOTHING else of what you read here "
+        + "except what you keep. When a lookup shows HOW this project or its framework does "
+        + "something a task will have to do - what makes the framework find a service, how a "
+        + "screen is put on the entry page, how a store's root is obtained, which existing type "
+        + "to extend, a few lines of real code that do the same kind of thing - call "
+        + "keep_for_workers right then, naming the lookup and the lines: the lines are copied "
+        + "for you, you write one sentence. Say what each fact is about (the contract it "
+        + "concerns, or nothing for the whole project); it travels with the tasks that build "
+        + "that contract. Keep what a worker could not know without your lookup; do not keep "
+        + "what a contract already says.\n"
+        + "3. CHECK YOUR DRAFT. Call check_design with the complete JSON object described above, "
         + "as one string. It runs the build's own mechanical checks and returns their objections. "
         + "Fix every objection - looking up whatever it shows you guessed - and check again.\n"
-        + "3. HAND IN. Call report_done with an empty string to hand in the draft you last "
+        + "4. HAND IN. Call report_done with an empty string to hand in the draft you last "
         + "checked exactly as it is, or with the complete final JSON object if you changed it "
         + "since.";
 
     static final String PLAN_HOW = "\n\nHOW YOU WORK IN THIS SESSION. You do not answer in one "
         + "reply: you work in steps, with tools, and you hand the plan in through a tool.\n"
-        + "1. CHECK EVERY FACT BEFORE YOU RELY ON IT. Before a task's instructions name a library "
-        + "type or one of its members, an existing class of this project, a package, a module or "
-        + "a file path, confirm it with a tool - list_files shows the modules and source "
-        + "directories that really exist - and ask whenever you are not sure how something is "
-        + "done here (which tool is for what is listed at the end). What you were given below is "
-        + "where you start, not the limit of what you may read or ask. GUESSING IS THE FAILURE "
-        + "THIS SESSION EXISTS TO PREVENT: "
-        + "instructions that tell a worker to call a method the library does not have, or a write "
-        + "set in a directory the build does not compile, send every worker of that task the "
+        + "1. YOU SPLIT THE DESIGN INTO TASKS AND ORDER THEM. NOTHING ELSE. You do not say how "
+        + "anything is built and you do not learn the framework: that was the architect's work, "
+        + "its findings are in the design, and they reach the workers word for word without "
+        + "you. What you check with a tool is WHERE things are: before a task names an existing "
+        + "class of this project, a module or a file path, confirm it - list_files shows the "
+        + "modules and source directories that really exist, and the tree says which type is in "
+        + "which file and what uses it (which tool is for what is listed at the end). A write "
+        + "set in a directory the build does not compile sends every worker of that task the "
         + "wrong way.\n"
         + "2. CHECK YOUR DRAFT. Call check_plan with the complete JSON object described above, as "
         + "one string. It runs the build's own mechanical checks and returns their objections, "
@@ -1890,6 +1945,8 @@ public class ArchitectClient {
         LookupAgent agent = lookupAgent;
         String material = "";
         dropPending();
+        // Nothing a call before this one kept and never attached may reach this call's design.
+        pendingFindings.remove();
         if (agent != null && work != null) {
             KeptConversations.Held prior = work.prior();
             try {
@@ -1899,14 +1956,14 @@ public class ArchitectClient {
                         && prior.tools() instanceof DraftTools again) {
                     // What it handed in was sent back: same conversation, its lookups intact.
                     again.nextRound(work.check());
-                    outcome = agent.resume(client, prior.conversation(), work.followUp())
-                        .orElse(null);
+                    outcome = agent.resume(clientOf(work.role()), prior.conversation(),
+                        work.followUp()).orElse(null);
                     own[0] = outcome == null ? null : again;
                 } else if (prior != null) {
                     prior.conversation().close();
                 }
                 if (outcome == null) {
-                    outcome = agent.run(client, new LookupAgent.Ask(work.role(),
+                    outcome = agent.run(clientOf(work.role()), new LookupAgent.Ask(work.role(),
                         system + work.how(), sessionUser == null ? user : sessionUser,
                         work.limits(),
                         "Stop looking things up: give your draft to check_" + work.noun()
@@ -1920,6 +1977,11 @@ public class ArchitectClient {
                         }));
                 }
                 String draft = own[0] == null ? null : own[0].submission();
+                if (own[0] != null && "design".equals(work.noun())) {
+                    // Kept whether or not a draft was handed in: what the architect established
+                    // is true of the project, and the one reply that follows is its design too.
+                    pendingFindings.set(own[0].findings());
+                }
                 if (outcome.conversation() != null) {
                     if (draft != null && own[0] != null) {
                         pendingKept.set(new KeptConversations.Held(outcome.conversation(), own[0]));
@@ -2033,11 +2095,17 @@ public class ArchitectClient {
         }
         cloudGate.charge(prompt);
         String response;
+        String role = meterRole(schema);
         try {
-            response = client.as(meterRole(schema)).chatCompletionStream(messages, schema, temperature)
+            response = clientOf(role).as(role).chatCompletionStream(messages, schema, temperature)
                 .collect(Collectors.joining());
         } catch (Exception e) {
-            throw refundIfOutage(prompt, e);
+            EndpointOutage outage = EndpointOutage.from(clientOf(role).baseUrl(), e);
+            if (outage != null) {
+                cloudGate.refund(prompt);
+                throw outage;
+            }
+            throw e;
         }
         cloudGate.charge(CloudGate.estimateTokens(response));
         return response;
@@ -2610,6 +2678,17 @@ public class ArchitectClient {
         }
         for (Risk r : design.risks()) {
             sb.append("RISK [").append(r.severity()).append("] ").append(r.description()).append('\n');
+        }
+        // What the architect kept for the workers (section 73), one line each and without the
+        // code: the planner and the reviewer read what was established and about what; the
+        // lines themselves travel with the tasks.
+        for (DesignFinding f : design.findings()) {
+            sb.append("FACT [").append(f.wholeProject() ? "the whole project" : f.about().strip())
+                .append("] ").append(f.note() == null ? "" : f.note().strip());
+            if (f.source() != null && !f.source().isBlank()) {
+                sb.append(" (from ").append(f.source().strip()).append(')');
+            }
+            sb.append('\n');
         }
         return sb.toString();
     }
