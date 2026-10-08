@@ -52,6 +52,8 @@ import com.zeroz4j.ui.component.SvgCanvas;
 import com.zeroz4j.ui.layout.Div;
 import com.zeroz4j.ui.layout.Span;
 import org.teavm.jso.JSBody;
+import org.teavm.jso.JSFunctor;
+import org.teavm.jso.JSObject;
 import org.teavm.jso.browser.Window;
 import org.teavm.jso.dom.events.EventListener;
 import org.teavm.jso.dom.events.EventTarget;
@@ -143,7 +145,7 @@ final class BrdView extends Div implements Disposable {
         // about a different stage's business.
         add(header());
         add(focusBanner());
-        SplitPane split = SplitPane.horizontal("brd", 420, 300, 720);
+        SplitPane split = SplitPane.horizontal("brd", 640, 300, 1400);
         split.setFirst(graphPane());
         split.setSecond(rightPane());
         add(split);
@@ -152,6 +154,10 @@ final class BrdView extends Div implements Disposable {
         // is already looking at — and the stage bar above has already said this is Requirements.
         installDragHandlers();
         disposables.add(Effect.create(this::drawGraph));
+        // The picture follows the panel: a window resize, a splitter drag or the editor opening all
+        // change the canvas width, and a picture fitted to the old width would sit small in a corner.
+        JSObject sizeWatch = observeSize(canvas.getElement(), this::refitIfUntouched);
+        disposables.add(() -> stopObserving(sizeWatch));
         disposables.add(Effect.create(() -> {
             Brd b = viewGraph();
             int n = b.requirements() == null ? 0 : b.requirements().size();
@@ -230,6 +236,9 @@ final class BrdView extends Div implements Disposable {
         // policy would make one careless afternoon permanent.
         bar.add(iconButton("refresh", "Re-layout — forget every hand-placed node position and lay "
             + "the graph out automatically again", this::relayout));
+        bar.add(textButton("\u2212", "Zoom out", "out", () -> zoomBy(1 / 1.25)));
+        bar.add(textButton("+", "Zoom in", "in", () -> zoomBy(1.25)));
+        bar.add(textButton("Fit", "Fit the whole graph in the panel", "fit", () -> fitView(fitW, fitH, true)));
         return bar;
     }
 
@@ -811,36 +820,86 @@ final class BrdView extends Div implements Disposable {
         }
         double contentW = 0;
         double contentH = 0;
-        Map<String, int[]> centers = new HashMap<>();
         for (int i = 0; i < n; i++) {
             double[] p = at.get(idStr(reqs.get(i).id()));
-            centers.put(idStr(reqs.get(i).id()),
-                new int[]{round(p[0]) + NODE_W / 2, round(p[1]) + NODE_H / 2});
             contentW = Math.max(contentW, p[0] + NODE_W);
             contentH = Math.max(contentH, p[1] + NODE_H);
         }
 
         // Edges first, so a node always sits on top of the lines that reach it.
+        //
+        // Each line is routed round every box that is not one of its two ends (EdgeRouting), so a
+        // link between two boxes in one row no longer strikes out the title of the box between them.
+        // The relation's name is NOT printed on the line any more: where lines cross or run close
+        // the words landed on top of each other, and the colour is already keyed in the legend. The
+        // name is the line's hover text instead, so nothing is lost and nothing can overprint.
+        double[] boxX = new double[n];
+        double[] boxY = new double[n];
+        Map<String, Integer> indexOf = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            String id = idStr(reqs.get(i).id());
+            double[] p = at.get(id);
+            boxX[i] = p[0];
+            boxY[i] = p[1];
+            indexOf.put(id, i);
+        }
+        // Links joining the same two boxes are fanned out sideways so they do not lie on one line.
+        Map<String, Integer> pairTotal = new HashMap<>();
         for (BrdEdge edge : edges) {
-            int[] from = centers.get(idStr(edge.from()));
-            int[] to = centers.get(idStr(edge.to()));
-            if (from == null || to == null) {
+            Integer a = indexOf.get(idStr(edge.from()));
+            Integer b = indexOf.get(idStr(edge.to()));
+            if (a != null && b != null && !a.equals(b)) {
+                pairTotal.merge(pairKey(a, b), 1, Integer::sum);
+            }
+        }
+        Map<String, Integer> pairSeen = new HashMap<>();
+        for (BrdEdge edge : edges) {
+            Integer a = indexOf.get(idStr(edge.from()));
+            Integer b = indexOf.get(idStr(edge.to()));
+            if (a == null || b == null || a.equals(b)) {
                 continue;
             }
             String color = relationColor(edge.relation());
+            String key = pairKey(a, b);
+            int seen = pairSeen.merge(key, 1, Integer::sum) - 1;
+            double fan = (seen - (pairTotal.get(key) - 1) / 2.0) * 10;
+            double ax = boxX[a] + NODE_W / 2.0;
+            double ay = boxY[a] + NODE_H / 2.0;
+            double bx = boxX[b] + NODE_W / 2.0;
+            double by = boxY[b] + NODE_H / 2.0;
+            double len = Math.max(1, Math.hypot(bx - ax, by - ay));
+            // Sideways of the a->b direction, flipped for b->a so both orders fan the same way.
+            double sign = a < b ? 1 : -1;
+            double nx = -(by - ay) / len * fan * sign;
+            double ny = (bx - ax) / len * fan * sign;
+            double[][] route = EdgeRouting.route(boxX, boxY, NODE_W, NODE_H, a, b,
+                new double[]{ax + nx, ay + ny}, new double[]{bx + nx, by + ny});
             // Clipped to the two node borders rather than drawn centre to centre: a line that
             // disappears under both boxes gives no clue which way it points, and direction is the
             // entire content of a "depends on".
-            int[] start = onBorder(from, to);
-            int[] end = onBorder(to, from);
-            Element line = SvgCanvas.el("line",
-                "x1", String.valueOf(start[0]), "y1", String.valueOf(start[1]),
-                "x2", String.valueOf(end[0]), "y2", String.valueOf(end[1]),
-                "stroke", color, "stroke-width", "1.5", "stroke-opacity", "0.7");
+            route[0] = EdgeRouting.exit(boxX[a], boxY[a], NODE_W, NODE_H, route[0], route[1], 2);
+            route[route.length - 1] = EdgeRouting.exit(boxX[b], boxY[b], NODE_W, NODE_H,
+                route[route.length - 1], route[route.length - 2], 2);
+            double[] tip = route[route.length - 1];
+            double[] tail = route[route.length - 2];
+            // The line stops at the base of the arrow head, so the stroke does not poke through it.
+            double[][] drawn = route.clone();
+            drawn[drawn.length - 1] = backOff(tip, tail, 8);
+            String d = roundedPath(drawn);
+            String hover = nz(reqs.get(a).handle()) + " "
+                + (edge.relation() == null ? "" : edge.relation().label()) + " "
+                + nz(reqs.get(b).handle());
+            Element line = SvgCanvas.el("path", "d", d, "fill", "none",
+                "stroke", color, "stroke-width", "1.5", "stroke-opacity", "0.7",
+                "stroke-linejoin", "round");
+            // A wider invisible stroke on top, so the hover text is easy to hit.
+            Element hit = SvgCanvas.el("path", "d", d, "fill", "none", "stroke", "transparent",
+                "stroke-width", "10", "pointer-events", "stroke");
+            hit.setAttribute("data-edge", hover);
+            hit.appendChild(svgTitle(hover));
             canvas.viewport().appendChild(line);
-            canvas.viewport().appendChild(arrowHead(end, start, color));
-            canvas.viewport().appendChild(text((start[0] + end[0]) / 2, (start[1] + end[1]) / 2 - 3,
-                edge.relation() == null ? "" : edge.relation().label(), 9, color, "middle"));
+            canvas.viewport().appendChild(arrowHead(tip, tail, color));
+            canvas.viewport().appendChild(hit);
         }
 
         BrdRequirement sel = selected.get();
@@ -902,7 +961,7 @@ final class BrdView extends Div implements Disposable {
             }
             canvas.viewport().appendChild(group);
         }
-        canvas.fit(contentW + MARGIN * 2, contentH + MARGIN * 2);
+        fitView(contentW + MARGIN * 2, contentH + MARGIN * 2, false);
     }
 
     /**
@@ -930,7 +989,7 @@ final class BrdView extends Div implements Disposable {
     }
 
     /** A small filled triangle at {@code tip}, pointing away from {@code tail}. */
-    private static Element arrowHead(int[] tip, int[] tail, String color) {
+    private static Element arrowHead(double[] tip, double[] tail, String color) {
         double dx = tip[0] - tail[0];
         double dy = tip[1] - tail[1];
         double length = Math.sqrt(dx * dx + dy * dy);
@@ -942,30 +1001,51 @@ final class BrdView extends Div implements Disposable {
         // The two base corners are one arrow-length back along the line and half that to each side.
         double baseX = tip[0] - ux * 9;
         double baseY = tip[1] - uy * 9;
-        String points = tip[0] + "," + tip[1]
-            + " " + Math.round(baseX - uy * 4) + "," + Math.round(baseY + ux * 4)
-            + " " + Math.round(baseX + uy * 4) + "," + Math.round(baseY - ux * 4);
+        String points = num(tip[0]) + "," + num(tip[1])
+            + " " + num(baseX - uy * 4) + "," + num(baseY + ux * 4)
+            + " " + num(baseX + uy * 4) + "," + num(baseY - ux * 4);
         return SvgCanvas.el("polygon", "points", points, "fill", color, "fill-opacity", "0.75");
     }
 
-    /**
-     * Where the line from {@code center} towards {@code towards} leaves that node's box. Scaling the
-     * direction until it meets whichever of the two half-extents it reaches first is the whole of it.
-     */
-    private static int[] onBorder(int[] center, int[] towards) {
-        double dx = towards[0] - center[0];
-        double dy = towards[1] - center[1];
-        if (dx == 0 && dy == 0) {
-            return center;
+    /** Key for the pair of boxes a link joins, the same whichever way it points. */
+    private static String pairKey(int a, int b) {
+        return Math.min(a, b) + "-" + Math.max(a, b);
+    }
+
+    /** The point {@code distance} short of {@code tip}, on the way back towards {@code tail}. */
+    private static double[] backOff(double[] tip, double[] tail, double distance) {
+        double dx = tail[0] - tip[0];
+        double dy = tail[1] - tip[1];
+        double len = Math.hypot(dx, dy);
+        if (len < distance * 1.5) {
+            return tip;
         }
-        double halfW = NODE_W / 2.0 + 2;
-        double halfH = NODE_H / 2.0 + 2;
-        double scaleX = dx == 0 ? Double.MAX_VALUE : halfW / Math.abs(dx);
-        double scaleY = dy == 0 ? Double.MAX_VALUE : halfH / Math.abs(dy);
-        double scale = Math.min(scaleX, scaleY);
-        return new int[]{
-            (int) Math.round(center[0] + dx * scale),
-            (int) Math.round(center[1] + dy * scale)};
+        return new double[]{tip[0] + dx / len * distance, tip[1] + dy / len * distance};
+    }
+
+    /** An SVG path through {@code pts} with the bends rounded. */
+    private static String roundedPath(double[][] pts) {
+        StringBuilder d = new StringBuilder();
+        d.append("M").append(num(pts[0][0])).append(",").append(num(pts[0][1]));
+        for (int i = 1; i < pts.length; i++) {
+            if (i == pts.length - 1) {
+                d.append(" L").append(num(pts[i][0])).append(",").append(num(pts[i][1]));
+                break;
+            }
+            double[] p = pts[i];
+            double[] before = backOff(p, pts[i - 1],
+                Math.min(12, Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) / 2));
+            double[] after = backOff(p, pts[i + 1],
+                Math.min(12, Math.hypot(p[0] - pts[i + 1][0], p[1] - pts[i + 1][1]) / 2));
+            d.append(" L").append(num(before[0])).append(",").append(num(before[1]));
+            d.append(" Q").append(num(p[0])).append(",").append(num(p[1])).append(" ")
+                .append(num(after[0])).append(",").append(num(after[1]));
+        }
+        return d.toString();
+    }
+
+    private static String num(double v) {
+        return String.valueOf(Math.round(v * 10) / 10.0);
     }
 
     private static Element svgTitle(String content) {
@@ -1383,6 +1463,7 @@ final class BrdView extends Div implements Disposable {
                 return;
             }
             statusText.set("laid out automatically — hand-placed positions cleared");
+            fitView(fitW, fitH, true);
         } catch (Exception e) {
             ClientLog.error("BrdView", "could not clear the hand-placed node positions: " + e);
             statusText.set("could not re-lay out the graph: " + e);
@@ -1409,6 +1490,96 @@ final class BrdView extends Div implements Disposable {
         + "if (!m || !m.a || !m.d) { return NaN; }"
         + "return axis === 0 ? (clientX - m.e) / m.a : (clientY - m.f) / m.d;")
     private static native double toContent(Element viewport, double clientX, double clientY, int axis);
+
+    // ---- fit and zoom -----------------------------------------------------------------------------
+
+    /** The picture is never blown up past this when it fits with room to spare. */
+    private static final double FIT_MAX_SCALE = 1.6;
+    private static final double MIN_SCALE = 0.15;
+    private static final double MAX_SCALE = 4.0;
+    private static final double FIT_PADDING = 24;
+
+    /** Content size the last draw asked to have fitted. */
+    private double fitW;
+    private double fitH;
+    /** The transform the last fit left on the picture; any other transform means the operator moved it. */
+    private String fitTransform;
+
+    /**
+     * Scales and centres the whole picture in the canvas, growing it as well as shrinking it.
+     *
+     * <p>{@code SvgCanvas.fit} only ever shrinks (its scale is capped at 1), so a small graph sat at
+     * natural size in the middle of a wide panel, and a large one was fitted once, at whatever width
+     * the panel had then. This does the same job without the cap, and is called again when the panel
+     * changes size. The canvas's own wheel zoom and drag pan are untouched.
+     *
+     * @param force refit even when the operator has zoomed or panned since the last fit
+     */
+    private void fitView(double contentW, double contentH, boolean force) {
+        fitW = contentW;
+        fitH = contentH;
+        String now = canvas.viewport().getAttribute("transform");
+        boolean touched = fitTransform != null && now != null && !fitTransform.equals(now);
+        if (touched && !force) {
+            return;   // keep the view the operator chose through edits and drags
+        }
+        int w = canvas.getElement().getOffsetWidth();
+        int h = canvas.getElement().getOffsetHeight();
+        if (w == 0 || h == 0 || contentW <= 0 || contentH <= 0) {
+            return;   // not on screen yet; the size watcher fits it once it is
+        }
+        double scale = Math.max(MIN_SCALE, Math.min(FIT_MAX_SCALE,
+            Math.min((w - FIT_PADDING) / contentW, (h - FIT_PADDING) / contentH)));
+        canvas.setView(-(w - contentW * scale) / (2 * scale), -(h - contentH * scale) / (2 * scale),
+            scale);
+        fitTransform = canvas.viewport().getAttribute("transform");
+    }
+
+    /** Called when the canvas changes size: refit, unless the operator has moved the picture. */
+    private void refitIfUntouched() {
+        if (fitW > 0) {
+            fitView(fitW, fitH, false);
+        }
+    }
+
+    /** Zooms about the middle of the canvas, like the keyboard's plus and minus do. */
+    private void zoomBy(double factor) {
+        Element vp = canvas.viewport();
+        double scale = transformPart(vp, 2);
+        if (Double.isNaN(scale) || scale <= 0) {
+            return;
+        }
+        double newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * factor));
+        double cx = canvas.getElement().getOffsetWidth() / 2.0;
+        double cy = canvas.getElement().getOffsetHeight() / 2.0;
+        double panX = cx - (cx - transformPart(vp, 0)) * (newScale / scale);
+        double panY = cy - (cy - transformPart(vp, 1)) * (newScale / scale);
+        canvas.setView(-panX / newScale, -panY / newScale, newScale);
+    }
+
+    /** Part of the viewport's transform: 0 = pan x, 1 = pan y, 2 = scale. NaN if there is none yet. */
+    @JSBody(params = {"viewport", "part"}, script =
+        "var t = viewport.getAttribute('transform');"
+        + "if (!t) { return part === 2 ? 1 : 0; }"
+        + "var m = /translate\\(([-0-9.e]+),([-0-9.e]+)\\) scale\\(([-0-9.e]+)\\)/.exec(t);"
+        + "return m ? parseFloat(m[part + 1]) : NaN;")
+    private static native double transformPart(Element viewport, int part);
+
+    /** Something to call when an element changes size. */
+    @JSFunctor
+    private interface SizeCallback extends JSObject {
+        void changed();
+    }
+
+    @JSBody(params = {"element", "callback"}, script =
+        "if (typeof ResizeObserver === 'undefined') { return null; }"
+        + "var o = new ResizeObserver(function () { callback(); });"
+        + "o.observe(element);"
+        + "return o;")
+    private static native JSObject observeSize(Element element, SizeCallback callback);
+
+    @JSBody(params = {"observer"}, script = "if (observer) { observer.disconnect(); }")
+    private static native void stopObserving(JSObject observer);
 
     private static int round(double value) {
         return (int) Math.round(value);
@@ -1776,6 +1947,18 @@ final class BrdView extends Div implements Disposable {
         b.addClassName("cursor-pointer text-base-content/40 hover:text-primary");
         b.add(Icon.of(glyph, "w-4 h-4"));
         b.getElement().setAttribute("title", tooltip);
+        b.addDomEventListener("click", e -> action.run());
+        return b;
+    }
+
+    /** A small text button for the toolbar, where no icon says it. */
+    private Div textButton(String label, String tooltip, String id, Runnable action) {
+        Div b = new Div();
+        b.addClassName("cursor-pointer text-[12px] leading-none px-1 text-base-content/40 "
+            + "hover:text-primary");
+        b.getElement().appendChild(new Span(label).getElement());
+        b.getElement().setAttribute("title", tooltip);
+        b.getElement().setAttribute("data-testid", "graph-zoom-" + id);
         b.addDomEventListener("click", e -> action.run());
         return b;
     }

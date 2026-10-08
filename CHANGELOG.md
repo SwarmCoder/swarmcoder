@@ -9,6 +9,17 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ## [Unreleased]
 
+### Fixed
+
+- **The requirements graph is readable.** A link between two boxes in one row no longer runs
+  through the box between them; it goes round. The relation's name is no longer printed on each
+  line (the names overprinted each other where lines crossed); it shows when you hover the line,
+  and the legend still explains the colours. The picture now grows to use the panel as well as
+  shrinking to fit it, follows the panel when you drag the divider or resize the window, and has
+  zoom in, zoom out and Fit buttons beside the mouse wheel. The graph panel opens wider (640 px,
+  up to 1400). Links between the same two requirements are drawn side by side instead of on top
+  of each other.
+
 ### Changed
 
 - **A project that starts nearly empty is no longer refused its first framework-found class.**
