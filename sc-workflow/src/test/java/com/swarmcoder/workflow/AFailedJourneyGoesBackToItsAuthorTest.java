@@ -73,6 +73,9 @@ class AFailedJourneyGoesBackToItsAuthorTest {
             value: "hobbit"
           - expectVisible: "text=The Hobbit"
         """;
+    /** The journey as written, under another title: a draft that is not the original again. */
+    private static final String RETITLED =
+        WRITTEN.replace("A book is found by its title", "A book is found by title");
     private static final String ONLY_LOOKS = """
         journey: The books screen is there
         steps:
@@ -107,14 +110,16 @@ class AFailedJourneyGoesBackToItsAuthorTest {
                     Map.of("path", DIR + "/accept/another.journey.yaml", "content", CORRECTED));
                 case 2 -> ScriptedAgentLlm.Turn.call("check_journey",
                     Map.of("path", PATH, "content", CORRECTED));
-                default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("wrote",
+                default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("verdict",
+                    "JOURNEY_WRONG", "reason",
                     "The journey named the search box by words the criteria do not fix and "
                         + "expected a book no step had added."));
             })) {
             TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
                 task(), null, PATH, WRITTEN, whatHappened());
 
-            assertThat(reviewed.answered()).as(reviewed.reason()).isTrue();
+            assertThat(reviewed.verdict()).as(reviewed.reason())
+                .isEqualTo(TestAuthorClient.JourneyVerdict.CORRECTED);
             assertThat(reviewed.journeyIsWrong()).isTrue();
             assertThat(reviewed.corrected()).isEqualTo(CORRECTED);
             assertThat(reviewed.reason()).startsWith("The journey named the search box");
@@ -122,7 +127,11 @@ class AFailedJourneyGoesBackToItsAuthorTest {
                 + "page showed and both ways to answer are in the opening")
                 .contains("A book is found by its title", "step 2 of 3 failed",
                     "WHAT THE PAGE SHOWED AT THAT STEP", "Search books...", "No books yet",
-                    "HOW TO ANSWER", "THE JOURNEY IS WRONG", "THE JOURNEY IS RIGHT");
+                    "HOW TO ANSWER", "THE JOURNEY IS WRONG", "THE JOURNEY IS RIGHT")
+                .as("the question is one, the review is short, and what the lookups read is said")
+                .contains(TestAuthorClient.JOURNEY_REVIEW_TURNS + " turns in all",
+                    "the one from BEFORE the story", "verdict JOURNEY_WRONG",
+                    "verdict SCREEN_WRONG");
             assertThat(llm.sessionRequests.get(1)).as("only the failed journey may be corrected")
                 .contains("This review is about `" + PATH + "` and no other file");
             assertThat(llm.sessionRequests.get(2)).contains("VALID - kept");
@@ -133,18 +142,149 @@ class AFailedJourneyGoesBackToItsAuthorTest {
     }
 
     @Test
-    void anAuthorThatHandsInWithNothingCheckedStandsByItsJourney() throws Exception {
+    void anAuthorThatNamesTheScreenAsWrongStandsByItsJourney() throws Exception {
         try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
             (turn, conversation) -> ScriptedAgentLlm.Turn.call("report_done",
-                Map.of("wrote", "The criterion names the box; the screen gave it no label.")))) {
+                Map.of("verdict", "SCREEN_WRONG", "reason",
+                    "The criterion names the box; the screen gave it no label.")))) {
             TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
                 task(), null, PATH, WRITTEN, whatHappened());
 
-            assertThat(reviewed.answered()).isTrue();
+            assertThat(reviewed.verdict()).isEqualTo(TestAuthorClient.JourneyVerdict.STANDS_BY);
             assertThat(reviewed.journeyIsWrong()).isFalse();
             assertThat(reviewed.corrected()).isNull();
             assertThat(reviewed.reason())
                 .isEqualTo("The criterion names the box; the screen gave it no label.");
+            assertThat(llm.sessionRequests).as("one call, and nothing asked again").hasSize(1);
+        }
+    }
+
+    /**
+     * Section 70, live run 95. The author wrote "the browser journey was wrong ... I replaced
+     * it with a server-side test", kept no journey, and the product recorded "stands by it" and
+     * started the workers. An admission with nothing handed in is asked about once more in the
+     * same conversation, and is then "could not correct" - never "stands by it".
+     */
+    @Test
+    void anAuthorThatCallsItsJourneyWrongAndHandsInNoneIsAskedOnceMoreAndNeverStandsByIt()
+            throws Exception {
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
+            (turn, conversation) -> ScriptedAgentLlm.Turn.call("report_done",
+                Map.of("verdict", "JOURNEY_WRONG", "reason", "The browser journey was wrong. "
+                    + "It typed into a text box this task does not build. I replaced it with "
+                    + "a server-side test.")))) {
+            TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
+                task(), null, PATH, WRITTEN, whatHappened());
+
+            assertThat(reviewed.verdict())
+                .isEqualTo(TestAuthorClient.JourneyVerdict.COULD_NOT_CORRECT);
+            assertThat(reviewed.journeyIsWrong()).isTrue();
+            assertThat(reviewed.corrected()).isNull();
+            assertThat(reviewed.reason()).startsWith("The browser journey was wrong.");
+            assertThat(llm.sessionRequests).as("asked once more, and only once").hasSize(2);
+            assertThat(llm.sessionRequests.get(1)).as("in the same conversation, for the file")
+                .contains("THIS IS THE SAME REVIEW", "has kept no corrected journey at `" + PATH,
+                    "no other kind of test does", "WHAT THE PAGE SHOWED AT THAT STEP");
+        }
+    }
+
+    @Test
+    void theCorrectedFileHandedInWhenAskedOnceMoreIsTheCorrection() throws Exception {
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
+            (turn, conversation) -> switch (turn) {
+                case 1 -> ScriptedAgentLlm.Turn.call("report_done",
+                    Map.of("verdict", "JOURNEY_WRONG", "reason", "It expects a book nobody adds."));
+                case 2 -> ScriptedAgentLlm.Turn.call("check_journey",
+                    Map.of("path", PATH, "content", CORRECTED));
+                default -> ScriptedAgentLlm.Turn.call("report_done",
+                    Map.of("verdict", "journey wrong", "reason", "It now adds the book first."));
+            })) {
+            TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
+                task(), null, PATH, WRITTEN, whatHappened());
+
+            assertThat(reviewed.verdict()).isEqualTo(TestAuthorClient.JourneyVerdict.CORRECTED);
+            assertThat(reviewed.corrected()).isEqualTo(CORRECTED);
+            assertThat(reviewed.reason()).isEqualTo("It now adds the book first.");
+        }
+    }
+
+    /** The journey as it failed, given to check_journey again, is not a correction of it. */
+    @Test
+    void theSameJourneyGivenAgainIsNotACorrection() throws Exception {
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
+            (turn, conversation) -> turn % 3 == 0
+                ? ScriptedAgentLlm.Turn.call("report_done",
+                    Map.of("verdict", "JOURNEY_WRONG", "reason", "It is wrong."))
+                : ScriptedAgentLlm.Turn.call("check_journey",
+                    Map.of("path", PATH, "content", WRITTEN)))) {
+            TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
+                task(), null, PATH, WRITTEN, whatHappened());
+
+            assertThat(reviewed.verdict())
+                .isEqualTo(TestAuthorClient.JourneyVerdict.COULD_NOT_CORRECT);
+            assertThat(reviewed.corrected()).isNull();
+        }
+    }
+
+    /**
+     * Section 70: run 95's review made 22 calls under the ordinary stop of 120 turns. A review
+     * that only looks things up is ended after its own small number of turns.
+     */
+    @Test
+    void aReviewThatOnlyLooksThingsUpIsEndedAfterItsOwnFewTurns() throws Exception {
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
+            (turn, conversation) -> ScriptedAgentLlm.Turn.call("texts_of",
+                Map.of("type", "Screen" + turn)))) {
+            TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
+                task(), null, PATH, WRITTEN, whatHappened());
+
+            assertThat(TestAuthorClient.JOURNEY_REVIEW_TURNS).isEqualTo(10);
+            assertThat(llm.sessionRequests.size())
+                .isLessThanOrEqualTo(TestAuthorClient.JOURNEY_REVIEW_TURNS + 1);
+            assertThat(reviewed.verdict()).isEqualTo(TestAuthorClient.JourneyVerdict.UNANSWERED);
+            assertThat(reviewed.reason()).contains("TURN_CAP");
+        }
+    }
+
+    /**
+     * Section 70: the author's lookups read the project as it was before the story, where the
+     * screen did not exist, and run 95's author concluded nobody had built it. In a review
+     * texts_of answers from the tree the run built. The task that owns the journey writes the
+     * screen; its own acceptance directory need not be the one the journey is in.
+     */
+    @Test
+    void theAuthorCanAskWhatTheBuiltScreenHoldsAndCorrectAJourneyKeptInAnotherTasksDirectory(
+            @TempDir Path built) throws Exception {
+        Files.createDirectories(built.resolve("client/src/main/java/com/f/client"));
+        Files.writeString(built.resolve("client/src/main/java/com/f/client/BooksScreen.java"),
+            "package com.f.client;\npublic class BooksScreen {\n"
+                + "    String placeholder() { return \"Search books...\"; }\n}\n");
+        Task owner = new Task(UUID.randomUUID(), 1, "the books screen", "draw the screen",
+            Set.of("client/src/main/java/com/f/client/BooksScreen.java"), Set.of(), List.of(),
+            "client/src/test/java/swarm", null, null,
+            new SwarmPolicy(1, false, 0.2, 0.2, List.of()), TaskState.DONE);
+        owner.setJourneyPaths(List.of(PATH));
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
+            (turn, conversation) -> switch (turn) {
+                case 1 -> ScriptedAgentLlm.Turn.call("texts_of", Map.of("type", "BooksScreen"));
+                case 2 -> ScriptedAgentLlm.Turn.call("check_journey",
+                    Map.of("path", PATH, "content", CORRECTED));
+                default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("verdict",
+                    "JOURNEY_WRONG", "reason", "The box is named by its placeholder."));
+            })) {
+            TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
+                built, owner, null, List.of("a book is found by its title or its author"),
+                PATH, WRITTEN, whatHappened());
+
+            assertThat(llm.sessionRequests.get(0)).as("the story's criteria and where the "
+                + "screen is written, not one task's checks")
+                .contains("a book is found by its title or its author",
+                    "It may write: client/src/main/java/com/f/client/BooksScreen.java");
+            assertThat(llm.sessionRequests.get(1)).as("texts_of read the built tree")
+                .contains("Texts in `BooksScreen`", "Search books...");
+            assertThat(llm.sessionRequests.get(2)).contains("VALID - kept");
+            assertThat(reviewed.verdict()).isEqualTo(TestAuthorClient.JourneyVerdict.CORRECTED);
+            assertThat(reviewed.corrected()).isEqualTo(CORRECTED);
         }
     }
 
@@ -167,8 +307,9 @@ class AFailedJourneyGoesBackToItsAuthorTest {
         try (ScriptedAgentLlm llm = new ScriptedAgentLlm(conversation -> "{}",
             (turn, conversation) -> switch (turn) {
                 case 1, 2 -> ScriptedAgentLlm.Turn.call("check_journey",
-                    Map.of("path", PATH, "content", WRITTEN));
-                default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("wrote", "kept"));
+                    Map.of("path", PATH, "content", RETITLED));
+                default -> ScriptedAgentLlm.Turn.call("report_done",
+                    Map.of("verdict", "JOURNEY_WRONG", "reason", "kept"));
             })) {
             TestAuthorClient.JourneyReviewed reviewed = author(llm).reviewFailedJourney(repo,
                 task(), null, PATH, WRITTEN, whatHappened());
@@ -178,7 +319,7 @@ class AFailedJourneyGoesBackToItsAuthorTest {
                     "step 3", "A Wizard of Earthsea");
             assertThat(llm.sessionRequests.get(2)).as("the same file again is the author's "
                 + "answer that the new screen shows the text by itself").contains("VALID - kept");
-            assertThat(reviewed.corrected()).isEqualTo(WRITTEN);
+            assertThat(reviewed.corrected()).isEqualTo(RETITLED);
         }
     }
 
@@ -270,6 +411,22 @@ class AFailedJourneyGoesBackToItsAuthorTest {
             .contains("THE JOURNEY'S AUTHOR WAS ASKED FIRST", "the box has no label.");
         assertThat(evidence).contains("every role, accessible name and text a selector of the "
             + "journey uses must be on the screen exactly as the journey writes it");
+        assertThat(evidence).as("the journey itself, step by step: no lookup stands between "
+            + "a repair worker and what failed (section 70)")
+            .contains("3 step(s) from the application's entry page", "1. click", "It failed: ");
+    }
+
+    /** Section 70: what the run stops on when its author disowns a journey. */
+    @Test
+    void aJourneyItsAuthorDisownsStopsTheRunWithAPlainMessageAndNoWorker() {
+        String brief = JourneysOfAPlan.disowned(task(), List.of(PATH),
+            List.of("The journey's author answered that the journey is WRONG and, asked "
+                + "twice, handed in no corrected journey: it types into a box nobody built."));
+
+        assertThat(brief).contains("its author says the journey itself is wrong",
+            "'search the books'", PATH, "it types into a box nobody built.",
+            "No worker was started", "correct the journey by hand and resume",
+            "the author is then asked again");
     }
 
     // ---------------------------------------------------------------------------------------

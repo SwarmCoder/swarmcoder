@@ -19,6 +19,32 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   zoom in, zoom out and Fit buttons beside the mouse wheel. The graph panel opens wider (640 px,
   up to 1400). Links between the same two requirements are drawn side by side instead of on top
   of each other.
+- **Final integration can run again for the same run.** After a repair round, a corrected
+  journey or a pause for the model server, the second attempt stopped with "a branch named
+  'swarm/integration/<run>' already exists". Each attempt now starts clean; the earlier one is
+  kept as branch `swarm/integration-attempt/<run>/<number>` so you can see why it failed. Delete
+  those branches when you no longer need them.
+- **A journey's author who says the journey is wrong is no longer recorded as standing by
+  it.** The review of a failed journey now ends on one of two fixed words (`JOURNEY_WRONG`,
+  `SCREEN_WRONG`) plus what `check_journey` kept. An author that blames its journey and hands
+  in no corrected journey is asked once more in the same conversation. If there is still none,
+  or its correction is refused in the browser, the run parks with a plain message and no
+  worker is started. Correct the journey by hand on the run's tests branch, or resume to have
+  the author asked again.
+- **The review of a failed journey is short.** It has 10 turns and 12 lookups of its own
+  (`-Dswarmcoder.roles.journeyReviewTurns`, `-Dswarmcoder.roles.journeyReviewLookups`), a
+  session of its own, and `texts_of` answers from the code the run built. Before, its lookups
+  only saw the project from before the story, where the new screen did not exist.
+- **A journey is owned by a task that writes the screen.** A journey written with the tests of
+  a task that writes no browser code now belongs to the last task in the plan whose write set
+  holds browser code, so its workers are shown the journey and a failed journey is repaired by
+  workers who may change the screen. A plan saved by an earlier version is put right when the
+  run resumes.
+- **`acceptance_test` no longer answers a wrong name with two lines.** Asked with a name
+  nothing claimed carries (a module, a class of the code), a worker gets everything its task
+  claims, the journey included. Asked for a test class, it is told in one line that the task
+  also claims a journey. The repair evidence for a failed journey now holds the journey step
+  by step.
 
 ### Changed
 

@@ -6380,3 +6380,82 @@ commit - and `repairAfterOwnedRefusal`. They compile and follow the paths of sec
 cases in `AWorkerReadsTheAcceptanceTestItMustMeetTest`, `HarnessRunReportTest`.
 
 **Left.** A live run with a screen.
+
+## 70. The first real review of a failed journey: misread, long, sent to the wrong task, and a stage that could not run twice (run 95, 2026-10-08)
+
+Run 95: local models, a small demo with a server module and a browser module, resumed from a
+plan and tests saved before the workers. It parked at FINAL_INTEGRATION. Nothing below was
+measured in a live run; the review is tested with a scripted model, the integration on a real
+git repository.
+
+**What the author did in its 22 calls** (about 55 minutes; 446,265 input tokens, 71,667 output
+tokens; 56 lookups, no `check_journey`). Its lookups read the project as it was before the
+story. `texts_of` for the screen's type answered "no such type", so by its third call it had
+decided the screen was not built. The opening led with the task that claimed the journey, a
+server task, so it then set about writing a server test: it read the contract, four build
+files, an example project's service, commands, queries and a 19,574-character screen, the
+shapes of the store's types, and listed the same folders fourteen times. Lookups by kind: 16
+whole files (63,624 characters), 16 listings (5,442), 3 searches (12,516), 9 tree queries
+(6,632), 11 language-server queries (3,178). It ended on a paragraph that began "The browser
+journey ... was wrong" and described a JUnit test it could not hand in.
+
+**1. The answer was misread.** "Nothing checked" was read as "stands by it", and the workers
+were started. Now the review ends on `report_done(verdict, reason)` with verdict
+`JOURNEY_WRONG` or `SCREEN_WRONG`. `TestAuthorClient.JourneyVerdict`, decided in
+`TestAuthorTools.reviewOutcome` from the verdict and what `check_journey` kept, never from the
+reason's words:
+
+- CORRECTED: a kept journey that is not the original again, and the screen not named as wrong;
+- STANDS_BY: `SCREEN_WRONG`. The repair round follows, with the reason;
+- COULD_NOT_CORRECT: `JOURNEY_WRONG` and nothing kept. Asked once more in the same conversation
+  (`journeyCorrectionMissing`) first. Then the run parks (`FinalIntegrator.SentBack.disowned`,
+  `JourneysOfAPlan.disowned`) and no worker is started. A correction the browser guard refuses
+  parks the same way: before, the first journey "stood" and went to the workers;
+- UNANSWERED: the session died or named no side. The journey stands and the repair round
+  follows, as before.
+
+A parked task is not marked as asked, so a resume asks the author again.
+
+**2. The review is bounded** (`TestAuthorClient.reviewJourneyInSession`). Ten turns
+(`JOURNEY_REVIEW_TURNS`): two of lookups, three of `check_journey`, one to answer, two for the
+re-ask, two spare. Twelve lookups, one expert question. No lookup tool was removed. The opening
+asks one question, gives the story's criteria and the owning task's write set, and says what
+the lookups read. `texts_of` answers from the merged tree (`TreeQueries.textsOfIn`: the file of
+that name, no index). **Changed from section 69:** the review no longer continues the
+conversation that wrote the journey. That conversation's stops (120 turns) are fixed when it
+opens and count across all of it, so a review inside it cannot be bounded.
+
+**3. The journey was claimed by the wrong task.** The only task with a check wrote the server,
+so its author wrote the journey and that task claimed it; the screen was another task's.
+`JourneysOfAPlan.settleOwners`, from write sets and the build survey only: a journey stays with
+the task it was written with when that task's write set names a screen; otherwise it goes to
+the last task in the plan's order whose write set does; with no such task it stays. Who is
+ASKED for a journey (section 64) is unchanged. Run at TEST_AUTHORING, and once per run at
+EXECUTING and FINAL_INTEGRATION, so a plan saved before this rule is put right on resume. Only
+the claim moves. Not seen: which of several screen tasks wrote the element a step names.
+
+**4. Final integration could not run twice.** `git worktree add -b` refuses an existing
+branch, so every second attempt ended on "Integration setup failed". The return paths of
+sections 63 and 69 had never run to their end. `FinalIntegrator.openIntegration`: the earlier
+branch is renamed `swarm/integration-attempt/<run>/<n>` (`GitService.setBranchAside`) and the
+new attempt is cut from the tests commit. Nothing deletes the kept branches.
+
+**5. `acceptance_test` answered a wrong name with two lines.** A repair worker asked it for its
+module and for the implementation's class, then for the test class, and never saw the journey.
+A name nothing claimed carries now returns everything claimed; a test class asked by name adds
+one line naming the journey; `JourneysOfAPlan.repairEvidence` holds the journey step by step.
+
+**Seen, not changed.** The model server stopped answering once; the run paused and went on by
+itself. The page reading at the failing step showed only a loading text: the screen may not
+have drawn within the step's 10 seconds. Not looked into.
+
+**Not exercised by any test:** `sendJourneyBackToItsAuthor` (it needs a container with a
+browser), so the park on a disowned journey is tested as its parts; `settleJourneyOwnersOnce`
+at EXECUTING and FINAL_INTEGRATION; the whole loop of integration, repair round, integration.
+
+**Tests.** `AJourneyIsOwnedByTheTaskThatWritesTheScreenTest` (new); cases in
+`AFailedJourneyGoesBackToItsAuthorTest`, `FinalIntegratorTest` (a real repository, the same
+run integrated three times; a worktree left by a killed attempt),
+`AWorkerReadsTheAcceptanceTestItMustMeetTest`.
+
+**Left.** A live run with a screen.

@@ -1949,6 +1949,35 @@ public final class WorkerToolbox {
      */
     public String acceptanceTest(String which) {
         String asked = which == null ? "" : which.strip();
+        boolean[] claimsAnything = new boolean[1];
+        String answer = claimedBy(asked, claimsAnything);
+        if (answer == null && !asked.isEmpty() && claimsAnything[0]) {
+            // Asked with a name nothing claimed carries - a module, a class of the code under
+            // test (live run 95: 'the-server-module' and the implementation's class name each
+            // got a two-line "no match", and the worker repairing a failed journey never saw
+            // the journey). What it wants is what the task must satisfy: all of it, once.
+            String all = claimedBy("", new boolean[1]);
+            answer = "Nothing this task claims is named `" + asked + "` - this tool takes a "
+                + "test class, Class#method or a journey's name, not a module or a class of "
+                + "the code. Everything the task claims:\n\n" + (all == null ? "" : all);
+        }
+        if (answer == null) {
+            answer = "This task claims no acceptance test; there is nothing to read.\n";
+        }
+        answer = truncate(answer, room.chars(MAX_TOOL_OUTPUT_CHARS));
+        com.swarmcoder.inference.LookupMeter.record("worker",
+            com.swarmcoder.inference.LookupMeter.Kind.ACCEPTANCE_TEST, answer.length());
+        logLookup("acceptance_test", asked, answer);
+        return answer;
+    }
+
+    /**
+     * What the task claims under {@code asked} - every claimed test and journey when it is
+     * empty; null when nothing matches.
+     *
+     * @param claimsAnything set to whether the task claims a test or a journey at all
+     */
+    private String claimedBy(String asked, boolean[] claimsAnything) {
         java.util.List<String[]> claimed = new ArrayList<>();
         if (task.authoredTests() != null) {
             for (com.swarmcoder.domain.AuthoredTest test : task.authoredTests().tests()) {
@@ -1997,6 +2026,8 @@ public final class WorkerToolbox {
         }
         // The journeys the task claims (section 63): small files, shown whole. Asked with a
         // name, only the journey of that name.
+        claimsAnything[0] = !byFile.isEmpty() || !task.journeyPaths().isEmpty();
+        java.util.List<String> journeysNotShown = new ArrayList<>();
         for (String claimedJourney : task.journeyPaths()) {
             String path = claimedJourney.replace('\\', '/');
             String file = path.substring(path.lastIndexOf('/') + 1);
@@ -2005,6 +2036,7 @@ public final class WorkerToolbox {
                     - com.swarmcoder.verify.JourneyFile.SUFFIX.length()) : file;
             if (!asked.isEmpty() && !asked.equals(path) && !asked.equals(file)
                     && !asked.equals(name)) {
+                journeysNotShown.add(name);
                 continue;
             }
             String source = acceptanceSource.apply(path);
@@ -2020,17 +2052,17 @@ public final class WorkerToolbox {
                     + "the application match its selectors.\n")
                 .append(source.strip()).append("\n\n");
         }
-        String answer = out.length() == 0
-            ? (byFile.isEmpty()
-                ? "This task claims no acceptance test; there is nothing to read.\n"
-                : "No claimed test matches `" + asked + "`. The claimed files: " + byFile.keySet()
-                    + "\n")
-            : out.toString();
-        answer = truncate(answer, room.chars(MAX_TOOL_OUTPUT_CHARS));
-        com.swarmcoder.inference.LookupMeter.record("worker",
-            com.swarmcoder.inference.LookupMeter.Kind.ACCEPTANCE_TEST, answer.length());
-        logLookup("acceptance_test", asked, answer);
-        return answer;
+        if (out.length() == 0) {
+            return null;
+        }
+        // Asked for one test class by name: the journey the task also claims is one line
+        // away, not silently left out.
+        for (String name : journeysNotShown) {
+            out.append("This task also claims the journey `").append(name)
+                .append("` - what a person does on the screen, made in a real browser after "
+                    + "the last merge: acceptance_test('").append(name).append("') shows it.\n");
+        }
+        return out.toString();
     }
 
     public String docOutline(String document) {

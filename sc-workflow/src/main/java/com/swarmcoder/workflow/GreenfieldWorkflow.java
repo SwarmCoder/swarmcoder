@@ -1123,6 +1123,7 @@ public class GreenfieldWorkflow {
                 }
                 case EXECUTING -> {
                     log("Processing EXECUTING...");
+                    settleJourneyOwnersOnce(run, "EXECUTING");
                     if (run.nothingToBuild()) {
                         log("EXECUTING - nothing is built: every check of this run was already "
                             + "satisfied by the code it started from, so no worker is started. "
@@ -1177,6 +1178,7 @@ public class GreenfieldWorkflow {
                 }
                 case FINAL_INTEGRATION -> {
                     log("Processing FINAL_INTEGRATION...");
+                    settleJourneyOwnersOnce(run, "FINAL_INTEGRATION");
                     // A failed journey goes back to its author before any worker (section 69).
                     // The author is a model: when its endpoint is down nothing was learned, and
                     // the stage runs again when it answers - said after the integrator has
@@ -1186,18 +1188,18 @@ public class GreenfieldWorkflow {
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
                             .tellingTheRun(this::log)
-                            .sendingJourneysBackTo((task, failed, onMergedTree) -> {
+                            .sendingJourneysBackTo((task, failed, mergedTree, onMergedTree) -> {
                                 try {
                                     return sendJourneyBackToItsAuthor(integrating, task, failed,
-                                        onMergedTree);
+                                        mergedTree, onMergedTree);
                                 } catch (EndpointOutage outage) {
                                     authorUnreachable[0] = outage;
-                                    return false;
+                                    return FinalIntegrator.SentBack.STANDS;
                                 } catch (RuntimeException e) {
                                     // The journey stands; the repair round follows as before.
                                     log("FINAL_INTEGRATION: the failed journey could not be "
                                         + "sent back to its author: " + e);
-                                    return false;
+                                    return FinalIntegrator.SentBack.STANDS;
                                 }
                             })
                             .integrate(run);
@@ -1522,19 +1524,50 @@ public class GreenfieldWorkflow {
      * showed there. A corrected journey is taken only when
      * {@link JourneysOfAPlan#correctionRefused} finds
      * nothing: it is then written to the run's tests ref and committed, and the caller makes
-     * the integration again. Anything else leaves the journey as written, and the author's
-     * answer goes to the workers of the repair round that follows.
+     * the integration again.
      *
+     * <p>What follows otherwise depends on which side the author named (section 70, after live
+     * run 95, where "the journey was wrong" with nothing handed in was recorded as "stands by
+     * it" and the workers were started):
+     *
+     * <ul>
+     *   <li>the screen is wrong, or no usable answer: the journey stands, and the author's
+     *       answer goes to the workers of the repair round that follows;</li>
+     *   <li>the journey is wrong and no correction of it was taken - none was handed in after
+     *       being asked twice, or the one handed in was refused in the browser: the run stops
+     *       with a plain message and NO worker is started. The task is not marked as asked, so
+     *       resuming the run asks the author again.</li>
+     * </ul>
+     *
+     * @param mergedTree   the merged tree, for the author's lookup of what the run built
      * @param onMergedTree makes journeys in the container that holds the merged, built tree
-     * @return true when a correction was committed
      */
-    boolean sendJourneyBackToItsAuthor(Run run, Task task, List<JourneyFile.Result> failed,
-                                       java.util.function.Function<List<JourneyFile.Journey>,
-                                           JourneyRunner.Outcome> onMergedTree) {
+    FinalIntegrator.SentBack sendJourneyBackToItsAuthor(
+            Run run, Task task, List<JourneyFile.Result> failed, Path mergedTree,
+            java.util.function.Function<List<JourneyFile.Journey>,
+                JourneyRunner.Outcome> onMergedTree) {
         if (task.journeySentBack() || failed == null || failed.isEmpty()
                 || roles.testAuthor() == null || repoPath == null || !gitService.isEnabled()) {
-            return false;
+            return FinalIntegrator.SentBack.STANDS;
         }
+        // The criteria of the whole plan: the task that owns a journey writes the screen and
+        // need not be the one that answers for the story's checks.
+        TaskGraph plan = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        List<String> storyCriteria = new ArrayList<>();
+        if (plan != null) {
+            for (Task planned : plan.tasks()) {
+                if (planned.criteria() != null) {
+                    planned.criteria().forEach(criterion -> {
+                        if (criterion.text() != null && !storyCriteria.contains(criterion.text())) {
+                            storyCriteria.add(criterion.text());
+                        }
+                    });
+                }
+            }
+        }
+        List<String> disowned = new ArrayList<>();
+        List<String> disownedAnswers = new ArrayList<>();
         String branch = testsBranch(run);
         Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
         DesignDocument design = run.designId() == null ? null
@@ -1552,15 +1585,21 @@ public class GreenfieldWorkflow {
                     + "any worker repairs anything it goes back to its author, with the "
                     + "failing step and what the page showed.");
                 TestAuthorClient.JourneyReviewed reviewed = roles.testAuthor()
-                    .reviewFailedJourney(worktree, task, design, path, content,
-                        JourneysOfAPlan.sendBackEvidence(result));
+                    .reviewFailedJourney(worktree, mergedTree, task, design, storyCriteria,
+                        path, content, JourneysOfAPlan.sendBackEvidence(result));
                 String note;
-                if (!reviewed.answered()) {
+                if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.UNANSWERED) {
                     note = "The journey's author gave no usable answer (" + reviewed.reason()
                         + "), so the journey stands as written.";
-                } else if (!reviewed.journeyIsWrong()) {
+                } else if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.STANDS_BY) {
                     note = "The journey's author answered that the journey is right and the "
                         + "screen is wrong: " + reviewed.reason();
+                } else if (reviewed.verdict()
+                        == TestAuthorClient.JourneyVerdict.COULD_NOT_CORRECT) {
+                    note = "The journey's author answered that the journey is WRONG and, asked "
+                        + "twice, handed in no corrected journey: " + reviewed.reason();
+                    disowned.add(path);
+                    disownedAnswers.add(note);
                 } else {
                     String refused = JourneysOfAPlan.correctionRefused(result.journey(), path,
                         reviewed.corrected(), onMergedTree, journeys -> {
@@ -1585,9 +1624,11 @@ public class GreenfieldWorkflow {
                             + "` and now ends on `" + JourneysOfAPlan.lastStepOf(now) + "`, with " + now.steps().size() + " step(s) "
                             + "where it had " + result.journey().steps().size() + ".";
                     } else {
-                        note = "The journey's author answered that the journey was wrong: "
+                        note = "The journey's author answered that the journey is WRONG: "
                             + reviewed.reason() + " Its correction was not taken (" + refused
-                            + "), so the journey stands as first written.";
+                            + ").";
+                        disowned.add(path);
+                        disownedAnswers.add(note);
                     }
                 }
                 log("FINAL_INTEGRATION: " + note);
@@ -1606,10 +1647,69 @@ public class GreenfieldWorkflow {
         } finally {
             removeTree(worktree); // the branch stays; a correction is on it
         }
-        task.setJourneySentBack(true);
         task.setJourneyReviewNote(String.join(" ", notes));
+        if (!disowned.isEmpty()) {
+            // Not marked as asked: no worker repairs a journey its author disowns, so the
+            // only ways on are a correction by hand or asking the author again on resume.
+            artifactStore.saveTask(task);
+            log("FINAL_INTEGRATION: the author of the journey(s) " + disowned + " of task '"
+                + task.title() + "' calls them wrong and no correction could be taken. No "
+                + "worker is started; the run stops here.");
+            return FinalIntegrator.SentBack.disowned(
+                JourneysOfAPlan.disowned(task, disowned, disownedAnswers)
+                    + OperatorCorrectedTests.whereToCorrect(run));
+        }
+        task.setJourneySentBack(true);
         artifactStore.saveTask(task);
-        return !taken.isEmpty();
+        return taken.isEmpty() ? FinalIntegrator.SentBack.STANDS
+            : FinalIntegrator.SentBack.CORRECTED;
+    }
+
+    /** The runs whose journeys' owners were settled in this process; see below. */
+    private final Set<UUID> journeyOwnersSettled =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Before workers build and before final integration, once per run in this process: each
+     * journey is claimed by a task that writes the screen (section 70). At test authoring this
+     * is done as the journeys are claimed; here it puts right a plan made before that rule - a
+     * run resumed from an earlier stage (live run 95 resumed a saved plan, and its journey's
+     * repair went to a task that may not write the screen). Changes nothing when every journey
+     * already has its owner. Only the claim moves: the file, the tests commit and what each
+     * task's candidates are verified against stay as they are.
+     */
+    private void settleJourneyOwnersOnce(Run run, String stage) {
+        if (run.taskGraphId() == null || !journeyOwnersSettled.add(run.id())) {
+            return;
+        }
+        try {
+            TaskGraph graph = artifactStore.root().taskGraphs.get(run.taskGraphId());
+            if (graph == null
+                    || graph.tasks().stream().allMatch(task -> task.journeyPaths().isEmpty())) {
+                return;
+            }
+            settleJourneyOwners(graph, browserOnlySurvey(repoLayout()), stage);
+        } catch (RuntimeException e) {
+            log(stage + ": which task owns each journey could not be settled (" + e
+                + "); the claims stay as the plan recorded them.");
+        }
+    }
+
+    private void settleJourneyOwners(TaskGraph graph, BrowserOnlyCode.Survey survey,
+                                     String stage) {
+        VerifySpec contract = repoPath == null ? null
+            : VerifySpecLoader.load(repoPath).orElse(null);
+        List<Task> planOrder = new ArrayList<>();
+        SwarmEngineImpl.topologicalWaves(graph).forEach(planOrder::addAll);
+        for (JourneysOfAPlan.Moved moved : JourneysOfAPlan.settleOwners(planOrder, survey,
+                JourneyFile.canRun(contract))) {
+            artifactStore.saveTask(moved.from());
+            artifactStore.saveTask(moved.to());
+            log(stage + ": the journey " + moved.path() + " is owned by task '"
+                + moved.to().title() + "', whose write set holds the screen, not by '"
+                + moved.from().title() + "', which writes no browser code. Its workers are "
+                + "shown the journey, and a failed journey is repaired by them.");
+        }
     }
 
     private boolean recordDelivery(Run run, FinalIntegrator.Result integration) {
@@ -2485,6 +2585,9 @@ public class GreenfieldWorkflow {
                         + " of its " + forTask.size() + " check(s)");
                 }
             }
+            // Who owns each journey (section 70): a task that writes the screen, not whichever
+            // task's author happened to write it.
+            settleJourneyOwners(graph, browserOnly, "TEST_AUTHORING");
             // THE BACKSTOP (section 63), with no model: a plan that changes a screen and whose
             // tasks claim no journey does not go on, whatever the author made of being asked.
             if (parkFor == null) {

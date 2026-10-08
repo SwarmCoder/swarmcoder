@@ -96,6 +96,80 @@ class FinalIntegratorTest {
         }
     }
 
+    /**
+     * Section 70 (live run 95): final integration runs again for the same run - after a repair
+     * round, after a corrected journey, after a pause for the model server - and every second
+     * attempt died on "a branch named 'swarm/integration/<run>' already exists". The return
+     * path of sections 63 and 69 had never run to its end. Here it runs three times on a real
+     * repository: each attempt is made from the start, and the earlier ones are kept under a
+     * numbered name for a person to look at.
+     */
+    @Test
+    void finalIntegrationCanBeMadeAgainForTheSameRunAndKeepsTheEarlierAttempts()
+            throws Exception {
+        initRepoWithWinners(false);
+        try (ArtifactStore store = new ArtifactStore(storeDir)) {
+            Run run = storeGraphAndWinners(store);
+            List<String> told = new ArrayList<>();
+            String branch = "swarm/integration/" + run.id();
+            String earlier = "swarm/integration-attempt/" + run.id() + "/";
+
+            FinalIntegrator.Result first =
+                new FinalIntegrator(new GitService(repo), store).integrate(run);
+            assertThat(first.ok()).as(String.valueOf(first.failure())).isTrue();
+            String firstHead = gitOut("rev-parse " + branch).strip();
+
+            // What a repair round does before the stage runs again: the task's choice changes.
+            git("checkout -q swarm/" + taskB.id() + "/0");
+            Files.writeString(repo.resolve("b.txt"), "beta repaired by B\n");
+            git("add -A");
+            git("-c user.email=t@t -c user.name=t commit -q -m repaired");
+            git("checkout -q master");
+
+            FinalIntegrator.Result second = new FinalIntegrator(new GitService(repo), store)
+                .tellingTheRun(told::add).integrate(run);
+
+            assertThat(second.ok()).as(String.valueOf(second.failure())).isTrue();
+            assertThat(second.integrationBranch()).isEqualTo(branch);
+            assertThat(gitOut("show " + branch + ":b.txt")).as("made again from the start, "
+                + "with the repaired choice").contains("repaired by B");
+            assertThat(gitOut("show " + branch + ":a.txt")).contains("changed by A");
+            assertThat(gitOut("rev-parse " + earlier + "1").strip())
+                .as("the earlier attempt is kept, not deleted").isEqualTo(firstHead);
+            assertThat(told).anyMatch(line -> line.contains("made again")
+                && line.contains(earlier + "1"));
+
+            FinalIntegrator.Result third =
+                new FinalIntegrator(new GitService(repo), store).integrate(run);
+
+            assertThat(third.ok()).as(String.valueOf(third.failure())).isTrue();
+            assertThat(gitOut("branch --list"))
+                .contains(branch, earlier + "1", earlier + "2");
+            assertThat(gitOut("worktree list")).as("no integration worktree is left behind")
+                .doesNotContain("integration-" + run.id());
+        }
+    }
+
+    /** A killed attempt can leave the branch checked out in a worktree; that is cleared too. */
+    @Test
+    void anAttemptThatWasKilledWithItsWorktreeStillThereDoesNotStopTheNextOne() throws Exception {
+        initRepoWithWinners(false);
+        try (ArtifactStore store = new ArtifactStore(storeDir)) {
+            Run run = storeGraphAndWinners(store);
+            String branch = "swarm/integration/" + run.id();
+            Path left = Path.of(System.getProperty("user.home"), ".swarmcoder", "wt",
+                "integration-" + run.id());
+            new GitService(repo).addWorktree(branch, left, "HEAD");
+
+            FinalIntegrator.Result result =
+                new FinalIntegrator(new GitService(repo), store).integrate(run);
+
+            assertThat(result.ok()).as(String.valueOf(result.failure())).isTrue();
+            assertThat(gitOut("show " + branch + ":a.txt")).contains("changed by A");
+            assertThat(Files.exists(left)).isFalse();
+        }
+    }
+
     @Test
     void secretInWinningDiffParksBeforeApproval() throws Exception {
         initRepoWithWinners(false);

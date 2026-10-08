@@ -131,13 +131,36 @@ public class FinalIntegrator {
          *                     page showed
          * @param onMergedTree makes journeys in the merged tree's container: the application
          *                     is started again and a browser carries them out
-         * @return true when a corrected journey was taken and committed with the run's tests -
-         *         the integration is then made again from the start; false when the journeys
-         *         stand as they were
+         * @param mergedTree   the merged tree itself, for a lookup that must see what the run
+         *                     built (the author's other lookups read the project as it was
+         *                     before the story)
+         * @return what the review came to; never null
          */
-        boolean review(Task task, List<JourneyFile.Result> failed,
-                       java.util.function.Function<List<JourneyFile.Journey>,
-                           JourneyRunner.Outcome> onMergedTree);
+        SentBack review(Task task, List<JourneyFile.Result> failed, Path mergedTree,
+                        java.util.function.Function<List<JourneyFile.Journey>,
+                            JourneyRunner.Outcome> onMergedTree);
+    }
+
+    /**
+     * What sending a failed journey back to its author came to (section 70, after live run 95,
+     * where "the journey was wrong" with nothing handed in was read as "the author stands by
+     * it" and the workers were started on a journey its own author had disowned).
+     *
+     * @param corrected true when a corrected journey was taken and committed with the run's
+     *                  tests - the integration is then made again from the start
+     * @param disowned  null unless the author said its journey is wrong and no correction of it
+     *                  could be taken; then the plain message the run stops on. No worker is
+     *                  started: a worker cannot change a journey, and making the screen match
+     *                  one its author calls wrong builds the wrong thing
+     */
+    public record SentBack(boolean corrected, String disowned) {
+        /** The journey stands as written; the repair round follows, with the author's answer. */
+        public static final SentBack STANDS = new SentBack(false, null);
+        public static final SentBack CORRECTED = new SentBack(true, null);
+
+        public static SentBack disowned(String why) {
+            return new SentBack(false, why);
+        }
     }
 
     private static final Logger log = LoggerFactory.getLogger(FinalIntegrator.class);
@@ -277,7 +300,7 @@ public class FinalIntegrator {
             // bring nothing new. The acceptance tests reach the delivery branch by exactly one
             // route, and this is it; descending from the progress branch would deliver the code
             // and leave the tests that prove it behind.
-            gitService.addWorktree(integrationBranch, worktree, run.verificationPoint());
+            openIntegration(run, integrationBranch, worktree);
             // Every journey the tree holds, read now: the reductions below clear the protected
             // trees of the working copy. They are made once, after the last merge.
             Map<String, String> journeysHeld = journeysIn(worktree, graph);
@@ -435,6 +458,36 @@ public class FinalIntegrator {
             boxes.release(worktree);
             gitService.removeWorktree(worktree);
         }
+    }
+
+    /** Where an earlier integration attempt of a run is kept: {@code <this><run>/<number>}. */
+    static final String EARLIER_ATTEMPTS = "swarm/integration-attempt/";
+
+    /**
+     * Cuts the run's integration branch from its tests commit, in a worktree of its own - also
+     * when this is not the first time (section 70, live run 95). The stage runs again for the
+     * same run after a repair round, after a corrected journey and after a pause for the model
+     * server, and {@code git worktree add -b} refuses a branch that exists, so every second
+     * attempt ended on "Integration setup failed ... a branch named ... already exists". The
+     * return path of sections 63 and 69 had never run to its end.
+     *
+     * <p>The earlier attempt is not thrown away: its branch is renamed to
+     * {@code swarm/integration-attempt/<run>/<number>} - the merges it made, up to where it
+     * stopped, are what a person reads to see why it failed - and the new attempt starts clean
+     * from the tests commit, which may have moved (a corrected journey is committed there).
+     */
+    private void openIntegration(Run run, String integrationBranch, Path worktree)
+            throws java.io.IOException {
+        // What a killed attempt left at this path, if anything; quiet when there is nothing.
+        gitService.removeWorktree(worktree);
+        String kept = gitService.setBranchAside(integrationBranch, EARLIER_ATTEMPTS + run.id());
+        if (kept != null) {
+            log.info("Run {}: final integration is made again; the earlier attempt is kept as "
+                + "branch {}", run.id(), kept);
+            runRecord.accept("FINAL_INTEGRATION: made again from the run's tests commit. The "
+                + "earlier attempt is kept as branch " + kept + ".");
+        }
+        gitService.addWorktree(integrationBranch, worktree, run.verificationPoint());
     }
 
     /**
@@ -630,12 +683,19 @@ public class FinalIntegrator {
         if (owner != null && journeySendBack != null && target != null) {
             ExecTarget live = target;
             VerifySpec contract = spec.get();
-            if (journeySendBack.review(owner, List.copyOf(ofOwner), again -> JourneyRunner.run(
-                    live, contract, again, BlobSink.NONE, new StringBuilder()))) {
+            SentBack back = journeySendBack.review(owner, List.copyOf(ofOwner), worktree,
+                again -> JourneyRunner.run(live, contract, again, BlobSink.NONE,
+                    new StringBuilder()));
+            if (back != null && back.corrected()) {
                 return new Result(integrationBranch, text + "\n\nThe journey went back to its "
                     + "author, who corrected it. The correction is committed with the run's "
                     + "tests and the integration is made again.", verification, null, null,
                     true);
+            }
+            if (back != null && back.disowned() != null) {
+                // No JourneyFailure on the result: nothing goes to the workers (section 70).
+                return new Result(integrationBranch, text + "\n\n" + back.disowned(),
+                    verification);
             }
         }
         return new Result(integrationBranch, text.toString(), verification, owner == null ? null
@@ -659,7 +719,7 @@ public class FinalIntegrator {
         Path worktree = WORKTREE_ROOT.resolve("integration-" + run.id());
         Task first = graph.tasks().get(0);
         try {
-            gitService.addWorktree(integrationBranch, worktree, run.verificationPoint());
+            openIntegration(run, integrationBranch, worktree);
             String testsCommit = run.acceptanceTestsCommit();
             Set<String> testsDue = new java.util.LinkedHashSet<>(run.alreadySatisfiedTests());
             for (Task task : graph.tasks()) {

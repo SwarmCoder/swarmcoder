@@ -272,6 +272,107 @@ final class JourneysOfAPlan {
             + "=off runs the story without a journey.";
     }
 
+    /** A journey whose claim went from the task it was written with to the task that owns it. */
+    record Moved(String path, Task from, Task to) {}
+
+    /**
+     * Settles which task OWNS each journey (section 70, after live run 95).
+     *
+     * <p>A journey is written with a task's tests, so it was claimed by the task whose author
+     * wrote it - and that is any task that answers for a check. In run 95 it was a task whose
+     * write set held server code only; the screen the journey uses was written by another task.
+     * When the journey failed, the repair went to workers who may not touch the screen.
+     *
+     * <p>Which task is asked for a journey ({@link #decide}) is unchanged: a task that writes no
+     * screen may be the reason a journey is needed. It does not own it. The owner of a journey
+     * is, from the write sets and the build alone:
+     *
+     * <ol>
+     *   <li>the task it was written with, when that task's write set names a screen
+     *       ({@link ScreenChange#screenPaths}) - the journey was written for that screen;</li>
+     *   <li>otherwise the LAST task in the plan's order whose write set names a screen: the
+     *       steps of a journey meet the browser code the plan writes, and the last such task
+     *       is cut from every earlier one, so its checkout holds the whole of it;</li>
+     *   <li>otherwise - no task of the plan writes a screen - the task it was written with:
+     *       the screen is already there and what it shows comes from that task's change.</li>
+     * </ol>
+     *
+     * <p>Nothing is read from a title, an instruction or the journey's words. Run again it
+     * changes nothing, so it is also what puts right a plan made before this rule - a run
+     * resumed from an earlier stage - before workers build and before final integration.
+     *
+     * <p>Not seen: which of several screen-writing tasks wrote the element a step names. With
+     * two screens by two tasks and a journey written with a third, the last of the two owns it.
+     *
+     * @param planOrder the plan's tasks in the order they are built and merged
+     * @return the claims that moved; the caller stores both tasks of each
+     */
+    static List<Moved> settleOwners(List<Task> planOrder, BrowserOnlyCode.Survey survey,
+                                    boolean served) {
+        List<Moved> moved = new ArrayList<>();
+        if (planOrder == null || planOrder.isEmpty()) {
+            return moved;
+        }
+        List<Task> writesAScreen = planOrder.stream()
+            .filter(task -> !ScreenChange.screenPaths(task.writeSet(), survey, served).isEmpty())
+            .toList();
+        java.util.Map<String, List<Task>> claims = new java.util.LinkedHashMap<>();
+        for (Task task : planOrder) {
+            for (String path : task.journeyPaths()) {
+                List<Task> claiming = claims.computeIfAbsent(path.replace((char) 92, '/'),
+                    key -> new ArrayList<>());
+                if (!claiming.contains(task)) {
+                    claiming.add(task);
+                }
+            }
+        }
+        for (java.util.Map.Entry<String, List<Task>> claim : claims.entrySet()) {
+            List<Task> claiming = claim.getValue();
+            List<Task> own = claiming.stream().filter(writesAScreen::contains).toList();
+            Task owner = !own.isEmpty() ? own.get(own.size() - 1)
+                : !writesAScreen.isEmpty() ? writesAScreen.get(writesAScreen.size() - 1)
+                : claiming.get(0);
+            if (claiming.size() == 1 && claiming.get(0) == owner) {
+                continue;
+            }
+            String path = claim.getKey();
+            Task from = null;
+            for (Task other : claiming) {
+                if (other != owner) {
+                    from = from == null ? other : from;
+                    other.setJourneyPaths(other.journeyPaths().stream()
+                        .filter(held -> !held.replace((char) 92, '/').equals(path)).toList());
+                }
+            }
+            if (owner.journeyPaths().stream()
+                    .noneMatch(held -> held.replace((char) 92, '/').equals(path))) {
+                List<String> held = new ArrayList<>(owner.journeyPaths());
+                held.add(path);
+                owner.setJourneyPaths(List.copyOf(held));
+            }
+            if (from != null) {
+                moved.add(new Moved(path, from, owner));
+            }
+        }
+        return moved;
+    }
+
+    /**
+     * What the run stops on when the author of a failed journey calls the journey wrong and no
+     * correction of it could be taken (section 70). No worker is started on such a journey.
+     *
+     * @param answers what the author answered about each such journey, as recorded on the task
+     */
+    static String disowned(Task task, List<String> paths, List<String> answers) {
+        return "The journey went back to its author before any worker, and its author says the "
+            + "journey itself is wrong - and no corrected journey could be taken. Task '"
+            + task.title() + "', " + paths + ":\n- " + String.join("\n- ", answers)
+            + "\n\nNo worker was started. A worker cannot change a journey, and making the "
+            + "screen match a journey its own author calls wrong would build the wrong thing. "
+            + "Either correct the journey by hand and resume, or resume as it is: the author "
+            + "is then asked again.";
+    }
+
     /** One journey a task claims, read from the run's tests commit. */
     record Claimed(Task task, JourneyFile.Journey journey) {}
 
@@ -453,11 +554,13 @@ final class JourneysOfAPlan {
             + "made the journey this task claims: from the application's entry page, using only "
             + "what is on the screen. It failed.\n");
         for (JourneyFile.Result result : failed) {
-            text.append("\njourney \"").append(result.journey().name()).append("\" (")
-                .append(result.journey().path()).append("): ").append(result.failure())
-                .append('\n');
+            // The journey itself, step by step (section 70): run 95's repair workers were told
+            // to read it with acceptance_test, asked that tool for other names, and never saw it.
+            text.append('\n').append(result.journey().describe()).append("It failed: ")
+                .append(result.failure()).append('\n');
         }
-        return text.append("\nRead the journey with acceptance_test; you cannot change it. The "
+        return text.append("\nThat is the whole journey (acceptance_test shows its file); you "
+            + "cannot change it. The "
             + "JUnit acceptance tests passed, so the code behind the screen works. What is "
             + "missing is on the screen or on the way to it: the element the failing step names "
             + "is not there, is not visible, is not reachable by the steps before it, or is "
