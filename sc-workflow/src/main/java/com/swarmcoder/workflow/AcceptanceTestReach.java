@@ -220,6 +220,39 @@ public final class AcceptanceTestReach {
     }
 
     /**
+     * What the design reviewer is told about modules that run only in a browser: the same fact
+     * the architect designed from ({@link #architectBrief}), so the review does not send a design
+     * back for doing what the architect was told to do. Empty when there are none, so the prompt
+     * is exactly what it was for every other project.
+     *
+     * <p>Live run 98 (2026-10-08): the architect, told that no acceptance test can execute the
+     * browser module, proved a check about a list on a screen at the service behind it. The
+     * reviewer, told nothing of the build, objected under "testability" that a service-layer
+     * test does not prove the display - before the revision and again after it. No revision
+     * could answer that: the only test that would satisfy it is one that cannot run.
+     */
+    public static String reviewerBrief(BrowserOnlyCode.Survey survey, String acceptanceModule) {
+        if (survey == null || !survey.any()) {
+            return "";
+        }
+        String where = acceptanceModule == null || acceptanceModule.isBlank() ? ""
+            : " (they live in " + acceptanceModule + ")";
+        return "A FACT ABOUT THIS BUILD, read from its build files. " + modulesSentence(survey)
+            + " The acceptance tests are JUnit tests on a plain JVM" + where + " and can never "
+            + "execute a line of " + namesOf(survey) + ". So the architect was told to prove "
+            + "every check through code that runs on the JVM" + jvmModulesClause(survey)
+            + " - the service or store that holds the behaviour - including a check worded as "
+            + "something a person sees or does on a screen, and to have the code in "
+            + namesOf(survey) + " built by a task of its own that no acceptance test proves. "
+            + "Judge testability by that: a check proved at the layer that holds the behaviour "
+            + "IS verified by an executable test. NEVER object that such a check is not proved "
+            + "through the screen or the browser, and never ask for an acceptance test that "
+            + "runs code in " + namesOf(survey) + ". It is still right to object when the goal "
+            + "promises a screen and the design has no type in " + namesOf(survey)
+            + " that shows it.";
+    }
+
+    /**
      * The sentence the test author is given before it writes a line. Empty when the build has no
      * browser-only module, so every other project's prompt is exactly what it was.
      */

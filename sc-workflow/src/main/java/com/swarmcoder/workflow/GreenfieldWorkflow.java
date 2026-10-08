@@ -222,6 +222,13 @@ public class GreenfieldWorkflow {
         BrowserOnlyCode.Survey survey = browserOnlySurvey(layout);
         return AcceptanceTestReach.architectBrief(survey, AcceptanceTestLocation.resolve(layout).module());
     }
+
+    /** The same fact for the design reviewer; empty when no module runs only in a browser. */
+    private String browserOnlyReviewerBrief() {
+        BuildLayout.Layout layout = repoLayout();
+        return AcceptanceTestReach.reviewerBrief(browserOnlySurvey(layout),
+            AcceptanceTestLocation.resolve(layout).module());
+    }
     private final ObjectMapper mapper = new ObjectMapper();
     private volatile BuildBoxes buildBoxes;
     // Advisory pre-compile LSP at FINAL_INTEGRATION (spec §S6). On whenever a JDT LS is
@@ -635,8 +642,11 @@ public class GreenfieldWorkflow {
                         // Every revision below is written against the same existing code the
                         // design was shown (live run 68, 2026-10-02).
                         String existingTypes = existingTypesForArchitect(run, scopeFor(run));
-                        DesignReviewerClient.Review review =
-                            rubricOnly(roles.reviewer().review(design, reviewRules), reviewRules);
+                        // The reviewer judges testability knowing what a test here can execute
+                        // (live run 98: it twice asked for a test of the browser module).
+                        String buildFact = browserOnlyReviewerBrief();
+                        DesignReviewerClient.Review review = rubricOnly(
+                            roles.reviewer().review(design, reviewRules, buildFact), reviewRules);
                         if (!review.approved && !review.objections.isEmpty()) {
                             // One revision loop, then proceed with recorded objections (spec §14).
                             // Only for THIS rubric — completeness, testability, partitionability.
@@ -654,7 +664,8 @@ public class GreenfieldWorkflow {
                                     + "; keeping the original design");
                             }
                             design = attempt.design();
-                            review = rubricOnly(roles.reviewer().review(design, reviewRules),
+                            review = rubricOnly(
+                                roles.reviewer().review(design, reviewRules, buildFact),
                                 reviewRules);
                         }
                         // A design that breaks a stated rule cannot be planned around — it goes back
@@ -5642,12 +5653,20 @@ public class GreenfieldWorkflow {
         }
         List<RulesVersusManifest.Finding> findings = RulesVersusManifest.check(rules, documents,
             build.declared(), build.inspectedPoms(), build.ownBuild());
+        BuildFilesInTheJob.Outcome outcome = BuildFilesInTheJob.declareMissing(graph, findings,
+            build.catalog(), layout, build.declaredByModule(),
+            build.declaredCoordinatesByModule(), repoPath);
         for (RulesVersusManifest.Finding finding : findings) {
-            log("PLAN: `" + finding.artifact() + "` is named in " + finding.sourceLabel()
-                + ", and no inspected pom declares it (\"" + finding.ruleExcerpt() + "\")");
+            // Only a name that resolved to an artifact is "named and not declared" (run 98).
+            if (!outcome.noted(finding.artifact())) {
+                log("PLAN: `" + finding.artifact() + "` is named in " + finding.sourceLabel()
+                    + ", and no inspected pom declares it (\"" + finding.ruleExcerpt() + "\")");
+            }
         }
-        return BuildFilesInTheJob.declareMissing(graph, findings, build.catalog(), layout,
-            build.declaredByModule(), build.declaredCoordinatesByModule(), repoPath);
+        for (BuildFilesInTheJob.Note note : outcome.notes()) {
+            log("PLAN: note — " + note.text());
+        }
+        return outcome;
     }
 
     /**

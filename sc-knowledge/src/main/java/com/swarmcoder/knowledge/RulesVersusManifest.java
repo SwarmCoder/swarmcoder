@@ -20,9 +20,11 @@ package com.swarmcoder.knowledge;
 import com.swarmcoder.domain.LibraryDoc;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +51,14 @@ import java.util.regex.Pattern;
  * a bare artifact id straight after a word that introduces a dependency's name — never at ordinary
  * hyphenated prose ("end-to-end", "read-only", "single-user"). Missing a vague mention is the safe
  * failure; flagging one is not.
+ *
+ * <p><b>A finding is a NAME, not yet a dependency</b> (live run 98, 2026-10-08). The extractor
+ * reads wording, and wording can only suggest: a rule saying the client "only uses
+ * TeaVM-compilable classes" yields the token after "uses", an adjective, exactly as "uses
+ * some-store-artifact" yields a library. Whether a name is something a build can declare is a
+ * fact about the build and is decided by the caller from facts ({@code BuildFilesInTheJob}): an
+ * inherited BOM or parent pom manages an artifact of that name, or the text gave its group
+ * ({@link Finding#group}). A name neither resolves is noted in the run and never stops it.
  */
 public final class RulesVersusManifest {
 
@@ -61,14 +71,35 @@ public final class RulesVersusManifest {
      * @param source the filename of the technical document this finding came from, or null when
      *               it came from a stated rule; carried so the finding can name where it was
      *               found rather than always attributing it to "the rules"
+     * @param group  the group id the text gave with the name ({@code group:artifact}), or null
+     *               when it gave the bare name only
      */
     public record Finding(String ruleExcerpt, String artifact, List<String> inspectedPoms,
-                          String source) {
+                          String source, String group) {
+
+        /** A finding whose text gave no group - the shape before live run 98. */
+        public Finding(String ruleExcerpt, String artifact, List<String> inspectedPoms,
+                       String source) {
+            this(ruleExcerpt, artifact, inspectedPoms, source, null);
+        }
 
         /** A finding from a stated rule — the shape this class always had before documents were
          * scanned too. */
         public Finding(String ruleExcerpt, String artifact, List<String> inspectedPoms) {
-            this(ruleExcerpt, artifact, inspectedPoms, null);
+            this(ruleExcerpt, artifact, inspectedPoms, null, null);
+        }
+
+        /**
+         * True when the text wrote the artifact with its group, {@code group:artifact}: the one
+         * wording that is a build coordinate by itself, whatever any repository holds.
+         */
+        public boolean statedAsCoordinate() {
+            return group != null && !group.isBlank();
+        }
+
+        /** {@code group:artifact} when the group was given, otherwise the bare name. */
+        public String named() {
+            return statedAsCoordinate() ? group + ":" + artifact : artifact;
         }
 
         /** "the project's rules" or "the technical document \"…\"" — for a message the operator reads. */
@@ -143,7 +174,15 @@ public final class RulesVersusManifest {
      * one.
      */
     static Set<String> artifactsNamedIn(String ruleText, OwnBuild ownBuild) {
-        Set<String> found = new LinkedHashSet<>();
+        return namesIn(ruleText, ownBuild).keySet();
+    }
+
+    /**
+     * The names {@link #artifactsNamedIn(String, OwnBuild)} yields, each with the group the text
+     * gave it, or null for a name written bare. A name written both ways keeps its group.
+     */
+    static Map<String, String> namesIn(String ruleText, OwnBuild ownBuild) {
+        Map<String, String> found = new LinkedHashMap<>();
         if (ruleText == null || ruleText.isBlank()) {
             return found;
         }
@@ -151,16 +190,16 @@ public final class RulesVersusManifest {
         Matcher coordinates = COORDINATE.matcher(ruleText);
         while (coordinates.find()) {
             if (!own.groupIds().contains(coordinates.group(1))) {
-                addUnlessOwn(found, coordinates.group(2), own);
+                addUnlessOwn(found, coordinates.group(2), coordinates.group(1), own);
             }
         }
         Matcher backticked = BACKTICKED.matcher(ruleText);
         while (backticked.find()) {
-            addUnlessOwn(found, backticked.group(1), own);
+            addUnlessOwn(found, backticked.group(1), null, own);
         }
         Matcher afterCue = AFTER_CUE.matcher(ruleText);
         while (afterCue.find()) {
-            addUnlessOwn(found, afterCue.group(1), own);
+            addUnlessOwn(found, afterCue.group(1), null, own);
         }
         return found;
     }
@@ -168,12 +207,15 @@ public final class RulesVersusManifest {
     /** Adds {@code token} unless it names the build itself: one of its own module ids, an entry at
      * its own repository root, or something shaped like a path or a tracked file rather than a
      * dependency's name. */
-    private static void addUnlessOwn(Set<String> found, String token, OwnBuild own) {
+    private static void addUnlessOwn(Map<String, String> found, String token, String group,
+                                     OwnBuild own) {
         if (own.moduleArtifactIds().contains(token) || own.repoRootEntries().contains(token)
                 || looksLikeRepoPath(token)) {
             return;
         }
-        found.add(token);
+        if (group != null || !found.containsKey(token)) {
+            found.put(token, group);
+        }
     }
 
     /**
@@ -309,9 +351,11 @@ public final class RulesVersusManifest {
         Set<String> alreadyFound = new LinkedHashSet<>();
         if (ruleText != null && !ruleText.isBlank()) {
             for (String rule : splitRules(ruleText)) {
-                for (String artifact : artifactsNamedIn(rule, own)) {
+                for (Map.Entry<String, String> named : namesIn(rule, own).entrySet()) {
+                    String artifact = named.getKey();
                     if (!declaredIds.contains(artifact) && alreadyFound.add(artifact)) {
-                        findings.add(new Finding(excerpt(rule), artifact, poms));
+                        findings.add(new Finding(excerpt(rule), artifact, poms, null,
+                            named.getValue()));
                     }
                 }
             }
@@ -322,10 +366,11 @@ public final class RulesVersusManifest {
                     continue;
                 }
                 for (String sentence : splitSentences(document.text())) {
-                    for (String artifact : artifactsNamedIn(sentence, own)) {
+                    for (Map.Entry<String, String> named : namesIn(sentence, own).entrySet()) {
+                        String artifact = named.getKey();
                         if (!declaredIds.contains(artifact) && alreadyFound.add(artifact)) {
-                            findings.add(
-                                new Finding(excerpt(sentence), artifact, poms, document.name()));
+                            findings.add(new Finding(excerpt(sentence), artifact, poms,
+                                document.name(), named.getValue()));
                         }
                     }
                 }

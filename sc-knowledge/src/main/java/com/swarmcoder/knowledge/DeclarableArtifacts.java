@@ -104,8 +104,31 @@ public final class DeclarableArtifacts {
      *
      * @param repositoryPresent false when the local repository directory does not exist at all, so
      *                          "nothing is declarable" can be told apart from "nothing was checked"
+     * @param managedNotOnDisk  the artifacts this build's inherited dependency management pins
+     *                          whose files the local repository does NOT hold: real artifacts a
+     *                          person can install, which nothing inside a run can obtain
      */
-    public record Catalog(List<Artifact> artifacts, Path localRepository, boolean repositoryPresent) {
+    public record Catalog(List<Artifact> artifacts, Path localRepository, boolean repositoryPresent,
+                          List<Artifact> managedNotOnDisk) {
+
+        public Catalog {
+            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
+            managedNotOnDisk = managedNotOnDisk == null ? List.of() : List.copyOf(managedNotOnDisk);
+        }
+
+        public Catalog(List<Artifact> artifacts, Path localRepository, boolean repositoryPresent) {
+            this(artifacts, localRepository, repositoryPresent, List.of());
+        }
+
+        /** A managed artifact of that id whose files are not on the disk, when there is one. */
+        public Optional<Artifact> managedNotOnDisk(String artifactId) {
+            for (Artifact artifact : managedNotOnDisk) {
+                if (artifact.artifactId().equals(artifactId)) {
+                    return Optional.of(artifact);
+                }
+            }
+            return Optional.empty();
+        }
 
         public static Catalog empty(Path localRepository) {
             return new Catalog(List.of(), localRepository, false);
@@ -199,12 +222,11 @@ public final class DeclarableArtifacts {
             return new Catalog(List.of(), localRepository, false);
         }
         List<Artifact> present = new ArrayList<>();
+        List<Artifact> absent = new ArrayList<>();
         for (Artifact artifact : found.values()) {
-            if (onDisk(localRepository, artifact)) {
-                present.add(artifact);
-            }
+            (onDisk(localRepository, artifact) ? present : absent).add(artifact);
         }
-        return new Catalog(List.copyOf(present), localRepository, true);
+        return new Catalog(present, localRepository, true, absent);
     }
 
     // --------------------------------------------------------------------------- managed entries

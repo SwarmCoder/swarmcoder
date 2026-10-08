@@ -156,7 +156,20 @@ public class DesignReviewerClient {
      *                   them ({@code StoryScope.constraintBrief()}); null or blank for none
      */
     public Review review(DesignDocument design, String rulesBrief) {
+        return review(design, rulesBrief, null);
+    }
+
+    /**
+     * As above, and told a fact about the build the architect designed from - which modules run
+     * only in a browser ({@link AcceptanceTestReach#reviewerBrief}) - so that "testability" is
+     * judged against what a test of this project can execute. When {@code buildFact} is blank
+     * the prompt is byte-for-byte the two-argument one.
+     *
+     * @param buildFact a paragraph of facts read from the build; null or blank for none
+     */
+    public Review review(DesignDocument design, String rulesBrief, String buildFact) {
         boolean hasRules = rulesBrief != null && !rulesBrief.isBlank();
+        boolean hasFact = buildFact != null && !buildFact.isBlank();
         String designText;
         try {
             designText = ArchitectClient.designSummary(design);
@@ -184,6 +197,7 @@ public class DesignReviewerClient {
                 + "Respond ONLY with JSON: "
                 + "{\"approved\": true|false, \"objections\": [\"...\"]}";
             String user = (hasRules ? rulesBrief.strip() + "\n\n" : "")
+                + (hasFact ? buildFact.strip() + "\n\n" : "")
                 + "Goal: " + design.goal() + "\n\nDesign:\n" + designText;
             return callReviewer("design review", system, user);
         } catch (EndpointOutage outage) {

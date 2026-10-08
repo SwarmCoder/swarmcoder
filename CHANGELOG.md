@@ -11,6 +11,21 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A run no longer stops for a "library" that is only a word in a rule.** A rule such as "the
+  client only uses TeaVM-compilable classes" stopped a run at PLAN asking you to install
+  `TeaVM-compilable`. A name in a rule or technical document now counts as a missing dependency
+  only when a build can declare it: a BOM or parent pom the build inherits manages an artifact
+  of that name, or the text writes it with its group (`group:artifact`). Such an artifact is
+  added to the plan when the local Maven repository holds it, and the run still stops when it
+  does not; the message now gives the coordinates and version to install. Any other name is a
+  `PLAN: note —` line in the run and nothing else. If a rule names a library that no BOM or
+  parent of the build manages, write it as `group:artifact` or it is taken as wording.
+- **The design reviewer no longer asks for a test that cannot run.** In a project with a module
+  that runs only in a browser, the reviewer is told what the architect is told: acceptance tests
+  run on a JVM and cannot execute that module, so a check about a screen is proved at the
+  service behind it. It may still object when the goal promises a screen and the design has none.
+- **The log says which check sent a draft design or plan back.** Each objection of
+  `check_design` and `check_plan` is one log line, with the draft's number and size.
 - **A journey that fails again at a later step goes back to its author once more.** After the repair round, if the journey now fails further along than before (the earlier step passes), the author reviews it again with what the page showed there, under the same bounds and guards for a correction. A failure at the same or an earlier step is not sent back. At most two author reviews per journey; there is still only one worker repair round, and a second review that does not correct the journey stops the run with both reasons. `check_journey` now says that typing into a search or filter box does not create the record.
 - **The requirements graph is readable.** A link between two boxes in one row no longer runs
   through the box between them; it goes round. The relation's name is no longer printed on each
