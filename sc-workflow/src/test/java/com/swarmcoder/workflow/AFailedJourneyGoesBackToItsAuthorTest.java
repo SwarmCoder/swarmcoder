@@ -131,10 +131,15 @@ class AFailedJourneyGoesBackToItsAuthorTest {
                 .as("the question is one, the review is short, and what the lookups read is said")
                 .contains(TestAuthorClient.JOURNEY_REVIEW_TURNS + " turns in all",
                     "the one from BEFORE the story", "verdict JOURNEY_WRONG",
-                    "verdict SCREEN_WRONG");
+                    "verdict SCREEN_WRONG")
+                .as("the steps a journey has are in the opening, so none is looked up (run "
+                    + "100: five of ten turns went on searching the project for them)")
+                .contains("THE STEPS A JOURNEY HAS", JourneyFile.VOCABULARY,
+                    JourneyFile.CHOOSING, "what each drop-down list offers");
             assertThat(llm.sessionRequests.get(1)).as("only the failed journey may be corrected")
                 .contains("This review is about `" + PATH + "` and no other file");
             assertThat(llm.sessionRequests.get(2)).contains("VALID - kept",
+                "The steps a journey has:", JourneyFile.VOCABULARY,
                 "Typing a text into a search or filter box does not create it");
             assertThat(Files.readString(repo.resolve(PATH))).as("nothing is written by the "
                 + "review: whether the correction is taken is decided in a browser")

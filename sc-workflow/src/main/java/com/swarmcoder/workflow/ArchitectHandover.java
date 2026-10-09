@@ -21,12 +21,18 @@ import com.swarmcoder.domain.ApiContract;
 import com.swarmcoder.domain.DesignDocument;
 import com.swarmcoder.domain.DesignFinding;
 import com.swarmcoder.domain.Task;
+import com.swarmcoder.domain.TaskEdge;
 import com.swarmcoder.domain.TaskGraph;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -51,12 +57,24 @@ import java.util.regex.Pattern;
  *   <li>findings about a type whose file the task's write set names;</li>
  *   <li>findings about the whole project;</li>
  *   <li>findings about another contract of the design that a member of one of the task's own
- *       contracts names as a type - what the task's code will have to use.</li>
+ *       contracts names as a type - what the task's code will have to use;</li>
+ *   <li>findings about a contract delivered by a task this one waits for, the nearest such
+ *       task first - what the task is built on.</li>
  * </ol>
+ *
+ * <p><b>The fifth step, after live run 100.</b> The architect kept three findings on how a
+ * screen is written against a service - the generated client class it calls, a form, and that
+ * the screen must be mounted on a thread of its own because building it calls the server - and
+ * said they were about the service's contract, the only contract they concern: a screen was no
+ * contract of that design. The first four steps gave them to the tasks that wrote the interface
+ * and the server, and none to the task that wrote the screen, which delivered no contract and
+ * so matched nothing. Its four workers took 128 of the run's 189 worker calls, and the first
+ * screen they delivered failed in the browser on exactly the thread fact. A task that waits
+ * for another is built on what that one delivers; the plan's edges say so with no wording read.
  *
  * <h2>The bound</h2>
  *
- * <p>{@value #DEFAULT_MAX_CHARS} characters a task, about 3,000 tokens
+ * <p>{@value #DEFAULT_MAX_CHARS} characters a task, about 6,000 tokens
  * ({@code swarmcoder.handover.maxChars} replaces it). Input tokens are cheap on the workers'
  * server and a finding saves a worker the lookups and output tokens it would spend finding the
  * same thing, so the bound is generous; it is there for a project where the architect kept forty.
@@ -66,7 +84,7 @@ import java.util.regex.Pattern;
  */
 final class ArchitectHandover {
 
-    static final int DEFAULT_MAX_CHARS = 12_000;
+    static final int DEFAULT_MAX_CHARS = 24_000;
 
     private ArchitectHandover() {
     }
@@ -83,8 +101,17 @@ final class ArchitectHandover {
     record Given(List<DesignFinding> findings, int withoutCode, int leftOut) {
     }
 
-    /** The findings of {@code design} that concern {@code task}, as many as fit. */
+    /** As {@link #forTask(Task, TaskGraph, DesignDocument, int)} for a task taken alone. */
     static Given forTask(Task task, DesignDocument design, int maxChars) {
+        return forTask(task, null, design, maxChars);
+    }
+
+    /**
+     * The findings of {@code design} that concern {@code task}, as many as fit.
+     *
+     * @param graph the plan the task is in, for the tasks it waits for; null for none
+     */
+    static Given forTask(Task task, TaskGraph graph, DesignDocument design, int maxChars) {
         if (task == null || design == null || design.findings().isEmpty()) {
             return new Given(List.of(), 0, 0);
         }
@@ -117,6 +144,14 @@ final class ArchitectHandover {
         for (DesignFinding finding : design.findings()) {
             if (finding != null && used.stream().anyMatch(finding::isAbout)) {
                 relevant.add(finding);
+            }
+        }
+        for (Task before : waitedFor(task, graph)) {
+            List<ApiContract> builtOn = before.deliveredContracts();
+            for (DesignFinding finding : design.findings()) {
+                if (finding != null && builtOn.stream().anyMatch(finding::isAbout)) {
+                    relevant.add(finding);
+                }
             }
         }
         List<DesignFinding> given = new ArrayList<>();
@@ -160,7 +195,7 @@ final class ArchitectHandover {
             if (task == null) {
                 continue;
             }
-            Given given = forTask(task, design, bound);
+            Given given = forTask(task, graph, design, bound);
             task.setArchitectFindings(given.findings().isEmpty() ? null
                 : new ArrayList<>(given.findings()));
             for (DesignFinding finding : design.findings()) {
@@ -185,6 +220,58 @@ final class ArchitectHandover {
                 + nobody);
         }
         return lines;
+    }
+
+    /**
+     * True when {@link #attach} would give some task of the plan other findings than it
+     * carries: a plan saved before a rule here changed (a run resumed from an earlier stage).
+     */
+    static boolean stale(TaskGraph graph, DesignDocument design) {
+        if (graph == null || graph.tasks() == null || design == null
+                || design.findings().isEmpty()) {
+            return false;
+        }
+        int bound = maxChars();
+        for (Task task : graph.tasks()) {
+            if (task != null && !DesignFinding.renderAll(forTask(task, graph, design, bound)
+                    .findings()).equals(DesignFinding.renderAll(task.architectFindings()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The tasks {@code task} waits for, by the plan's edges: the ones it waits for directly
+     * first, then the ones those wait for. Empty without a plan.
+     */
+    private static List<Task> waitedFor(Task task, TaskGraph graph) {
+        List<Task> found = new ArrayList<>();
+        if (graph == null || graph.tasks() == null || graph.dependencies() == null
+                || task.id() == null) {
+            return found;
+        }
+        Map<UUID, Task> byId = new LinkedHashMap<>();
+        for (Task one : graph.tasks()) {
+            if (one != null && one.id() != null) {
+                byId.put(one.id(), one);
+            }
+        }
+        Set<UUID> seen = new LinkedHashSet<>();
+        seen.add(task.id());
+        Deque<UUID> next = new ArrayDeque<>();
+        next.add(task.id());
+        while (!next.isEmpty()) {
+            UUID current = next.poll();
+            for (TaskEdge edge : graph.dependencies()) {
+                if (edge != null && current.equals(edge.to()) && edge.from() != null
+                        && byId.containsKey(edge.from()) && seen.add(edge.from())) {
+                    found.add(byId.get(edge.from()));
+                    next.add(edge.from());
+                }
+            }
+        }
+        return found;
     }
 
     /** The names, without folder and extension and in lower case, of the files a set names. */

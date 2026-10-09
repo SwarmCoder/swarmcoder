@@ -377,6 +377,8 @@ public final class BrowserVerifier {
                     putIfSet(one, "press", step.press());
                     putIfSet(one, "expectVisible", step.expectVisible());
                     putIfSet(one, "expectHidden", step.expectHidden());
+                    putIfSet(one, "select", step.select());
+                    putIfSet(one, "expectValue", step.expectValue());
                 }
             }
         }

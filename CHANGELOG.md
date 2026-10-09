@@ -9,8 +9,35 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ## [Unreleased]
 
+### Added
+
+- **A journey can choose from a list and read what a control holds.** Two new steps:
+  `select` with `value` chooses an option of a drop-down list or combobox by the text it shows
+  (or its value), and `expectValue` with `value` checks what a field holds or what a list shows
+  as chosen. Before, a journey had to click an option's text, which no browser can do in a
+  closed drop-down list, so a story with such a list could not pass. The author's brief, the
+  review of a failed journey and both answers of `check_journey` now list every step with what
+  it is for.
+
 ### Fixed
 
+- **A journey step acts on what a person can see.** `click` and `fill` take the first visible
+  match of a selector, and `expectVisible` passes when any match is visible. Before, the first
+  match in the document was taken even when nobody could see it, so `expectVisible: "text=..."`
+  failed on a row that was there when an option of a list read the same. `expectHidden` now
+  passes only when no match is visible; a journey that relied on a hidden first match with a
+  visible second one will fail.
+- **The page reading at a failed step names each drop-down list**, what it shows as chosen and
+  the options it offers.
+- **The task that writes a screen is given the architect's findings.** A task now also gets
+  the findings about what the tasks it waits for deliver, and is told those tasks' types with
+  their members. Before, a task that delivered no contract of its own got none of the findings
+  and was told of no type. Such a task keeps the librarian's example as well.
+- **`keep_for_workers` no longer keeps the first lines of a long result.** A range longer than
+  a finding carries is sent back with what to name instead; before, a whole file was kept as
+  its package line and imports.
+- **A plan saved before these rules is brought up to date on resume**: its tasks are given
+  their findings and types again before the tests are written and before the workers start.
 - **A run no longer stops for a "library" that is only a word in a rule.** A rule such as "the
   client only uses TeaVM-compilable classes" stopped a run at PLAN asking you to install
   `TeaVM-compilable`. A name in a rule or technical document now counts as a missing dependency
@@ -70,8 +97,8 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   lines of real code that do the same kind of thing). It marks them in a lookup it has just made
   with a new tool, `keep_for_workers`; the lines are copied from the lookup, not typed again.
   Each fact goes word for word to the workers and the test author of the tasks that build what
-  it is about, plus the project-wide ones, up to 12,000 characters a task
-  (`-Dswarmcoder.handover.maxChars`). A task the architect covered is no longer also pasted the
+  it is about and of the tasks built on it, plus the project-wide ones, up to 24,000
+  characters a task (`-Dswarmcoder.handover.maxChars`); one finding carries up to 40 lines. A task the architect covered is no longer also pasted the
   librarian's example; a task it kept nothing for gets the brief it always got. The run report
   shows, per task, how many findings its workers were given and their size.
 - **The task planner only splits the design into tasks and orders them.** It no longer writes

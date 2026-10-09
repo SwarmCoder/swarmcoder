@@ -93,7 +93,7 @@ class AJourneyFileIsReadAndJudgedWithNoModelTest {
               - goto: "/logbook"
               - expectVisible: "text=Saved"
             """).objection())
-            .contains("step 1 has a `value` but does not `fill`")
+            .contains("step 1 has a `value` but is a click")
             .contains("step 2 fills a field and gives no `value`")
             .contains("step 3 has `goto`, which no step has")
             .contains("No step loads an address");

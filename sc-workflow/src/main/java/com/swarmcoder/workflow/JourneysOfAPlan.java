@@ -589,7 +589,9 @@ final class JourneysOfAPlan {
         return failed.journey().describe() + "\nMade in a real browser on the merged tree, from "
             + "the application's entry page: " + failed.failure()
             + "\n\nWHAT THE PAGE SHOWED AT THAT STEP (read by the browser; every element with "
-            + "a role and an accessible name, the fields' placeholders, the visible text):\n"
+            + "a role and an accessible name, what each drop-down list offers and shows as "
+            + "chosen, the fields' placeholders, the visible text - which also lists a "
+            + "drop-down list's options, though nobody sees them until it is opened):\n"
             + (failed.seen() == null || failed.seen().isBlank()
                 ? "(the browser gave no reading of the page)" : failed.seen());
     }

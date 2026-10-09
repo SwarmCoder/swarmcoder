@@ -360,6 +360,8 @@ public final class TestAuthorTools {
                 log.info("check_journey {} for {}: not valid - {}", journeyChecks, target,
                     objection.replaceAll("\\s*\\R\\s*", " | "));
                 return "NOT A VALID JOURNEY - not kept.\n" + objection
+                    + "\n\nThe steps a journey has, and nothing else:\n"
+                    + JourneyFile.VOCABULARY + JourneyFile.CHOOSING
                     + "\n\nCorrect it and call check_journey again with the complete file.";
             }
             // A text it expects that nobody enters (section 69, live run 93): asked once,
@@ -391,7 +393,8 @@ public final class TestAuthorTools {
             return "VALID - kept, and handed in " + (journeyOnly ? "" : "with your test ")
                 + "by report_done.\n"
                 + read.journey().describe()
-                + "Typing a text into a search or filter box does not create it: when the "
+                + "The steps a journey has:\n" + JourneyFile.VOCABULARY + JourneyFile.CHOOSING
+                + " Typing a text into a search or filter box does not create it: when the "
                 + "application starts with no data, the journey must first add the record "
                 + "through the screen, then search for it. "
                 + "This says the file is well formed. It does not say the journey is right: "
