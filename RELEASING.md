@@ -10,6 +10,39 @@ release of the source. Nothing is published to Maven Central, and no built progr
 the application jar needs about 390 MB of third-party libraries beside it, so people build it
 from source.
 
+## Pushing to the public repository
+
+Every push publishes three things: the files, the commit messages, and every line the commits
+added, including lines a later commit removed again. The routine is the same for an ordinary push
+and for a release:
+
+1. Merge the finished branches into `master` with `--no-ff` and remove their worktrees.
+2. Run the whole build once for the batch (`mvn clean package`), not once per branch.
+3. Run the check over what is about to leave the machine:
+
+   ```bash
+   scripts/pre-push-check.sh
+   ```
+
+   It refuses machine paths, user folders, private network addresses, keys and tokens, mail
+   addresses, a tracked file that `.gitignore` says stays local, an added file over 1 MB, and a
+   Java source file without the licence header. Names that are private to the maintainer cannot be
+   written in a public script, so it reads them, one regular expression per line, from
+   `~/.swarmcoder/private-terms.txt`.
+4. `git push origin master`.
+
+Step 3 also runs by itself. Switch it on once in each checkout:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+After that `git push` runs the check on exactly the commits being pushed and stops when it finds
+something. When it does, take the text out of the files, and when it is in a commit, out of the
+history (rewrite the unpushed commits); do not push with `--no-verify`. When it reports something
+that is meant to be public, add it to the `allowed` list at the top of the script in the same
+commit, with a comment saying why.
+
 ## Before a release
 
 1. `mvn clean package` from the root — the whole build, tests included. This is the one time the

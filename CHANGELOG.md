@@ -11,6 +11,14 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **A check on what a push publishes.** `scripts/pre-push-check.sh` reads the files, the commit
+  messages and every line added by the commits about to be pushed, and refuses machine paths,
+  user folders, private network addresses, keys and tokens, mail addresses, tracked files that
+  `.gitignore` keeps local, added files over 1 MB and Java files without the licence header. A
+  maintainer's own private names are read from `~/.swarmcoder/private-terms.txt`. With
+  `git config core.hooksPath scripts/hooks` it runs on every `git push`. The routine is in
+  [RELEASING.md](RELEASING.md).
+
 - **A journey can choose from a list and read what a control holds.** Two new steps:
   `select` with `value` chooses an option of a drop-down list or combobox by the text it shows
   (or its value), and `expectValue` with `value` checks what a field holds or what a list shows
