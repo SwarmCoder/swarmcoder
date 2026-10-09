@@ -6343,7 +6343,8 @@ story adds but the criteria do not ask for (the new screen's heading in place of
 result): it fails before and passes after. Only the note shows it. Also not checked: an ending
 of `expectHidden` on the start tree's entry page (something not there is hidden everywhere);
 the application's data between the failed journey and the correction in the same container
-(the correction runs on what the first attempt left); a task with two failed journeys is asked
+(the correction ran on what the first attempt left - this stopped run 104 and is closed in
+section 77: every journey is now made on its own copy of the tree); a task with two failed journeys is asked
 about both in one go and marked once.
 
 **2. A journey must create what it expects** (`JourneyExpectations.unentered`,
@@ -7421,3 +7422,74 @@ edge is turned round where it went back); the journey of
 live authoring session; the run report's line (it prints a field); a store written before
 today opened with `Task.journeyProofs` absent; `OmittedArguments` inside a running session
 (the filling is tested on calls).
+
+## 77. A corrected journey met the book its first attempt had saved (run 104, 2026-10-09)
+
+Run 104: a journey added a book, edited its title and expected the old title to be gone. It
+failed at final integration and went back to its author (section 69), who corrected it. The
+corrected journey was made at once - by starting the application again in the same container
+and the same tree. The application keeps its books in a folder under the module it is served
+from, so the book of the first attempt was still listed. The corrected journey added the book
+a second time, edited one of the two, and failed at "expect the old title hidden": the row
+left over from the first attempt still showed it. The application was correct. The run was
+stopped for nothing. Section 69 had named this under "not checked".
+
+The same fault was open in four more places, all through the one runner: a second review
+(section 71), `check_journey` trying a draft (section 75), several journeys in one final
+integration (the second saw what the first saved), and the comparison on the tree the run
+started from when it is given more than one journey.
+
+**The rule.** Every making of a journey starts on the application as the tree itself gives
+it. Nothing a journey wrote is there for another journey or for the same journey made again.
+
+**Why not just a new container.** The tree is mounted into the container read-write, so what
+the application writes under it lands in the tree on disk and is there for the next container
+too. And a copy of the tree alone, started in the old container, leaves what the application
+wrote in its home folder and the temporary folder. So it is both, and they are one thing:
+
+- `BuildBoxes.openOnCopy(tree, who, browser)`: a new folder beside the tree, a new container
+  with that folder as `/workspace` and the tree mounted read-only beside it, and the tree
+  copied in by `cp -a` inside the container (links, modes and file times as the build left
+  them; the application sees the same paths as before). Closing the box removes the container
+  and the folder. The tree itself cannot be written from that box.
+- `JourneyRunner.run` no longer takes a container. It takes `JourneyRunner.Starts`, which
+  hands out one such box per call, and asks once per journey: one copy, one container, one
+  start of the application, one journey, all thrown away. There is no other way to make a
+  journey, so the five cases cannot differ: `FinalIntegrator.makeJourneys` (every journey of
+  the merged tree, and the function the send-back review makes corrections with, first and
+  second review alike) and `GreenfieldWorkflow.journeysOnTheStartTree` (the comparison on the
+  start tree and `check_journey`).
+- Nothing is deleted by name and nothing is assumed about where an application keeps data.
+- When a copy or its container cannot be had, the journey is "could not be made", with the
+  reason, as for a missing browser image. It is never made on the tree instead.
+- If the application does not start for one journey, the rest are not started: same tree,
+  same command.
+
+**What it costs.** One start of the application per journey made, where it was one per batch.
+A correction after review and one `check_journey` call are one journey, so they cost what
+they did. Final integration with J journeys and the red check with J journeys now start the
+application J times, not once: J-1 more starts each. On top of each start: one container and
+one copy of the built tree. Measured in the new test (a three-file tree, three journeys):
+about 4 seconds per journey for container, copy, start and browser together. The copy of a
+real built tree was not measured; it is logged per start ("copied in N s").
+
+**Tests.** New: `EveryJourneyStartsOnWhatTheTreeGivesTest` - two journeys in one run and the
+same journey made again, each of which fails if it finds its own book already listed, against
+a scripted place (always run) and against a real application that keeps its books in `./data`
+and a mark in its home folder, in real containers with a real browser (runs when Docker and
+the browser image are there). Run with it: `AJourneyFileIsReadAndJudgedWithNoModelTest`,
+`BuildBoxesTest`, `AFailedJourneyGoesBackToItsAuthorTest`.
+
+**Not checked:**
+
+- How long the copy of a large built tree takes (a front-end's package folder has many small
+  files), and the disk it needs while the journey is made. A copy that takes over 15 minutes
+  is given up as "could not be made".
+- A folder left beside the tree when the process is killed between copy and close. It is
+  named `<tree>-copy-<8 characters>` and is safe to delete; nothing sweeps it.
+- What the ordinary browser check of the verification wrote before the journeys. It starts the
+  application in the merged tree itself (pages are loaded, no steps), and what that start
+  writes is in the tree and so in every copy. The same for every journey, but not "as built".
+- An application that keeps its data outside the container (a database server it reaches over
+  a network). The container has no network, so there is none today.
+- Run 104 has not been made again with this change.

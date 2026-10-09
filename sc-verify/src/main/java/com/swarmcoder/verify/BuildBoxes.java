@@ -63,6 +63,11 @@ import java.util.function.Supplier;
  * {@link #use} hands out a target that starts its container at the first command and keeps it for
  * every later command on the same tree, until {@link #release} - which the caller runs where it
  * removes the tree, in the same {@code finally}. {@link #open} is the one-shot form.
+ *
+ * <h2>An application is started on a copy</h2>
+ * A started application writes: a data folder in the tree, files in its home folder. The shared
+ * container and its tree would hand that to whatever is started next. {@link #openOnCopy} is a
+ * container of its own on a copy of the tree, for one start (journeys, section 77).
  */
 public final class BuildBoxes {
 
@@ -140,8 +145,13 @@ public final class BuildBoxes {
             }
             log.warn("{}: MODEL CODE RUNS ON THIS PC, in {}, with your files and your network "
                 + "in reach. Allowed by {}.", who, root, allowedBy.get());
-            return new Box(null, null, new LocalProcessExecTarget(root));
+            return new Box(null, null, new LocalProcessExecTarget(root), null);
         }
+        return launch(docker, root, who, browser, referenceMounts(referenceRoots.get()), null);
+    }
+
+    private Box launch(DockerSandboxManager docker, Path root, String who, boolean browser,
+                       List<DockerSandboxManager.ReadOnlyMount> readOnly, Path removedOnClose) {
         String image = null;
         if (browser) {
             if (docker.hasImage(DockerSandboxManager.uiImage())) {
@@ -154,7 +164,7 @@ public final class BuildBoxes {
         }
         DockerSandboxManager.SandboxHandle handle;
         try {
-            handle = docker.launch(root.toString(), "", referenceMounts(referenceRoots.get()), image);
+            handle = docker.launch(root.toString(), "", readOnly, image);
         } catch (DockerSandboxManager.SandboxException e) {
             throw new DockerSandboxManager.SandboxException(who + " was not run: the container it "
                 + "runs in could not be started (" + e.getMessage() + "). Code a model wrote runs "
@@ -167,7 +177,109 @@ public final class BuildBoxes {
             target.browserChecksInside();
         }
         log.info("{}: runs in container {} (tree {})", who, handle.containerId(), root);
-        return new Box(docker, handle, new InTree(target, root));
+        return new Box(docker, handle, new InTree(target, root), removedOnClose);
+    }
+
+    /** Where the tree being copied is mounted, read-only, in a container of {@link #openOnCopy}. */
+    private static final String AS_BUILT = "/sc-tree-as-built";
+    /** How long the copy of a built tree may take before the box is given up. */
+    private static final int COPY_TIMEOUT_SECONDS = 900;
+
+    /**
+     * A box nothing has run in, on a COPY of the tree as it stands now (section 77, live run
+     * 104). An application started in it sees the same files at the same place
+     * ({@code /workspace}) as it would in the tree, and whatever it writes - in the tree, in its
+     * home folder, in the temporary folder - goes when the box is closed. The tree itself is
+     * mounted read-only for the copying and cannot be written to from this box.
+     *
+     * <p>The copy is made inside the container, by {@code cp -a}: links, modes and file times
+     * arrive as the build left them, so a start command that looks at file times does not build
+     * again. It is a folder beside the tree, removed on {@link Box#close}.
+     *
+     * <p>With no container this is {@link #open(Path, String, boolean)}: refused, or this PC
+     * when that was allowed by name - and nothing that serves an application runs there.
+     *
+     * @throws DockerSandboxManager.SandboxException as {@link #open(Path, String)}, and when the
+     *                                               tree could not be copied
+     */
+    public Box openOnCopy(Path tree, String who, boolean browser) {
+        DockerSandboxManager docker = sandbox.get();
+        if (docker == null) {
+            return open(tree, who, browser);
+        }
+        Path root = tree.toAbsolutePath().normalize();
+        Path copy = root.resolveSibling(root.getFileName() + "-copy-"
+            + java.util.UUID.randomUUID().toString().substring(0, 8));
+        Box box = null;
+        try {
+            java.nio.file.Files.createDirectories(copy);
+            List<DockerSandboxManager.ReadOnlyMount> readOnly =
+                new java.util.ArrayList<>(referenceMounts(referenceRoots.get()));
+            readOnly.add(new DockerSandboxManager.ReadOnlyMount(root.toString(), AS_BUILT));
+            box = launch(docker, copy, who, browser, readOnly, copy);
+            long began = System.currentTimeMillis();
+            // Entry by entry: the folder /workspace itself is a mount this user does not own,
+            // and cp cannot set its times.
+            ExecResult copied = box.target().exec("cd " + AS_BUILT + " && find . -mindepth 1 "
+                + "-maxdepth 1 -exec cp -a {} /workspace/ ';'", COPY_TIMEOUT_SECONDS);
+            if (!copied.succeeded()) {
+                String said = copied.output() == null ? "" : copied.output().strip();
+                throw new DockerSandboxManager.SandboxException(who + " was not run: the tree "
+                    + "could not be copied for it (exit " + copied.exitCode()
+                    + (copied.timedOut() ? ", timed out" : "") + "): "
+                    + (said.length() <= 600 ? said : said.substring(said.length() - 600)));
+            }
+            log.info("{}: tree {} copied in {} s; what is started here writes to the copy only",
+                who, root, (System.currentTimeMillis() - began) / 1000);
+            return box;
+        } catch (IOException | RuntimeException e) {
+            if (box != null) {
+                box.close();
+            } else {
+                removeFolder(copy);
+            }
+            if (e instanceof DockerSandboxManager.SandboxException refused) {
+                throw refused;
+            }
+            throw new DockerSandboxManager.SandboxException(who + " was not run: a copy of the "
+                + "tree could not be made for it (" + e + ")", e);
+        }
+    }
+
+    /**
+     * One clean start per journey for {@link JourneyRunner}: each call is a new
+     * {@link #openOnCopy} of the tree as it stands at that moment.
+     */
+    public JourneyRunner.Starts cleanStarts(Path tree, String who) {
+        return () -> openOnCopy(tree, who, true);
+    }
+
+    /** Removes a folder this class made, with everything in it. Never throws. */
+    private static void removeFolder(Path folder) {
+        if (folder == null || !java.nio.file.Files.exists(folder,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try {
+            java.nio.file.Files.walkFileTree(folder, new java.nio.file.SimpleFileVisitor<>() {
+                @Override
+                public java.nio.file.FileVisitResult visitFile(Path file,
+                        java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+                    java.nio.file.Files.delete(file);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult postVisitDirectory(Path dir, IOException e)
+                        throws IOException {
+                    java.nio.file.Files.delete(dir);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException | RuntimeException e) {
+            log.warn("The copy of a tree at {} could not be removed ({}); it is safe to delete",
+                folder, e.toString());
+        }
     }
 
     /**
@@ -198,19 +310,23 @@ public final class BuildBoxes {
     }
 
     /** One tree's execution place. Closing it removes the container. */
-    public static final class Box implements AutoCloseable {
+    public static final class Box implements JourneyRunner.Start {
 
         private final DockerSandboxManager docker;
         private final DockerSandboxManager.SandboxHandle handle;
         private final ExecTarget target;
+        /** The copy of a tree this box was opened on, or null when it is on the tree itself. */
+        private final Path removedOnClose;
 
         private Box(DockerSandboxManager docker, DockerSandboxManager.SandboxHandle handle,
-                    ExecTarget target) {
+                    ExecTarget target, Path removedOnClose) {
             this.docker = docker;
             this.handle = handle;
             this.target = target;
+            this.removedOnClose = removedOnClose;
         }
 
+        @Override
         public ExecTarget target() {
             return target;
         }
@@ -230,6 +346,7 @@ public final class BuildBoxes {
                         e.getMessage());
                 }
             }
+            removeFolder(removedOnClose);
         }
     }
 
