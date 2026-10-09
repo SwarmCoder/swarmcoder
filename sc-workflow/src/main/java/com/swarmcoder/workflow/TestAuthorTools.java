@@ -94,6 +94,9 @@ public final class TestAuthorTools {
     private final Map<String, Boolean> onTheStartPage = new LinkedHashMap<>();
     /** The journey last sent back with the question about a text nobody enters, as it was given. */
     private String askedAboutUnentered;
+    /** The criteria a journey's {@code proves} must cover, by number; empty asks for none. */
+    private List<String> criteriaToProve = List.of();
+    private String askedAboutBorrowed;
     /** True while the session reviews a journey that failed: no test is compiled or handed in. */
     private boolean journeyOnly;
     /** The journey under review: its path and its text as it failed; null outside a review. */
@@ -167,6 +170,15 @@ public final class TestAuthorTools {
 
     boolean journeyDue() {
         return journeyObjection != null;
+    }
+
+    /**
+     * The journey written here says, for each of these criteria, which of its steps exercise
+     * it (live run 103, section 76): {@code proves} must have one entry a criterion.
+     */
+    TestAuthorTools provingCriteria(List<String> criteria) {
+        this.criteriaToProve = criteria == null ? List.of() : List.copyOf(criteria);
+        return this;
     }
 
     /**
@@ -274,6 +286,7 @@ public final class TestAuthorTools {
         this.journeys.clear();
         this.journeyChecks = 0;
         this.askedAboutUnentered = null;
+        this.askedAboutBorrowed = null;
         this.check = files -> new Verdict(false, "No test is compiled in this review: it is "
             + "about the journey only. Use check_journey, then report_done.");
         this.draft.clear();
@@ -424,6 +437,10 @@ public final class TestAuthorTools {
             JourneyFile.Read read = JourneyFile.read(target, content);
             String objection = read.ok() ? journeyObjection.apply(target, content) : read.objection();
             if (objection == null) {
+                // Which steps prove which criterion is part of the file (section 76).
+                objection = JourneyFile.coverageObjection(read.journey(), criteriaToProve);
+            }
+            if (objection == null) {
                 // A role written without `role=` finds nothing on any page (section 75).
                 List<String> bare =
                     com.swarmcoder.verify.JourneyExpectations.rolesWithoutPrefix(read.journey());
@@ -450,6 +467,23 @@ public final class TestAuthorTools {
                 return "NOT KEPT. "
                     + com.swarmcoder.verify.JourneyExpectations.alreadyThereObjection(there)
                     + " Then call check_journey again with the complete file.";
+            }
+            // Steps said to prove a criterion that use nothing of their own (section 76, live
+            // run 103: "edit" was a second add). Asked once; the same file again is the
+            // author's answer that those steps are what the criterion describes.
+            List<String> borrowed = JourneyFile.borrowedControls(read.journey());
+            String asIs = content.replace("\r\n", "\n").strip();
+            if (!borrowed.isEmpty() && !asIs.equals(askedAboutBorrowed)) {
+                askedAboutBorrowed = asIs;
+                log.info("check_journey {} for {}: asked about {} criterion/criteria whose "
+                    + "steps use no control of their own - {}", journeyChecks, target,
+                    borrowed.size(), borrowed);
+                return "NOT KEPT YET - one question first.\n"
+                    + JourneyFile.borrowedQuestion(borrowed)
+                    + "\n\nCorrect the journey and call check_journey with the complete file - "
+                    + "or, when those steps are exactly what the criterion describes, call "
+                    + "check_journey again with this same file and it is kept; the entry is "
+                    + "then shown with this note to whoever accepts the story.";
             }
             // A text it expects that nobody enters (section 69, live run 93): asked once,
             // while the journey is being written. The same file given again is the author's

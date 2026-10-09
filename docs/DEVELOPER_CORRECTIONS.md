@@ -7143,3 +7143,281 @@ session.
 
 **Left.** The judge is not told what a candidate's screen lacks. A journey handed in as a
 file in one reply is not held to items 2 and 4 before the red check's note. A live run.
+
+## 76. Thirteen plan drafts for one decision, a journey that proved less than its story, and five findings lost in a tool binding (run 103, 2026-10-09)
+
+Run 103 was the first run that DELIVERED a story with a screen, proved by a journey in a
+browser, from two documents, every role on the local model: a small demo with a model type, a
+service interface, a server and one browser screen; the story adds, edits and removes records.
+The journey failed once at final integration, the screen's task had its one repair round, the
+journey then passed. Nothing below was measured in a live run; everything is tested with no
+model.
+
+**Tokens** (calls | input | output).
+
+| role | run 103 | for comparison |
+|---|---|---|
+| architect | 53 \| 3,383,318 \| 69,108 | run 100: 43 \| 2,256,209 \| 57,507 |
+| task planner | 21 \| 643,938 \| 107,856 | run 100: 2 \| 24,938 \| 3,564 |
+| test author | 12 \| 223,765 \| 21,559 | run 100: 41 \| 1,215,687 \| 60,958 |
+| workers | 195 \| 5,618,322 \| 92,529 | run 101: 87 \| 1,558,751 \| 25,170 (four tasks, no repair round) |
+| analyst | 3 \| 17,368 \| 30,722 | |
+| all | 294 \| 9,987,003 \| 332,356 | |
+
+### 1. The planner: 13 drafts, 63 objections, one of them a decision
+
+Two of the 21 calls were story planning before the run (about 14,400 output tokens). The other
+19 were the PLAN stage: 67.5 minutes, about 93,400 output tokens. The server's total is exact;
+the split is by the time each call took at the role's own rate (23.5 output tokens a second).
+Input tokens were not recorded per call.
+
+| call | draft | objections | of them | output tokens, about |
+|---|---|---|---|---|
+| 1 | 1, six tasks (7,192 chars) | 15 | 10 edges the wrong way round, 4 that only follow from them, 1 "nothing reaches what is added" | 7,200 |
+| 2 | three whole-file reads | | | 1,300 |
+| 3 | 2 (7,603) | 1 | "nothing reaches": seven files, none of them unreachable | 2,500 |
+| 4 | one file read | | | 1,900 |
+| 5 | 3 (8,083) | 1 | "nothing reaches": the service interface | 3,100 |
+| 6 | 4 (7,339) | 19 | the 10 edges again, the 4 that follow, 4 nested types no task delivers, 1 "nothing reaches" | 13,600 |
+| 7 | 5 (7,810) | 1 | "nothing reaches": the interface | 2,000 |
+| 8 | 6 (6,962) | 5 | 4 nested types, 1 "nothing reaches" | 5,200 |
+| 9 | 7 (7,606) | 1 | "nothing reaches": the interface | 9,400 |
+| 10-13 | 8 to 11 (6,986 to 5,663) | 5 each | 4 nested types, 1 "nothing reaches" | 17,300 |
+| 14 | one file read | | | 2,300 |
+| 15 | 12 (2,474), not readable as a plan | | | 19,800 |
+| 16 | a two-task plan (4,700), not checked: all 12 checks were used | | | 4,000 |
+| 17 | hand-in of it; refused after hand-in: three store types no task delivers | 3 | | 2,100 |
+| 18-19 | the two-task plan with them (5,745): no objection; hand-in | 0 | | 1,900 |
+
+**What the 63 objections of the drafts were.**
+
+| kind | count | what it was | a decision for the planner? |
+|---|---|---|---|
+| a task uses a type in its contract or read set, and the plan makes the task that writes it wait for the user | 20 | every edge of drafts 1 and 4 written from the task that waits to the task it waits for | no |
+| "claims no check, and nothing that depends on it claims one" | 8 | true only of the reversed plan | no |
+| no task delivers a contract | 24 | four classes declared inside two others; the outer class was in a task | no |
+| "the plan adds new files nothing the application reaches could use" | 11 | see below | once, in draft 1 |
+
+Section 66 said a missing dependency is added and only a contradiction goes back. That held:
+`TypeDependencyOrder` already ran on drafts and no objection of this run was a missing edge.
+All 20 were edges the planner had written the wrong way round - what section 66 decided to
+send back "because which half is wrong is not a mechanical fact".
+
+**"Nothing reaches what is added" was wrong ten times out of eleven.** In draft 1 it named the
+new screen's file, rightly: no task had the client's entry class in its write set. Draft 2 put
+that right. From then on it named the service interface (and in drafts 2 and 10 the command
+and query classes): new files in a module whose code nothing of the start tree used yet.
+`ReachableCode.planObjection` judged each new file alone, by whether a task may change a
+reachable file in a source root that ALREADY uses the new file's root. The new server class
+that implements the interface, in the same plan and itself taken as found by the framework,
+did not count. Nothing the planner could write into the interface's task would satisfy it.
+
+**Did the planner collapse the plan to escape?** Yes. The plan was acceptable at draft 2. Ten
+drafts later the planner put the model type, the interface, the store's types, the commands,
+the queries and the implementation into one task. That passed because the model type's
+contract carries the project's one discovery annotation, and a task that says so has all its
+new files taken as found by the framework - the interface with them.
+
+**Section 73's short instructions and computed files.** Short instructions created no
+objection. Computed files created none between tasks (no overlap, no reservation in a read
+set). They created one fault: the file computed for a class declared inside another was
+`<package>/<Outer>/<Inner>.java`, four such paths, each then named to the planner as a new
+file nothing reaches (drafts 1 and 2) and, in the final plan, reserved for nobody to write
+(the server task's 15 reserved files, 10 of them computed).
+
+**Changed.**
+
+- **An edge written against a fact, with no fact of its own, is turned round**
+  (`TypeDependencyOrder.apply`, `Outcome.turned`). Where the plan's own edge runs directly from
+  the task that uses a type to the task that writes it, the use is a contract's Java or a read
+  set, and nothing the writer delivers or reads comes from the user. **Decision: this changes
+  section 66's "sent back, not turned round" for that one case.** The two tasks cannot run in
+  the planner's order, the other direction has no evidence, and a planner on a small model
+  writes `from` and `to` the wrong way round for a whole plan at a time. Still sent back: a
+  fact each way; an order that runs through a third task; evidence that is only wording (run
+  90's case with no read set); and every case where the turned edges would close a cycle, in
+  which nothing is turned.
+- **A type declared inside another goes with it** (`NestedContracts`). A contract no task
+  delivers, whose name is nested in a type exactly one task delivers, is given to that task
+  before the order is read (`TaskGraphValidator.validate`). Its computed file is the outer
+  type's (`ComputedReservation`). Read from the names: a type name whose qualifier is a type
+  of the design, the plan or the tree.
+- **A new file that another new file of the plan uses is reached when that one is**
+  (`ReachableCode.planObjection` with `usedBy`, `PlanConnectsWhatItAdds.usedBy`). Uses are
+  read from the contracts' Java and from read sets. Two new files that only use each other
+  stay unconnected, and a new screen nothing leads to is still an objection.
+- **What the checks put right is a note, not an objection** (`TaskGraphValidator.Verdict.
+  corrections`, `ArchitectClient.PlanDraft`, `DraftTools.Checked.notes`). `check_plan` answers
+  "NO OBJECTIONS" for a draft with notes alone, lists them under NOTES ("nothing here needs
+  an answer"), and the plan handed in with an empty `report_done` is put right the same way
+  after hand-in. `PLAN_HOW` says in one sentence that a note is never a reason to write the
+  plan again.
+- Each `check_plan` draft is on the log with its tasks, their contract counts and its edges.
+  Run 103's drafts were recorded as a length each.
+
+**What a draft for this design would now get back.** Draft 1 (six tasks, every edge
+reversed, the screen's task without the entry class): ONE objection, the screen's file with
+the entry class named, and a note of ten edges turned round. The four objections that
+followed from the reversal do not arise, the nested types are given to their outer type's
+task, and the interface, the commands and the queries are reached through the implementation.
+Draft 2 would have had no objection. That is two drafts in place of thirteen; at this run's
+figures about 12,000 output tokens in place of 93,400. Expected from the checks, tested on
+fixtures of the same shape, not measured on the planner.
+
+### 2. Granularity: the coarse plan was not what made the workers expensive
+
+| task | workers | calls | output tokens | winner's diff | what failed |
+|---|---|---|---|---|---|
+| server: model, interface, store, commands, queries, implementation (5 findings) | 2 | 68 | 28,537 | 10 files, +438 | 1 of 2 candidates did not compile: an import of a package that does not exist, in one of ten files. Both workers were stopped for no progress; the winner's work was complete |
+| screen, first round (4 findings) | 2 | 59 | 28,262 | | 1 candidate verified (no test can execute the browser module), the other stopped behind it. At final integration the page showed its loading text for ever |
+| screen, repair round | 2 | 66 | 35,730 | 2 files, +30 | 1 of 2 candidates; the journey then passed |
+| run 101, same layers, a smaller story: model / interface / server / screen | 2 each | 11 / 11 / 29 / 35 | 1,530 / 1,488 / 8,042 / 14,110 | +27 / +15 / +111 / +113 | none; no repair round |
+
+- **Per line the winner wrote, the large task cost about what three small ones did**: 19,604
+  output tokens for 438 lines (45 a line) against 5,667 for 153 lines (37 a line) in run 101.
+- **What it cost was the candidate.** One wrong import in one of ten files lost a whole
+  candidate (8,933 output tokens); all six candidates of run 101's three small tasks passed.
+  It was also the whole first wave: nothing was built beside it.
+- **69% of the workers' output went to the screen** (63,992 of 92,529), and the screen's task
+  was the same size in both plans. Its repair round alone was 39% (35,730). The cause was a
+  fact that fails only when the application runs, which no finding carried (item 4).
+- 24% of all tokens went to candidates that were not selected (two workers a task).
+
+**Decision: no size rule that refuses a plan.** The two runs do not show that a coarse plan
+makes workers expensive, the collapse was the planner's way round a wrong check (item 1), and
+with that check put right a six-task draft passes. What is added is a proposal the product
+makes and the planner may ignore (`PlanSizeGuide`): a task whose computed files lie in more
+than one production source root is named in `check_plan`'s notes and on the PLAN log, with the
+types on each side of the line - "one task for each part is the smaller split". A build's
+source roots are the layer boundary the compiler already keeps; nothing is read from wording
+and no number is chosen. Run 103's final plan would have got it for the server task (two
+modules).
+
+### 3. The journey that passed proved less than the story said
+
+The story's two criteria: a record's fields can be edited and the change shows in the list; a
+record can be removed. The journey (13 steps) entered a record, entered it AGAIN with a
+corrected spelling through the same form, and removed twice. It never used the screen's edit
+control. Its one-line name said "edits a typo". It passed and the story was accepted.
+
+**Is "every criterion visible on a screen is exercised by the journey" decidable with no
+model?** No. Which control a criterion is about is in its words. What is decidable is whether
+the author SAID which steps exercise it, whether those steps exist, act and look, and whether
+they use anything the rest of the journey does not.
+
+**Built.**
+
+- **`proves`, a third key of a journey file** (`JourneyFile.Proof`, `provesOf`): one entry a
+  criterion, by its number in the list the author is given -
+  `criterion: 1` with `steps: "<first>-<last>"`, or with `notOnScreen: "<why>"`. Checked on
+  reading: the steps exist, at least one acts and at least one looks, one entry a criterion,
+  exactly one of the two forms. A file without `proves` reads as before.
+- **Asked of the author where the criteria are known** (`TestAuthorTools.provingCriteria`,
+  `JourneyFile.coverageObjection`, `provesBrief` in the author's brief): `check_journey` does
+  not keep a journey that leaves a criterion out, and answers with the criteria by number.
+- **Steps that use no control of their own are asked about once**
+  (`JourneyFile.borrowedControls`): when every control an entry's steps click, fill or select
+  in is also used by steps outside the entry, `check_journey` answers "NOT KEPT YET - one
+  question first". The same file given again is kept. Selectors are compared character for
+  character; no word is read. On run 103's journey: the entry for "edit" uses the two text
+  fields and the add button, all used by the first add - asked; the entry for "remove" uses a
+  button nothing else does - not asked. **Decision: a question, not a refusal** - a second
+  record entered through the same form can be exactly what a criterion describes.
+- **Shown.** One line an entry, with the criterion's words and the steps in words, and
+  `[NOTE: these steps use no control the rest of the journey does not also use]` where that
+  holds: on the run's log at TEST_AUTHORING, kept on the task (`Task.journeyProofs`, a new
+  optional field), in the run report under the task ("What its journey says proves each
+  criterion"), and in `Journey.describe()`, which the review of a failed journey and the
+  workers' evidence are made of.
+
+**Not built.** The Console's acceptance screen does not show the lines. A journey handed in
+as a file in one reply, and a correction made in a review, are checked for the form of
+`proves` and not asked for it. Nothing stops an author from naming steps that do not do what
+the criterion says and answering the question with the same file; the reader of the report is
+the check.
+
+### 4. The architect: 53 calls, 3,383,318 input, 69,108 output
+
+170 lookups in 53 turns; four design drafts (three refused by `check_design` for nested
+classes written as members, which is how the design came to have a contract for each).
+
+**`keep_for_workers`: 13 calls, 5 kept.**
+
+| calls | what happened |
+|---|---|
+| 5, in one turn | failed before the tool was reached: the call left out `lines`, which the tool describes as "empty for all of a short result", and the binding answered "No argument provided for a required parameter" with a stack trace |
+| 3 | refused for length (section 74), rightly |
+| 5 | kept |
+
+| # | said to be about | kept from | lines | characters |
+|---|---|---|---|---|
+| 1 | the nested query class | the reference example's queries | 1-30 of 45 | 1,621 |
+| 2 | the store's root type | the example's root | 1-40 of 46 | 1,805 |
+| 3 | the server implementation | the example's implementation | 14-50 of 59 | 1,954 |
+| 4 | the server implementation | the example's server build file | 18-40 of 153 | 1,395 |
+| 5 | the commands class | the example's commands | 20-40 of 142 | 1,865 |
+
+- **None is about something that fails only at run time, and none is about the screen.** All
+  five are "this is how the example writes this class". The screen's task was given four of
+  them through the tasks it waits for, all server code. Its first screen showed its loading
+  text for ever - the fact run 100's design carried as a finding (a screen that calls the
+  server is mounted on a thread of its own) and this design did not.
+- Findings 1 and 2 begin at a file's first line, against the instruction of section 74.
+  Finding 5 follows it and leaves the imports out; the server candidate that failed imported
+  the command type from a package that does not exist.
+
+**Changed (a defect in the product, not the model).**
+
+- **An argument a tool lets a caller leave out is the empty string**
+  (`AgentRuntime.MayBeOmitted`, `OmittedArguments`, applied in `KoogAgentRuntime` before the
+  calls are run). Marked: `about` and `lines` of `keep_for_workers`, and `which` of the
+  workers' `acceptance_test`, which failed the same way once in this run. Only a marked
+  `String` parameter is filled: a tool that writes is never given an empty text it was not
+  sent.
+- **A finding carries the imports its lines use** (`DraftTools.importsUsed`): import lines of
+  the same lookup result, outside the kept range, whose type name the kept lines name, are
+  put in front of them, inside the same bound of characters.
+
+**Not changed.** The architect's instruction. Whether it keeps a run-time fact about the
+screen is the model's doing; one run with it (100) and one without (103) is not a pattern.
+
+### 5. Seen and left
+
+- **Both server workers were stopped for no progress, one with its work complete** (41 turns;
+  it did not call `report_done`). The change was verified and selected, so nothing was lost
+  but its turns after the work was done.
+- A screen's first look is still final integration (section 74, item 5): the first screen
+  candidate passed verification showing nothing.
+- The planner used all 12 draft checks, handed in a plan it could no longer check, and lost
+  three contracts in it. With item 1 it should not come to that; the cap is unchanged.
+- `PlanSizeGuide` proposes and does not split. A split made by the product - one task for
+  each source root of a task's contracts, the checks staying with the part that depends on
+  the others - was not built.
+- A module that depends on another in its build file, with no code using it yet, is still not
+  a place a new file can be connected from (`rootsUsing` reads code, not build files). The
+  transitive rule covered run 103's case.
+- The architect read 45 whole files (146,663 characters of 295,000 looked up); 44% of what it
+  looked up came from the tree, the language server and document sections.
+
+### A rerun
+
+To measure the planner: resume run 103 from its saved design (`2-design`). The design is the
+one the thirteen drafts were written for; the plan is made again, then the tests and the
+journey (with `proves`), then the build. Watch the `check_plan draft` lines: drafts, objections
+and notes each; and whether the plan keeps its six tasks. The design's five findings are
+unchanged there, so the screen may need its repair round again. The binding fix and the
+imports need a new design: resume from `1-requirements`.
+
+**Tests.** New: `APlanDraftIsPutRightWhereItsFactsDecideTest`,
+`AJourneySaysWhichStepsProveWhichCriterionTest`,
+`TheJourneysAuthorSaysWhichStepsProveWhatTest`,
+`AnArgumentAToolLetsACallerLeaveOutIsEmptyTest`; a case in
+`TheArchitectHandsItsFindingsToTheWorkersTest`. Changed to the new rule: one case each in
+`PlanOrdersTasksByTheirTypesTest` and `APlanDoesNotRunATaskBeforeTheTypeItUsesExistsTest` (the
+edge is turned round where it went back); the journey of
+`TheTestAuthorWritesAJourneyForAScreenTest` carries `proves`.
+
+**Not exercised by any test:** the note reaching a planner in a live session; `proves` in a
+live authoring session; the run report's line (it prints a field); a store written before
+today opened with `Task.journeyProofs` absent; `OmittedArguments` inside a running session
+(the filling is tested on calls).

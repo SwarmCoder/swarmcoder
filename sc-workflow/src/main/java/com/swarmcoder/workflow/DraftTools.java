@@ -67,8 +67,20 @@ public final class DraftTools {
      *
      * @param readable   false when the draft could not be read as the JSON object at all
      * @param objections empty when the checks have nothing to object to
+     * @param notes      what the checks put right in the draft themselves, and what they
+     *                   propose: told to the role, never counted as an objection, and a draft
+     *                   with notes alone is clean (live run 103, section 76)
      */
-    public record Checked(boolean readable, List<String> objections) {
+    public record Checked(boolean readable, List<String> objections, List<String> notes) {
+
+        /** A reading with nothing put right and nothing proposed. */
+        public Checked(boolean readable, List<String> objections) {
+            this(readable, objections, List.of());
+        }
+
+        public Checked {
+            notes = notes == null ? List.of() : List.copyOf(notes);
+        }
 
         static Checked unreadable(String why) {
             return new Checked(false, List.of(why));
@@ -181,7 +193,7 @@ public final class DraftTools {
                 }
                 return "NO OBJECTIONS: the mechanical checks found nothing wrong with this "
                     + noun + ". Hand it in: call report_done with an empty string." + keep
-                    + remaining;
+                    + notesOf(result, true) + remaining;
             }
             StringBuilder reply = new StringBuilder(result.objections().size() + " OBJECTION(S) "
                 + "from the mechanical checks - each one would send this " + noun + " back after "
@@ -189,9 +201,30 @@ public final class DraftTools {
             for (String objection : result.objections()) {
                 reply.append("- ").append(objection).append('\n');
             }
-            return reply + "Fix every one - look up whatever an objection shows you guessed - and "
+            return reply + notesOf(result, false).stripLeading()
+                + (result.notes().isEmpty() ? "" : "\n")
+                + "Fix every one - look up whatever an objection shows you guessed - and "
                 + "call " + tool + " again." + remaining;
         });
+    }
+
+    /**
+     * What the checks did to the draft without asking, as the role is told it. Not objections:
+     * a role that is told "fix this" for something already fixed writes its whole draft again
+     * (live run 103: thirteen plan drafts, about 93,000 output tokens, one decision in them).
+     */
+    private String notesOf(Checked result, boolean clean) {
+        if (result.notes().isEmpty()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder("\nNOTES - nothing here is an objection and "
+            + "nothing here needs an answer. The " + noun + " is taken with these as they "
+            + "stand" + (clean ? "; do not write it again for them" : "") + ":\n");
+        for (String note : result.notes()) {
+            log.info("check_{} draft {} note: {}", noun, checks, note);
+            text.append("- ").append(note).append('\n');
+        }
+        return text.toString().stripTrailing();
     }
 
     /**
@@ -203,7 +236,10 @@ public final class DraftTools {
      *               result, {@code none} for the sentence alone
      * @param note   the fact, in one sentence
      */
-    public String keepForWorkers(String about, String lookup, String lines, String note) {
+    public String keepForWorkers(@com.swarmcoder.runtime.AgentRuntime.MayBeOmitted String about,
+                                 String lookup,
+                                 @com.swarmcoder.runtime.AgentRuntime.MayBeOmitted String lines,
+                                 String note) {
         return session.runOwnTool("keep_for_workers", lookup == null ? "" : lookup.strip(), () -> {
             if (note == null || note.isBlank()) {
                 return "error: say the fact in one sentence, as note.";
@@ -267,8 +303,20 @@ public final class DraftTools {
                     taken++;
                 }
                 snippet = text.toString().stripTrailing();
+                // The imports those lines use, from the same result (live run 103, section 76:
+                // a finding kept from line 20 of a class left its imports behind, as the
+                // architect is told to, and a worker given it imported the type from a
+                // package that does not exist - one of two candidates of a ten-file task).
+                List<String> imports = taken == 0 ? List.of()
+                    : importsUsed(all, first, first + taken - 1, snippet,
+                        FINDING_SNIPPET_CHARS - snippet.length());
+                if (!imports.isEmpty()) {
+                    snippet = String.join("\n", imports) + "\n" + snippet;
+                }
                 took = taken == 0 ? "no line (the first one is longer than a finding carries)"
                     : "lines " + first + "-" + (first + taken - 1) + " of " + all.length
+                    + (imports.isEmpty() ? "" : ", with the " + imports.size()
+                        + " import line(s) of that result they use")
                     + (cut ? " (a finding carries at most " + FINDING_SNIPPET_CHARS
                         + " characters; keep the rest as a second finding if it matters)" : "");
             }
@@ -298,6 +346,36 @@ public final class DraftTools {
                     + source + ". " + kept.size() + " kept so far.";
             }
         });
+    }
+
+    private static final Pattern IMPORT_LINE =
+        Pattern.compile("^\\s*import\\s+(?:static\\s+)?[\\w.]*?\\b(\\w+)\\s*;\\s*$");
+
+    /**
+     * The import lines of a lookup's result, outside the kept range, whose last name the kept
+     * lines name - a type, or a member imported statically. Read as Java's own syntax; the
+     * names come from the result. Stops before {@code room} characters are used.
+     */
+    static List<String> importsUsed(String[] all, int first, int last, String kept, int room) {
+        List<String> lines = new ArrayList<>();
+        int used = 0;
+        for (int i = 1; i <= all.length; i++) {
+            if (i >= first && i <= last) {
+                continue;
+            }
+            Matcher line = IMPORT_LINE.matcher(all[i - 1]);
+            if (!line.matches() || !Pattern.compile("(?<![A-Za-z0-9_$])"
+                    + Pattern.quote(line.group(1)) + "(?![A-Za-z0-9_$])").matcher(kept).find()) {
+                continue;
+            }
+            String text = all[i - 1].strip();
+            if (used + text.length() + 1 > room) {
+                break;
+            }
+            used += text.length() + 1;
+            lines.add(text);
+        }
+        return lines;
     }
 
     /** What the architect kept for the workers in this session; a copy. */

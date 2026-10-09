@@ -72,7 +72,29 @@ public final class TaskGraphValidator {
         public boolean ok() {
             return violations.isEmpty();
         }
+
+        /**
+         * What the checks put right in the plan themselves, because the plan's own facts
+         * decide it: an order added or turned round, a nested type given to its outer type's
+         * task. The planner is told these as notes and has nothing to do about them (live run
+         * 103, section 76).
+         */
+        public List<String> corrections() {
+            List<String> lines = new ArrayList<>();
+            for (String warning : warnings) {
+                for (String kind : List.of(TURNED_DEPENDENCY, ADDED_DEPENDENCY, ADDED_DELIVERY)) {
+                    if (warning.startsWith(kind)) {
+                        lines.add(warning.substring(kind.length()));
+                    }
+                }
+            }
+            return lines;
+        }
     }
+
+    static final String ADDED_DEPENDENCY = "added dependency: ";
+    static final String TURNED_DEPENDENCY = "turned dependency: ";
+    static final String ADDED_DELIVERY = "added delivery: ";
 
     /**
      * Which modules of the build run only in a browser — what {@link #unusedEnablers} needs to
@@ -182,6 +204,10 @@ public final class TaskGraphValidator {
             }
         }
 
+        // Before the order is read: a nested type's contract says what its task's code names.
+        NestedContracts.assign(graph, design)
+            .forEach(line -> warnings.add(ADDED_DELIVERY + line));
+
         List<Task> stuck = tasksInOrBehindACycle(graph);
         boolean cyclic = !stuck.isEmpty();
         if (cyclic) {
@@ -203,7 +229,8 @@ public final class TaskGraphValidator {
             // leaves a plan alone.
             TypeDependencyOrder.Outcome typeOrder =
                 TypeDependencyOrder.apply(graph, design, repoRoot);
-            typeOrder.added().forEach(line -> warnings.add("added dependency: " + line));
+            typeOrder.turned().forEach(line -> warnings.add(TURNED_DEPENDENCY + line));
+            typeOrder.added().forEach(line -> warnings.add(ADDED_DEPENDENCY + line));
             typeOrder.notes().forEach(line -> warnings.add("dependency not added: " + line));
             violations.addAll(typeOrder.violations());
             checkWriteSetDisjointness(graph, violations);

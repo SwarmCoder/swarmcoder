@@ -64,7 +64,138 @@ public final class JourneyFile {
     /** A guard against a file that is not a journey at all. */
     static final int MAX_STEPS = 60;
 
-    private static final Set<String> TOP_KEYS = Set.of("journey", "steps");
+    private static final Set<String> TOP_KEYS = Set.of("journey", "steps", "proves");
+
+    /**
+     * What an author is told about {@code proves} (live run 103, section 76): a journey for a
+     * story about editing and removing records added one twice with a corrected spelling,
+     * never used the screen's edit control, passed, and the story was accepted. Its one-line
+     * name said it edits. Which steps exercise which criterion is now a field of the file,
+     * read with no model, shown to whoever accepts the story.
+     *
+     * @param criteria the criteria the journey is written for, in the order they are numbered
+     */
+    public static String provesBrief(List<String> criteria) {
+        if (criteria == null || criteria.isEmpty()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder(" THE JOURNEY SAYS WHICH OF ITS STEPS PROVE "
+            + "WHICH CRITERION. After `steps` the file has a third key, `proves`, with one "
+            + "entry for every criterion below, by its number:\n"
+            + "proves:\n"
+            + "  - criterion: 1\n"
+            + "    steps: \"<first>-<last>\"   # the steps in which a person does what this "
+            + "criterion describes and sees the result\n"
+            + "  - criterion: 2\n"
+            + "    notOnScreen: \"<one sentence: why no person can see or do this on a "
+            + "screen>\"\n"
+            + "The steps of an entry use the control the screen offers for THAT criterion and "
+            + "end by looking at its result: changing a record is proved by changing it on the "
+            + "screen, not by entering it a second time. The entries are shown to the person "
+            + "who accepts the story. The criteria, numbered:\n");
+        for (int i = 0; i < criteria.size(); i++) {
+            text.append(i + 1).append(". ").append(criteria.get(i) == null ? ""
+                : criteria.get(i).strip().replaceAll("\\s+", " ")).append('\n');
+        }
+        return text.toString();
+    }
+
+    /**
+     * One entry of {@code proves}: the steps said to exercise one criterion, or why it cannot
+     * be seen on a screen.
+     *
+     * @param criterion   its number in the list the author was given, from 1
+     * @param first       the first step, from 1; 0 with {@code notOnScreen}
+     * @param last        the last step, inclusive
+     * @param notOnScreen the author's sentence in place of steps; null when steps are named
+     */
+    public record Proof(int criterion, int first, int last, String notOnScreen) {
+    }
+
+    /**
+     * What is wrong with a journey's {@code proves} for these criteria, or null: every
+     * criterion needs exactly one entry. The form of each entry is checked by {@link #read}.
+     */
+    public static String coverageObjection(Journey journey, List<String> criteria) {
+        if (journey == null || criteria == null || criteria.isEmpty()) {
+            return null;
+        }
+        List<String> problems = new ArrayList<>();
+        for (Proof proof : journey.proves()) {
+            if (proof.criterion() > criteria.size()) {
+                problems.add("`proves` names criterion " + proof.criterion() + "; there are "
+                    + criteria.size());
+            }
+        }
+        List<Integer> missing = new ArrayList<>();
+        for (int i = 1; i <= criteria.size(); i++) {
+            int number = i;
+            if (journey.proves().stream().noneMatch(proof -> proof.criterion() == number)) {
+                missing.add(number);
+            }
+        }
+        if (!missing.isEmpty()) {
+            problems.add((journey.proves().isEmpty() ? "the file has no `proves`"
+                : "`proves` has no entry for criterion " + missing.stream()
+                    .map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")))
+                + ". Every criterion needs one entry: the steps that exercise it, or why it is "
+                + "not on a screen");
+        }
+        if (problems.isEmpty()) {
+            return null;
+        }
+        return String.join("\n", problems.stream().map(problem -> "- " + problem).toList())
+            + "\n" + provesBrief(criteria).strip();
+    }
+
+    /**
+     * The entries whose steps act only on controls the journey also acts on OUTSIDE those
+     * steps: nothing on the screen is used for that criterion that was not already used for
+     * something else. Compared as selectors, character for character; no word is read. It is
+     * a question for the author, not a refusal - a second record entered through the same form
+     * can be exactly what a criterion describes.
+     */
+    public static List<String> borrowedControls(Journey journey) {
+        List<String> lines = new ArrayList<>();
+        if (journey == null) {
+            return lines;
+        }
+        for (Proof proof : journey.proves()) {
+            if (proof.notOnScreen() != null) {
+                continue;
+            }
+            Set<String> inside = new java.util.LinkedHashSet<>();
+            Set<String> outside = new java.util.HashSet<>();
+            for (int i = 1; i <= journey.steps().size(); i++) {
+                String control = controlOf(journey.steps().get(i - 1));
+                if (control != null) {
+                    (i >= proof.first() && i <= proof.last() ? inside : outside).add(control);
+                }
+            }
+            if (!inside.isEmpty() && outside.containsAll(inside)) {
+                lines.add("criterion " + proof.criterion() + " (steps " + proof.first() + "-"
+                    + proof.last() + ") uses only " + String.join(", ", inside)
+                    + ", which other steps of the journey use too");
+            }
+        }
+        return lines;
+    }
+
+    /** The question {@link #borrowedControls} puts to the author. */
+    public static String borrowedQuestion(List<String> borrowed) {
+        return "The steps you name for a criterion use no control of their own:\n"
+            + String.join("\n", borrowed.stream().map(line -> "- " + line).toList())
+            + "\nIf that criterion is about something else a person does on the screen - "
+            + "changing or removing what is there, not entering it again - its steps must use "
+            + "the control the screen offers for that, and the journey does not prove it yet.";
+    }
+
+    /** What a step acts on: the selector of a click, a fill or a select; null for the rest. */
+    private static String controlOf(VerifySpec.StepSpec step) {
+        String control = step.click() != null ? step.click()
+            : step.fill() != null ? step.fill() : step.select();
+        return control == null || control.isBlank() ? null : control.strip();
+    }
     private static final List<String> ACTIONS =
         List.of("click", "fill", "select", "press", "expectVisible", "expectHidden",
             "expectValue");
@@ -137,7 +268,52 @@ public final class JourneyFile {
      * @param name  what the journey shows, in the author's words
      * @param steps in order; never empty for a journey without problems
      */
-    public record Journey(String path, String name, List<VerifySpec.StepSpec> steps) {
+    public record Journey(String path, String name, List<VerifySpec.StepSpec> steps,
+                          List<Proof> proves) {
+
+        public Journey {
+            proves = proves == null ? List.of() : List.copyOf(proves);
+        }
+
+        /** A journey that says nothing of which steps prove what. */
+        public Journey(String path, String name, List<VerifySpec.StepSpec> steps) {
+            this(path, name, steps, List.of());
+        }
+
+        /**
+         * What the journey says proves each criterion, one line an entry, for the run's log,
+         * its report and whoever accepts the story. Empty when the file has no {@code proves}.
+         *
+         * @param criteria the criteria by number; null or short leaves a number without words
+         */
+        public List<String> proofLines(List<String> criteria) {
+            List<String> lines = new ArrayList<>();
+            List<String> borrowed = borrowedControls(this);
+            for (Proof proof : proves) {
+                String words = criteria != null && proof.criterion() <= criteria.size()
+                    && criteria.get(proof.criterion() - 1) != null
+                    ? " \"" + criteria.get(proof.criterion() - 1).strip() + "\"" : "";
+                StringBuilder line = new StringBuilder(path + ": criterion " + proof.criterion()
+                    + words);
+                if (proof.notOnScreen() != null) {
+                    line.append(" - said not to be on a screen: ").append(proof.notOnScreen());
+                } else {
+                    line.append(" - by steps ").append(proof.first()).append('-')
+                        .append(proof.last()).append(": ");
+                    for (int i = proof.first(); i <= proof.last() && i <= steps.size(); i++) {
+                        line.append(i == proof.first() ? "" : "; ")
+                            .append(steps.get(i - 1).describe());
+                    }
+                    String flag = "criterion " + proof.criterion() + " (steps ";
+                    if (borrowed.stream().anyMatch(b -> b.startsWith(flag))) {
+                        line.append(" [NOTE: these steps use no control the rest of the "
+                            + "journey does not also use]");
+                    }
+                }
+                lines.add(line.toString());
+            }
+            return lines;
+        }
 
         /** The browser check that makes this journey, starting at {@code entryUrl}. */
         public VerifySpec.PageCheckSpec toCheck(String entryUrl) {
@@ -150,6 +326,13 @@ public final class JourneyFile {
                 + steps.size() + " step(s) from the application's entry page:\n");
             for (int i = 0; i < steps.size(); i++) {
                 text.append("  ").append(i + 1).append(". ").append(steps.get(i).describe())
+                    .append('\n');
+            }
+            for (Proof proof : proves) {
+                text.append("  criterion ").append(proof.criterion()).append(": ")
+                    .append(proof.notOnScreen() != null
+                        ? "said not to be on a screen - " + proof.notOnScreen()
+                        : "said to be proved by steps " + proof.first() + "-" + proof.last())
                     .append('\n');
             }
             return text.toString();
@@ -194,8 +377,8 @@ public final class JourneyFile {
         for (Iterator<String> keys = root.fieldNames(); keys.hasNext(); ) {
             String key = keys.next();
             if (!TOP_KEYS.contains(key)) {
-                problems.add("`" + key + "` is not a key of a journey. A journey has `journey` "
-                    + "and `steps` and nothing else: it has no address, because it starts on the "
+                problems.add("`" + key + "` is not a key of a journey. A journey has `journey`, "
+                    + "`steps` and `proves` and nothing else: it has no address, because it starts on the "
                     + "application's entry page and reaches every other screen by clicking");
             }
         }
@@ -229,7 +412,81 @@ public final class JourneyFile {
                 }
             }
         }
-        return new Read(new Journey(file, title, List.copyOf(steps)), List.copyOf(problems));
+        List<Proof> proves = problems.isEmpty() ? provesOf(root.get("proves"), steps, problems)
+            : List.of();
+        return new Read(new Journey(file, title, List.copyOf(steps), proves),
+            List.copyOf(problems));
+    }
+
+    private static final java.util.regex.Pattern STEP_RANGE =
+        java.util.regex.Pattern.compile("^(\\d+)(?:\\s*-\\s*(\\d+))?$");
+
+    /** Reads {@code proves}; absent is no entry and no problem. */
+    private static List<Proof> provesOf(JsonNode node, List<VerifySpec.StepSpec> steps,
+                                        List<String> problems) {
+        List<Proof> proves = new ArrayList<>();
+        if (node == null || node.isNull()) {
+            return proves;
+        }
+        String form = "Each entry of `proves` is `criterion: <number>` with either `steps: "
+            + "\"<first>-<last>\"` or `notOnScreen: \"<why>\"`";
+        if (!node.isArray()) {
+            problems.add("`proves` must be a list. " + form);
+            return proves;
+        }
+        Set<Integer> seen = new java.util.HashSet<>();
+        for (int i = 0; i < node.size(); i++) {
+            JsonNode entry = node.get(i);
+            String where = "`proves` entry " + (i + 1);
+            if (entry == null || !entry.isObject() || !entry.path("criterion").canConvertToInt()
+                    || entry.path("criterion").asInt() < 1) {
+                problems.add(where + " has no `criterion` number. " + form);
+                continue;
+            }
+            int criterion = entry.path("criterion").asInt();
+            if (!seen.add(criterion)) {
+                problems.add(where + " is a second entry for criterion " + criterion
+                    + "; one entry a criterion");
+                continue;
+            }
+            boolean hasSteps = entry.hasNonNull("steps");
+            String why = entry.path("notOnScreen").asText("").strip();
+            if (hasSteps == !why.isEmpty() || entry.size() != 2) {
+                problems.add(where + " must have exactly one of `steps` and `notOnScreen` "
+                    + "beside `criterion`. " + form);
+                continue;
+            }
+            if (!hasSteps) {
+                proves.add(new Proof(criterion, 0, 0, why));
+                continue;
+            }
+            java.util.regex.Matcher range = STEP_RANGE.matcher(entry.path("steps").asText("")
+                .strip());
+            int first = range.matches() ? Integer.parseInt(range.group(1)) : 0;
+            int last = !range.matches() ? 0
+                : range.group(2) == null ? first : Integer.parseInt(range.group(2));
+            if (first < 1 || last < first || last > steps.size()) {
+                problems.add(where + ": `steps` must be \"<first>-<last>\" within this "
+                    + "journey's " + steps.size() + " step(s) (it is `"
+                    + entry.path("steps").asText("") + "`)");
+                continue;
+            }
+            List<VerifySpec.StepSpec> named = steps.subList(first - 1, last);
+            if (named.stream().allMatch(VerifySpec.StepSpec::looks)) {
+                problems.add(where + ": steps " + first + "-" + last + " only look. The steps "
+                    + "that prove a criterion DO what it describes - click, fill, select or "
+                    + "press - and then look at the result");
+                continue;
+            }
+            if (named.stream().noneMatch(VerifySpec.StepSpec::looks)) {
+                problems.add(where + ": steps " + first + "-" + last + " never look. The steps "
+                    + "that prove a criterion end with expectVisible, expectHidden or "
+                    + "expectValue of what the person then sees");
+                continue;
+            }
+            proves.add(new Proof(criterion, first, last, null));
+        }
+        return List.copyOf(proves);
     }
 
     private static VerifySpec.StepSpec stepOf(JsonNode node, int number, List<String> problems) {

@@ -355,18 +355,26 @@ public class TestAuthorClient {
     private record AgentCall(Path repoRoot, Task task, DesignDocument design, String protectedDir,
                              String writeDir, List<Task> planTasks, BrowserOnlyCode.Survey browserOnly,
                              boolean staticChecks, String followUp, boolean journeyDue,
-                             boolean journeyWaivable) {
+                             boolean journeyWaivable, List<String> criteriaToProve) {
 
         AgentCall(Path repoRoot, Task task, DesignDocument design, String protectedDir,
                   String writeDir, List<Task> planTasks, BrowserOnlyCode.Survey browserOnly,
                   boolean staticChecks) {
             this(repoRoot, task, design, protectedDir, writeDir, planTasks, browserOnly,
-                staticChecks, null, false, false);
+                staticChecks, null, false, false, List.of());
         }
 
         AgentCall followingUpWith(String followUp) {
             return new AgentCall(repoRoot, task, design, protectedDir, writeDir, planTasks,
-                browserOnly, staticChecks, followUp, journeyDue, journeyWaivable);
+                browserOnly, staticChecks, followUp, journeyDue, journeyWaivable,
+                criteriaToProve);
+        }
+
+        /** The criteria the journey's {@code proves} must cover, by number (section 76). */
+        AgentCall provingCriteria(List<String> criteria) {
+            return new AgentCall(repoRoot, task, design, protectedDir, writeDir, planTasks,
+                browserOnly, staticChecks, followUp, journeyDue, journeyWaivable,
+                criteria == null ? List.of() : List.copyOf(criteria));
         }
 
         /**
@@ -375,7 +383,7 @@ public class TestAuthorClient {
          */
         AgentCall writingAJourney(boolean due, boolean waivable) {
             return new AgentCall(repoRoot, task, design, protectedDir, writeDir, planTasks,
-                browserOnly, staticChecks, followUp, due, due && waivable);
+                browserOnly, staticChecks, followUp, due, due && waivable, criteriaToProve);
         }
     }
 
@@ -469,6 +477,7 @@ public class TestAuthorClient {
                         own[0].expectingAJourney((path, content) ->
                             earlierJourneyObjection(call.repoRoot(), path, content))
                             .journeyMayBeWaived(call.journeyWaivable())
+                            .provingCriteria(call.criteriaToProve())
                             .knowingTheProjectsTexts(
                                 com.swarmcoder.knowledge.ProjectTexts.heldIn(call.repoRoot()))
                             .knowingTheStartPage(onStartTree);
@@ -1039,6 +1048,15 @@ public class TestAuthorClient {
         public static final JourneyAsk SCREEN = new JourneyAsk(true, false, List.of());
     }
 
+    /** The criteria as a journey's {@code proves} numbers them: in order, from 1. */
+    public static List<String> criteriaTexts(List<AcceptanceCriterion> criteria) {
+        if (criteria == null) {
+            return List.of();
+        }
+        return criteria.stream().filter(java.util.Objects::nonNull)
+            .map(criterion -> criterion.text() == null ? "" : criterion.text().strip()).toList();
+    }
+
     /** Same as the overload above, with how the journey is asked (section 64). */
     public Authored authorTests(Path repoRoot, Task task, DesignDocument design,
                                 List<AcceptanceCriterion> forCriteria, String constraintBrief,
@@ -1178,7 +1196,8 @@ public class TestAuthorClient {
                 system = system + " " + screen;
             }
             if (journeyDue) {
-                system = system + " " + journeyBrief(writeDir, lookupAgent != null, journeyAsk);
+                system = system + " " + journeyBrief(writeDir, lookupAgent != null, journeyAsk)
+                    + JourneyFile.provesBrief(criteriaTexts(forCriteria));
             }
             String rules = constraintBrief == null || constraintBrief.isBlank() ? ""
                 : constraintBrief + "\nEvery test you write must compile and run inside THIS "
@@ -1200,7 +1219,8 @@ public class TestAuthorClient {
             // whenever the session cannot give a test - the one reply it always was.
             String response = firstReply(system, user,
                 new AgentCall(repoRoot, task, design, protectedDir, writeDir, planTasks, browserOnly, true)
-                    .writingAJourney(journeyDue, journeyAsk.mayWaive()));
+                    .writingAJourney(journeyDue, journeyAsk.mayWaive())
+                    .provingCriteria(journeyDue ? criteriaTexts(forCriteria) : List.of()));
 
             LlmTestFiles parsed;
             try {

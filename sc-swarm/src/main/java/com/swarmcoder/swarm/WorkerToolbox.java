@@ -2036,7 +2036,8 @@ public final class WorkerToolbox {
      * nothing, every claimed method; asked with a class name, a {@code Class#method} or a file
      * path, only the matching ones. The file is never shown whole and never written.
      */
-    public String acceptanceTest(String which) {
+    public String acceptanceTest(
+            @com.swarmcoder.runtime.AgentRuntime.MayBeOmitted String which) {
         String asked = which == null ? "" : which.strip();
         boolean[] claimsAnything = new boolean[1];
         String answer = claimedBy(asked, claimsAnything);
