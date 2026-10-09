@@ -191,6 +191,49 @@ class AWorkerReadsTheAcceptanceTestItMustMeetTest {
     }
 
     /**
+     * Section 75: journeys are made in a browser only after the last merge, so a candidate
+     * whose screen lacks what a step names was first seen there. Under the journey the worker
+     * is told which of its names no code of the checkout holds - a note from the checkout's
+     * texts, with no model and no browser, that goes away as the screen is written.
+     */
+    @Test
+    void underTheJourneyTheWorkerIsToldWhichOfItsNamesTheCheckoutDoesNotHoldYet()
+            throws Exception {
+        String journeyPath = DIR + "/accept/add-contact.journey.yaml";
+        String journey = "journey: A contact is added\nsteps:\n"
+            + "  - click: \"role=button[name=\\\"Add contact\\\"]\"\n"
+            + "  - fill: \"role=textbox[name=\\\"Call\\\"]\"\n"
+            + "    value: \"DL1ABC\"\n"
+            + "  - click: \"text=Save\"\n"
+            + "  - expectVisible: \"text=DL1ABC\"\n";
+        Task task = task();
+        task.setJourneyPaths(List.of(journeyPath));
+        WorkerToolbox toolbox = new WorkerToolbox(checkout, task);
+        toolbox.setAcceptanceSource(path -> journeyPath.equals(path) ? journey : null);
+
+        String first = toolbox.acceptanceTest("add-contact");
+        assertThat(first.substring(first.indexOf("NOTE - ")))
+            .as("nothing is written yet: every name a selector uses, and not the typed data")
+            .contains("NOTE - as your checkout is at this moment",
+                "\"Add contact\", \"Call\", \"Save\"", "with no browser")
+            .doesNotContain("DL1ABC");
+
+        java.nio.file.Path screen = checkout.resolve("src/main/java/com/f/LogScreen.java");
+        java.nio.file.Files.createDirectories(screen.getParent());
+        java.nio.file.Files.writeString(screen, "package com.f;\nclass LogScreen {\n"
+            + "    String add = \"Add contact\";\n    String call = \"Call\";\n}\n");
+        assertThat(toolbox.acceptanceTest("add-contact"))
+            .as("asked again with the screen half written: only what is still missing")
+            .contains("names the journey's selectors use: \"Save\".");
+
+        java.nio.file.Files.writeString(screen, "package com.f;\nclass LogScreen {\n"
+            + "    String add = \"Add contact\";\n    String call = \"Call\";\n"
+            + "    String save = \"Save\";\n}\n");
+        assertThat(toolbox.acceptanceTest("add-contact")).as("every name is held: no note")
+            .doesNotContain("NOTE - as your checkout");
+    }
+
+    /**
      * Section 69 (live run 93): the journey is written before the screen, so the names in its
      * selectors bind the screen. A worker of a task that claims a journey is told so in one
      * sentence; the journey itself stays behind the lookup.

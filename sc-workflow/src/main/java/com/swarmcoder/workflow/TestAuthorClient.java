@@ -301,6 +301,30 @@ public class TestAuthorClient {
         return lookupAgent != null;
     }
 
+    /** Makes journeys on the tree a run started from; see {@link #tryingOnTheStartTreeWith}. */
+    private final ThreadLocal<java.util.function.Function<List<JourneyFile.Journey>,
+        com.swarmcoder.verify.JourneyRunner.Outcome>> startTree = new ThreadLocal<>();
+
+    /**
+     * For the calls made on this thread until the scope is closed, {@code check_journey} tries
+     * what a draft expects before it does anything on the tree the run started from, with
+     * {@code onStartTree} (section 75). Thread-scoped for the reason the draft compiler is: the
+     * author serves every run, and the start tree is one run's.
+     */
+    public Scope tryingOnTheStartTreeWith(
+            java.util.function.Function<List<JourneyFile.Journey>,
+                com.swarmcoder.verify.JourneyRunner.Outcome> onStartTree) {
+        var before = startTree.get();
+        startTree.set(onStartTree);
+        return () -> {
+            if (before == null) {
+                startTree.remove();
+            } else {
+                startTree.set(before);
+            }
+        };
+    }
+
     /**
      * For the calls made on this thread until the scope is closed, {@code compile_test} compiles
      * with {@code compiler}. Thread-scoped because one author serves every run of a project, and
@@ -422,6 +446,7 @@ public class TestAuthorClient {
         DraftCompiler compiler = draftCompiler.get();
         java.util.function.Function<Map<String, String>, TestAuthorTools.Verdict> check =
             files -> checkDraft(call, files, compiler);
+        var onStartTree = startTree.get(); // on the caller's thread, as the compiler is
         LookupAgent.Outcome outcome = null;
         if (prior != null && call.followUp() != null
                 && prior.tools() instanceof TestAuthorTools again) {
@@ -445,7 +470,8 @@ public class TestAuthorClient {
                             earlierJourneyObjection(call.repoRoot(), path, content))
                             .journeyMayBeWaived(call.journeyWaivable())
                             .knowingTheProjectsTexts(
-                                com.swarmcoder.knowledge.ProjectTexts.heldIn(call.repoRoot()));
+                                com.swarmcoder.knowledge.ProjectTexts.heldIn(call.repoRoot()))
+                            .knowingTheStartPage(onStartTree);
                     }
                     return own[0].bindings();
                 }));
@@ -2148,6 +2174,7 @@ public class TestAuthorClient {
             com.swarmcoder.knowledge.ProjectTexts.heldIn(repoRoot);
         java.util.function.Function<String, String> built = builtTree == null ? null
             : type -> com.swarmcoder.knowledge.TreeQueries.textsOfIn(builtTree, type);
+        var onStartTree = startTree.get(); // on the caller's thread
         TestAuthorTools[] own = new TestAuthorTools[1];
         LookupAgent.Outcome outcome;
         TestAuthorTools.ReviewOutcome first = null;
@@ -2161,7 +2188,8 @@ public class TestAuthorClient {
                 session -> {
                     own[0] = new TestAuthorTools(session, dir, dir,
                         files -> new TestAuthorTools.Verdict(false, ""))
-                        .reviewingAJourney(path, content, built).knowingTheProjectsTexts(held);
+                        .reviewingAJourney(path, content, built).knowingTheProjectsTexts(held)
+                        .knowingTheStartPage(onStartTree);
                     return own[0].bindings();
                 }));
             if (own[0] == null || outcome.neverRan()) {

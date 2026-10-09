@@ -877,7 +877,9 @@ public class SwarmDispatcher {
                     + "it): the screen must expose exactly the roles, accessible names and "
                     + "texts its selectors use, and be reachable from the entry page by its "
                     + "steps. Where a step selects, the control it names must offer an option "
-                    + "that reads exactly as the step's value.\n");
+                    + "that reads exactly as the step's value. Under the journey, "
+                    + "acceptance_test names the names your checkout does not hold yet: ask "
+                    + "it again before report_done.\n");
             }
         }
         if (protectedPaths != null && !protectedPaths.isEmpty()) {
