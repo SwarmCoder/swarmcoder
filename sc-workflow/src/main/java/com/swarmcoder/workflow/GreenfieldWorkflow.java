@@ -1211,6 +1211,7 @@ public class GreenfieldWorkflow {
                     // cleaned up, not thrown through it.
                     final Run integrating = run;
                     EndpointOutage[] authorUnreachable = new EndpointOutage[1];
+                    final String testsBefore = run.acceptanceTestsCommit();
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
                             .tellingTheRun(this::log)
@@ -1238,6 +1239,13 @@ public class GreenfieldWorkflow {
                         // again from there. No worker was started.
                         persister.save(run);
                         return run;
+                    }
+                    if (!java.util.Objects.equals(testsBefore, run.acceptanceTestsCommit())) {
+                        // A corrected journey was committed that still fails, at a later step
+                        // (section 75). Saved before anything else: the repair workers read
+                        // the journey from the run's tests commit as the store holds it, and
+                        // a run that stops here keeps the better journey.
+                        persister.save(run);
                     }
                     if (!integration.ok() && repairAfterFailedJourney(run, integration)) {
                         // Stays in FINAL_INTEGRATION: the run is merged and verified again with
@@ -1548,9 +1556,11 @@ public class GreenfieldWorkflow {
      *
      * <p>Once per task. The author is shown the journey, the failing step and what the page
      * showed there. A corrected journey is taken only when
-     * {@link JourneysOfAPlan#correctionRefused} finds
+     * {@link JourneysOfAPlan#judgeCorrection} refuses
      * nothing: it is then written to the run's tests ref and committed, and the caller makes
-     * the integration again.
+     * the integration again. A correction taken although it still fails, at a later step
+     * (section 75), is committed too; what follows it is
+     * {@link JourneysOfAPlan#afterFurther}: the workers, the author once more, or the stop.
      *
      * <p>What follows otherwise depends on which side the author named (section 70, after live
      * run 95, where "the journey was wrong" with nothing handed in was recorded as "stands by
@@ -1602,6 +1612,7 @@ public class GreenfieldWorkflow {
         List<String> notes = new ArrayList<>();
         List<String> taken = new ArrayList<>();
         List<String> secondReviews = new ArrayList<>();
+        List<JourneyFile.Result> further = new ArrayList<>();
         Map<String, Integer> reviewedAt = new java.util.LinkedHashMap<>();
         try {
             removeTree(worktree); // a leftover from a killed attempt, if any
@@ -1626,9 +1637,13 @@ public class GreenfieldWorkflow {
                 logger.info("The page as the browser read it at the failing step of {}: {}", path,
                     result.seen() == null ? "(no reading)"
                         : result.seen().replaceAll("\\s*\\R\\s*", " | "));
-                TestAuthorClient.JourneyReviewed reviewed = roles.testAuthor()
-                    .reviewFailedJourney(worktree, mergedTree, task, design, storyCriteria,
-                        path, content, JourneysOfAPlan.sendBackEvidence(result));
+                TestAuthorClient.JourneyReviewed reviewed;
+                try (TestAuthorClient.Scope startPage = roles.testAuthor()
+                         .tryingOnTheStartTreeWith(onTheStartTreeOf(run, "journey-draft"))) {
+                    reviewed = roles.testAuthor()
+                        .reviewFailedJourney(worktree, mergedTree, task, design, storyCriteria,
+                            path, content, JourneysOfAPlan.sendBackEvidence(result));
+                }
                 String note;
                 if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.UNANSWERED) {
                     note = "The journey's author gave no usable answer (" + reviewed.reason()
@@ -1643,8 +1658,8 @@ public class GreenfieldWorkflow {
                     disowned.add(path);
                     disownedAnswers.add(note);
                 } else {
-                    String refused = JourneysOfAPlan.correctionRefused(result.journey(), path,
-                        reviewed.corrected(), onMergedTree, journeys -> {
+                    JourneysOfAPlan.Correction judged = JourneysOfAPlan.judgeCorrection(result,
+                        path, reviewed.corrected(), onMergedTree, journeys -> {
                             try {
                                 return journeysOnTheStartTree(run, journeys, "journey-review")
                                     .outcome();
@@ -1653,7 +1668,21 @@ public class GreenfieldWorkflow {
                                     null, List.of());
                             }
                         });
-                    if (refused == null) {
+                    String refused = judged.refused();
+                    if (judged.getsFurther()) {
+                        // Section 75 (live run 101): it fails at a later step than the journey
+                        // it replaces. It is the better journey and is taken; what stops it
+                        // now is decided below, from the task's marks.
+                        Files.writeString(worktree.resolve(path), reviewed.corrected());
+                        taken.add(path);
+                        further.add(judged.further());
+                        note = JourneysOfAPlan.furtherNote(result, judged.further(),
+                            reviewed.reason());
+                        logger.info("The page as the browser read it at the failing step of "
+                            + "the corrected {}: {}", path, judged.further().seen() == null
+                                ? "(no reading)"
+                                : judged.further().seen().replaceAll("\\s*\\R\\s*", " | "));
+                    } else if (refused == null) {
                         Files.writeString(worktree.resolve(path), reviewed.corrected());
                         taken.add(path);
                         JourneyFile.Journey now =
@@ -1691,13 +1720,17 @@ public class GreenfieldWorkflow {
             notes.add("The journey could not be read from or written to the run's tests ("
                 + e.getMessage() + "), so it stands as written.");
             taken.clear();
+            further.clear();
         } finally {
             removeTree(worktree); // the branch stays; a correction is on it
         }
         String earlier = task.journeyReviewNote();
         task.setJourneyReviewNote((earlier == null || earlier.isBlank() ? "" : earlier + " ")
             + String.join(" ", notes));
-        boolean stopsOnSecond = !secondReviews.isEmpty() && taken.isEmpty();
+        // A second review that takes nothing stops the run only when the workers' round is
+        // used too (section 75): while it is not, a journey its author stands by goes to them.
+        boolean stopsOnSecond = !secondReviews.isEmpty() && taken.isEmpty()
+            && task.journeyRepairAttempted();
         if (!disowned.isEmpty() || stopsOnSecond) {
             // A second review is recorded even so: a journey is not sent back a third time.
             secondReviews.forEach(p -> JourneysOfAPlan.recordReview(task, p, reviewedAt.get(p)));
@@ -1723,8 +1756,39 @@ public class GreenfieldWorkflow {
         reviewedAt.forEach((p, step) -> JourneysOfAPlan.recordReview(task, p, step));
         task.setJourneySentBack(true);
         artifactStore.saveTask(task);
-        return taken.isEmpty() ? FinalIntegrator.SentBack.STANDS
-            : FinalIntegrator.SentBack.CORRECTED;
+        if (further.isEmpty()) {
+            return taken.isEmpty() ? FinalIntegrator.SentBack.STANDS
+                : FinalIntegrator.SentBack.CORRECTED;
+        }
+        // A correction was taken that still fails, at a later step (section 75). What follows
+        // is decided from the task's marks, with no model call.
+        JourneysOfAPlan.NextMove move = JourneysOfAPlan.afterFurther(task, further);
+        if (move == JourneysOfAPlan.NextMove.WORKERS) {
+            List<JourneyFile.Result> stillFailing = new ArrayList<>(further);
+            for (JourneyFile.Result result : failed) {
+                if (!taken.contains(result.journey().path())) {
+                    stillFailing.add(result); // a journey that stands as written
+                }
+            }
+            log("FINAL_INTEGRATION: the corrected journey(s) " + further.stream()
+                .map(result -> result.journey().path() + " (now fails at step " + result.step()
+                    + ")").toList() + " of task '" + task.title() + "' are committed. The "
+                + "task's one repair round is next, with the corrected journey and that step.");
+            return FinalIntegrator.SentBack.toTheWorkers(stillFailing);
+        }
+        if (move == JourneysOfAPlan.NextMove.AUTHOR_AGAIN) {
+            log("FINAL_INTEGRATION: the corrected journey(s) of task '" + task.title() + "' are "
+                + "committed and still fail, at a later step. The task's repair round is used, "
+                + "so the integration is made again and the author is asked once more, with "
+                + "the page at the new step.");
+            return FinalIntegrator.SentBack.CORRECTED;
+        }
+        log("FINAL_INTEGRATION: the corrected journey(s) of task '" + task.title() + "' are "
+            + "committed and still fail, at a later step; the task's repair round is used and "
+            + "no review is left. No worker is started; the run stops here.");
+        return FinalIntegrator.SentBack.disowned(
+            JourneysOfAPlan.furtherAndNothingLeft(task, further)
+                + OperatorCorrectedTests.whereToCorrect(run));
     }
 
     /** The runs whose journeys' owners were settled in this process; see below. */
@@ -2504,7 +2568,9 @@ public class GreenfieldWorkflow {
                     turns.acquire();
                     // The draft compiler is the author's per THREAD, so each call sets its own.
                     try (TestAuthorClient.Scope mine =
-                             roles.testAuthor().compilingDraftsWith(draftCheck)) {
+                             roles.testAuthor().compilingDraftsWith(draftCheck);
+                         TestAuthorClient.Scope startPage = roles.testAuthor()
+                             .tryingOnTheStartTreeWith(onTheStartTreeOf(run, "journey-draft"))) {
                         List<AcceptanceCriterion> forTask = criteriaFor(task, scope);
                         List<String> refs = refsFor(forTask, scope);
                         // Said on the task BEFORE the author is called, and the result written
@@ -3902,12 +3968,36 @@ public class GreenfieldWorkflow {
         }
         List<JourneyFile.Journey> journeys = claimed.stream()
             .map(JourneysOfAPlan.Claimed::journey).toList();
+        // With them, in the same browser run: what each journey expects before it does anything,
+        // each alone on the entry page (section 75). One that holds here is true of the
+        // application before the story.
+        List<JourneyFile.Journey> made1 = new ArrayList<>(journeys);
+        Map<String, int[]> leadingAt = new LinkedHashMap<>();
+        for (JourneyFile.Journey journey : journeys) {
+            List<JourneyFile.Journey> alone =
+                com.swarmcoder.verify.JourneyExpectations.leadingAlone(journey);
+            if (!alone.isEmpty()) {
+                leadingAt.putIfAbsent(journey.path(),
+                    new int[] {made1.size(), made1.size() + alone.size()});
+                made1.addAll(alone);
+            }
+        }
         try {
-            OnStartTree made = journeysOnTheStartTree(run, journeys, "journeys");
-            JourneyRunner.Outcome outcome = made.outcome();
+            OnStartTree made = journeysOnTheStartTree(run, made1, "journeys");
+            List<JourneyFile.Result> every = made.outcome().results();
+            JourneyRunner.Outcome outcome = new JourneyRunner.Outcome(
+                made.outcome().couldNotRun(), made.outcome().didNotStart(),
+                every.size() <= journeys.size() ? every : every.subList(0, journeys.size()));
             String notRed = JourneysOfAPlan.notRed(claimed, outcome, made.buildFailed());
             if (notRed == null) {
                 for (JourneyFile.Result result : outcome.results()) {
+                    int[] at = leadingAt.get(result.journey().path());
+                    String startsOnWhatWasThere = at == null || every.size() < at[1] ? null
+                        : JourneysOfAPlan.startsOnWhatWasThere(result.journey(),
+                            every.subList(at[0], at[1]));
+                    if (startsOnWhatWasThere != null) {
+                        log("Red-check of the journeys: " + startsOnWhatWasThere);
+                    }
                     log("Red-check of the journeys: \"" + result.journey().name() + "\" ("
                         + result.journey().path() + ") fails on the start tree, as it must - "
                         + result.failure());
@@ -3941,6 +4031,36 @@ public class GreenfieldWorkflow {
                 + "made after the last merge");
             return null;
         }
+    }
+
+    /** One start tree is built at a time for a draft's first expectations, whatever the task. */
+    private final java.util.concurrent.locks.ReentrantLock startTreeForDrafts =
+        new java.util.concurrent.locks.ReentrantLock();
+
+    /**
+     * What {@code check_journey} tries a draft's first expectations with (section 75): the
+     * tree the run started from, built and started as the red check does, a real browser, no
+     * model. Null when there is no repository or journeys are off - then nothing is tried and
+     * nothing is concluded. A start tree that cannot be built or started gives "could not
+     * run", which the tool reads as nothing established.
+     */
+    java.util.function.Function<List<JourneyFile.Journey>, JourneyRunner.Outcome>
+            onTheStartTreeOf(Run run, String label) {
+        if (repoPath == null || !JourneyFile.enabled() || !gitService.isEnabled()
+                || run.startPoint() == null) {
+            return null;
+        }
+        return journeys -> {
+            startTreeForDrafts.lock();
+            try {
+                return journeysOnTheStartTree(run, journeys, label).outcome();
+            } catch (Exception e) {
+                return new JourneyRunner.Outcome(String.valueOf(e.getMessage()), null,
+                    List.of());
+            } finally {
+                startTreeForDrafts.unlock();
+            }
+        };
     }
 
     /**

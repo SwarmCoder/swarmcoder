@@ -87,6 +87,11 @@ public final class TestAuthorTools {
     private String journeyWaiverPath;
     /** Whether the project as it stands holds a text; null when that cannot be asked. */
     private java.util.function.Predicate<String> heldByTheProject;
+    /** Makes journeys on the tree the run started from; null when that cannot be done here. */
+    private Function<List<JourneyFile.Journey>, com.swarmcoder.verify.JourneyRunner.Outcome>
+        onStartTree;
+    /** A leading expectation, in words, to whether the start tree's entry page already holds it. */
+    private final Map<String, Boolean> onTheStartPage = new LinkedHashMap<>();
     /** The journey last sent back with the question about a text nobody enters, as it was given. */
     private String askedAboutUnentered;
     /** True while the session reviews a journey that failed: no test is compiled or handed in. */
@@ -174,6 +179,68 @@ public final class TestAuthorTools {
     TestAuthorTools knowingTheProjectsTexts(java.util.function.Predicate<String> held) {
         this.heldByTheProject = held;
         return this;
+    }
+
+    /**
+     * A journey is also held to this (section 75, live run 101): what it expects BEFORE it does
+     * anything is not already true on the entry page of the application as it is before the
+     * story. Tried in a real browser on the start tree, only for a draft that begins by
+     * looking, and once per expectation in a session.
+     *
+     * @param onStartTree makes journeys on the tree the run started from; null to try nothing
+     */
+    TestAuthorTools knowingTheStartPage(
+            Function<List<JourneyFile.Journey>, com.swarmcoder.verify.JourneyRunner.Outcome>
+                onStartTree) {
+        this.onStartTree = onStartTree;
+        return this;
+    }
+
+    /**
+     * The expectations {@code journey} makes before doing anything that the start tree's entry
+     * page already meets. Empty when it has none, when nothing can be tried here, or when the
+     * browser gave no result: nothing is concluded from a page that was not read.
+     */
+    private List<com.swarmcoder.verify.JourneyExpectations.Leading> alreadyOnTheStartPage(
+            JourneyFile.Journey journey) {
+        List<com.swarmcoder.verify.JourneyExpectations.Leading> leading =
+            com.swarmcoder.verify.JourneyExpectations.leading(journey);
+        if (leading.isEmpty() || onStartTree == null) {
+            return List.of();
+        }
+        List<JourneyFile.Journey> alone =
+            com.swarmcoder.verify.JourneyExpectations.leadingAlone(journey);
+        List<JourneyFile.Journey> untried = new java.util.ArrayList<>();
+        for (int i = 0; i < leading.size(); i++) {
+            if (!onTheStartPage.containsKey(leading.get(i).spec().describe())) {
+                untried.add(alone.get(i));
+            }
+        }
+        if (!untried.isEmpty()) {
+            try {
+                com.swarmcoder.verify.JourneyRunner.Outcome outcome = onStartTree.apply(untried);
+                if (outcome != null && outcome.made()
+                        && outcome.results().size() == untried.size()) {
+                    for (int i = 0; i < untried.size(); i++) {
+                        onTheStartPage.put(untried.get(i).steps().get(0).describe(),
+                            outcome.results().get(i).passed());
+                    }
+                } else {
+                    log.info("check_journey for {}: what the journey expects first could not "
+                        + "be tried on the start tree ({}); nothing is concluded",
+                        journey.path(), outcome == null ? "no result"
+                            : outcome.couldNotRun() != null ? outcome.couldNotRun()
+                            : outcome.didNotStart() != null ? outcome.didNotStart()
+                            : "results missing");
+                }
+            } catch (RuntimeException e) {
+                log.info("check_journey for {}: what the journey expects first could not be "
+                    + "tried on the start tree ({}); nothing is concluded", journey.path(),
+                    e.toString());
+            }
+        }
+        return leading.stream().filter(one -> Boolean.TRUE.equals(
+            onTheStartPage.get(one.spec().describe()))).toList();
     }
 
     /**
@@ -356,6 +423,13 @@ public final class TestAuthorTools {
             }
             JourneyFile.Read read = JourneyFile.read(target, content);
             String objection = read.ok() ? journeyObjection.apply(target, content) : read.objection();
+            if (objection == null) {
+                // A role written without `role=` finds nothing on any page (section 75).
+                List<String> bare =
+                    com.swarmcoder.verify.JourneyExpectations.rolesWithoutPrefix(read.journey());
+                objection = bare.isEmpty() ? null
+                    : String.join("\n", bare.stream().map(line -> "- " + line).toList());
+            }
             if (objection != null) {
                 log.info("check_journey {} for {}: not valid - {}", journeyChecks, target,
                     objection.replaceAll("\\s*\\R\\s*", " | "));
@@ -363,6 +437,19 @@ public final class TestAuthorTools {
                     + "\n\nThe steps a journey has, and nothing else:\n"
                     + JourneyFile.VOCABULARY + JourneyFile.CHOOSING
                     + "\n\nCorrect it and call check_journey again with the complete file.";
+            }
+            // It begins by expecting what the application shows before the story (section
+            // 75, live run 101: step 1 expected the start page's own text, and failed on a
+            // correct screen that replaced it). Read from the real page; not kept.
+            List<com.swarmcoder.verify.JourneyExpectations.Leading> there =
+                alreadyOnTheStartPage(read.journey());
+            if (!there.isEmpty()) {
+                log.info("check_journey {} for {}: not kept - {} expectation(s) at its head "
+                    + "already hold on the start tree's entry page: {}", journeyChecks, target,
+                    there.size(), there.stream().map(one -> one.spec().describe()).toList());
+                return "NOT KEPT. "
+                    + com.swarmcoder.verify.JourneyExpectations.alreadyThereObjection(there)
+                    + " Then call check_journey again with the complete file.";
             }
             // A text it expects that nobody enters (section 69, live run 93): asked once,
             // while the journey is being written. The same file given again is the author's

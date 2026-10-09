@@ -151,6 +151,98 @@ class WhatAJourneyExpectsIsJudgedWithNoModelTest {
             """))).isNull();
     }
 
+    /** Section 75, live run 101: the journey began by expecting the start page's own text. */
+    private static final String STARTS_BY_LOOKING = """
+        journey: A book is added from the shelf
+        steps:
+          - expectVisible: "text=Nothing here yet"
+          - expectHidden: "text=Loading"
+          - expectValue: "role=combobox[name=\\"Shelf\\"]"
+            value: "All"
+          - click: "role=button[name=\\"Add book\\"]"
+          - fill: "role=textbox[name=\\"Title\\"]"
+            value: "The Hobbit"
+          - expectVisible: "role=heading[name=\\"Saved\\"]"
+          - expectVisible: "text=The Hobbit"
+        """;
+
+    @Test
+    void whatAJourneyExpectsBeforeItDoesAnythingIsTriedAloneOnTheEntryPage() {
+        JourneyFile.Journey journey = journey(STARTS_BY_LOOKING);
+
+        List<JourneyExpectations.Leading> leading = JourneyExpectations.leading(journey);
+        assertThat(leading).as("the looks before the first click; expectHidden is not one, "
+            + "and nothing after a step that changes something").extracting(
+                JourneyExpectations.Leading::step).containsExactly(1, 3);
+        List<JourneyFile.Journey> alone = JourneyExpectations.leadingAlone(journey);
+        assertThat(alone).hasSize(2);
+        assertThat(alone.get(0).steps()).containsExactly(journey.steps().get(0));
+        assertThat(alone.get(1).steps()).containsExactly(journey.steps().get(2));
+        assertThat(alone.get(0).path()).isEqualTo(PATH);
+        assertThat(JourneyExpectations.leading(journey(SEARCH))).as("a journey that begins by "
+            + "doing something has none, and nothing is tried for it").isEmpty();
+    }
+
+    @Test
+    void anExpectationTheStartingApplicationAlreadyMeetsIsNamedWithItsStep() {
+        JourneyFile.Journey journey = journey(STARTS_BY_LOOKING);
+        List<JourneyFile.Journey> alone = JourneyExpectations.leadingAlone(journey);
+
+        List<JourneyExpectations.Leading> there = JourneyExpectations.alreadyThere(journey,
+            List.of(new JourneyFile.Result(alone.get(0), true, null),
+                new JourneyFile.Result(alone.get(1), false, "step 1 of 1 failed")));
+
+        assertThat(there).extracting(JourneyExpectations.Leading::step).containsExactly(1);
+        assertThat(JourneyExpectations.alreadyThereObjection(there))
+            .contains("step 1 (`expect visible text=Nothing here yet`) is already true on the "
+                + "entry page of the application as it is BEFORE the story",
+                "tried there in a real browser", "Take it out, or expect what the story adds");
+        assertThat(JourneyExpectations.alreadyThere(journey, List.of()))
+            .as("a page that was not read establishes nothing").isEmpty();
+        assertThat(JourneyExpectations.alreadyThere(journey, null)).isEmpty();
+    }
+
+    @Test
+    void theNamesAJourneysSelectorsUseAreReadWithoutWhatItTypes() {
+        JourneyFile.Journey journey = journey(STARTS_BY_LOOKING);
+
+        assertThat(JourneyExpectations.namesUsed(journey)).as("texts and accessible names of "
+            + "what is clicked, filled, chosen in and expected; not what expectHidden names, "
+            + "and not the title the journey typed itself")
+            .containsExactly("Nothing here yet", "Shelf", "Add book", "Title", "Saved");
+        Set<String> held = Set.of("shelf", "title", "nothing here yet");
+        assertThat(JourneyExpectations.namesNotHeld(journey,
+            text -> held.contains(text.toLowerCase()))).containsExactly("Add book", "Saved");
+        assertThat(JourneyExpectations.namesNotHeld(journey, null))
+            .as("a checkout that cannot be read establishes nothing").isEmpty();
+    }
+
+    /** Section 75: live run 101's journey filled `textbox[name="Title"]`. */
+    @Test
+    void aRoleWrittenWithoutItsPrefixIsNamedWithItsStepAndHowToWriteIt() {
+        JourneyFile.Journey journey = journey("""
+            journey: A book is added
+            steps:
+              - click: "button[name=\\"add\\"]"
+              - fill: "textbox[name=\\"Title\\"]"
+                value: "Dune"
+              - select: "role=group[name=\\"Book\\"] >> combobox[name=\\"Status\\"]"
+                value: "read"
+              - expectVisible: "role=row[name=\\"Dune\\"]"
+            """);
+
+        assertThat(JourneyExpectations.rolesWithoutPrefix(journey)).as("a role that is no "
+            + "element's name; `button[...]` is a real stylesheet selector and is left alone")
+            .containsExactly(
+                "step 2: `textbox[name=\"Title\"]` names a role without `role=`, so the browser "
+                    + "looks for an element <textbox>, which no page has. Write "
+                    + "`role=textbox[name=\"Title\"]`",
+                "step 3: `combobox[name=\"Status\"]` names a role without `role=`, so the "
+                    + "browser looks for an element <combobox>, which no page has. Write "
+                    + "`role=combobox[name=\"Status\"]`");
+        assertThat(JourneyExpectations.rolesWithoutPrefix(journey(SEARCH))).isEmpty();
+    }
+
     @Test
     void whatThePageShowedAtTheFailingStepTravelsWithTheResultAndIsNotAFailure() {
         JourneyFile.Journey journey = journey(SEARCH);

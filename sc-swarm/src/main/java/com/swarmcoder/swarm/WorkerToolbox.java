@@ -1748,6 +1748,47 @@ public final class WorkerToolbox {
         }
     }
 
+    /**
+     * A note under a journey the worker is shown (section 75): the names its selectors use
+     * that no shipped code of this checkout holds, as the checkout is at this call. Journeys
+     * are made in a browser only after the last merge (owner's decision, 2026-10-05), so a
+     * candidate whose screen lacks what a step names used to be first seen there (live run
+     * 100: a screen with no form passed verification). Read with no model and no browser: the
+     * string literals of the checkout's code and its page and message files, the reader
+     * {@code texts_of} uses. A note, never a failure: a name the screen builds from parts or
+     * takes from data is not seen by this reader.
+     *
+     * @return "" when the journey is not well formed, the checkout cannot be read, or every
+     *         name is held
+     */
+    String journeyNamesNotInTheCheckout(String path, String source) {
+        try {
+            com.swarmcoder.verify.JourneyFile.Read read =
+                com.swarmcoder.verify.JourneyFile.read(path, source);
+            if (!read.ok() || worktree == null) {
+                return "";
+            }
+            java.util.List<String> missing = com.swarmcoder.verify.JourneyExpectations
+                .namesNotHeld(read.journey(), com.swarmcoder.knowledge.ProjectTexts.heldIn(worktree));
+            if (missing.isEmpty()) {
+                return "";
+            }
+            int shown = Math.min(missing.size(), 20);
+            return "NOTE - as your checkout is at this moment, none of its code holds these "
+                + "names the journey's selectors use: "
+                + String.join(", ", missing.subList(0, shown).stream()
+                    .map(name -> "\"" + name + "\"").toList())
+                + (missing.size() > shown ? " and " + (missing.size() - shown) + " more" : "")
+                + ". A screen that does not show a name exactly as the journey writes it fails "
+                + "the journey after the last merge. This was read from the texts in the code "
+                + "and the page files, with no browser: a name the screen puts together from "
+                + "parts is not seen. Call acceptance_test again when the screen is written to "
+                + "see what is still missing.\n\n";
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
     public String reportDone(String summary) {
         return summary == null ? "" : summary;
     }
@@ -2099,6 +2140,7 @@ public final class WorkerToolbox {
                     + "must be reachable by the clicks before it. You cannot change it: make "
                     + "the application match its selectors.\n")
                 .append(source.strip()).append("\n\n");
+            out.append(journeyNamesNotInTheCheckout(path, source));
         }
         if (out.length() == 0) {
             return null;

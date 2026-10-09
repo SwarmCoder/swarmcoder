@@ -426,8 +426,8 @@ final class JourneysOfAPlan {
      */
     static String reviewedTwice(Task task, List<String> paths) {
         return "The journey went back to its author twice: once when it first failed, and again "
-            + "after the repair round, when it failed at a later step. Neither time was a "
-            + "corrected journey taken. Task '" + task.title() + "', " + paths + ":\n"
+            + "when it failed at a later step. The second review gave no corrected journey "
+            + "that could be taken. Task '" + task.title() + "', " + paths + ":\n"
             + task.journeyReviewNote() + "\n\nNo worker was started: the repair round of a "
             + "task is one, and a journey is not sent back a third time. Correct the journey "
             + "or the screen by hand and resume.";
@@ -515,7 +515,10 @@ final class JourneysOfAPlan {
      *   <li>it is a well-formed journey;</li>
      *   <li>it is not weaker by its form ({@code JourneyExpectations.weakened}): it still
      *       changes something, with no fewer changing steps and no fewer fills;</li>
-     *   <li>it PASSES on the merged tree, in the container that holds it;</li>
+     *   <li>it PASSES on the merged tree, in the container that holds it - or, since section
+     *       75, fails there at a later step than the journey it replaces; that it was taken
+     *       so is only on {@link #judgeCorrection}'s result, this method answers "not
+     *       refused" for both;</li>
      *   <li>it FAILS on the tree the run started from, built and started as the red check
      *       does; and what its last step expects is not already on the entry page there.</li>
      * </ol>
@@ -536,42 +539,228 @@ final class JourneysOfAPlan {
                                         JourneyRunner.Outcome> onMergedTree,
                                     java.util.function.Function<List<JourneyFile.Journey>,
                                         JourneyRunner.Outcome> onStartTree) {
+        return judgeCorrection(new JourneyFile.Result(original, false, null), path, corrected,
+            onMergedTree, onStartTree).refused();
+    }
+
+    /**
+     * What judging a corrected journey came to (section 75).
+     *
+     * @param refused null when the correction is taken; otherwise why it is not
+     * @param further null unless the correction is taken although it still fails on the merged
+     *                tree: then what the browser made of it there - the step it fails at now,
+     *                later than the journey it replaces, and the page as read at that step
+     * @param journey the correction as read; null when it is not a well-formed journey
+     */
+    record Correction(String refused, JourneyFile.Result further, JourneyFile.Journey journey) {
+
+        boolean taken() {
+            return refused == null;
+        }
+
+        boolean getsFurther() {
+            return refused == null && further != null;
+        }
+    }
+
+    /**
+     * Judges a corrected journey against the journey it replaces, as it failed.
+     *
+     * <p>Section 70 took a correction only when it PASSED on the merged tree. Live run 101: the
+     * journey failed at step 1, expecting a text only the starting application shows; its
+     * author's correction passed step 1 and failed at step 2, a click on a button. It was
+     * refused, the journey its author had just called wrong stayed, and the run stopped. A
+     * correction that fails at a LATER step than the journey it replaces is the better
+     * journey: it is taken now, on the same other guards, and the run goes on with what stops
+     * it at the new step ({@link #afterFurther}). Decided from the two step numbers; a failure
+     * that is not a step's (number 0) on either side is never "later".
+     *
+     * <p>The other guards are unchanged and are asked of both kinds: well formed; not weaker
+     * by its form; fails on the tree the run started from; its last expectation not already
+     * true there. One is added for both: an expectation it makes before doing anything is not
+     * already true on the start tree's entry page ({@code JourneyExpectations.leading}), tried
+     * in the same browser run.
+     *
+     * @param failed the journey being replaced, with the step it failed at
+     */
+    static Correction judgeCorrection(JourneyFile.Result failed, String path, String corrected,
+                                      java.util.function.Function<List<JourneyFile.Journey>,
+                                          JourneyRunner.Outcome> onMergedTree,
+                                      java.util.function.Function<List<JourneyFile.Journey>,
+                                          JourneyRunner.Outcome> onStartTree) {
         JourneyFile.Read read = JourneyFile.read(path, corrected);
         if (!read.ok()) {
-            return "it is not a well-formed journey: " + read.objection().replace('\n', ' ');
+            return new Correction("it is not a well-formed journey: "
+                + read.objection().replace('\n', ' '), null, null);
         }
+        JourneyFile.Journey journey = read.journey();
         List<String> weaker =
-            com.swarmcoder.verify.JourneyExpectations.weakened(original, read.journey());
+            com.swarmcoder.verify.JourneyExpectations.weakened(failed.journey(), journey);
         if (!weaker.isEmpty()) {
-            return "it asks for less than the journey it replaces: " + String.join("; ", weaker);
+            return new Correction("it asks for less than the journey it replaces: "
+                + String.join("; ", weaker), null, journey);
         }
-        JourneyRunner.Outcome merged = onMergedTree.apply(List.of(read.journey()));
+        JourneyRunner.Outcome merged = onMergedTree.apply(List.of(journey));
         if (merged == null || !merged.made() || merged.results().isEmpty()) {
-            return "it could not be made on the merged tree: " + whyNot(merged);
+            return new Correction("it could not be made on the merged tree: " + whyNot(merged),
+                null, journey);
         }
-        if (!merged.results().get(0).passed()) {
-            return "it fails on the merged tree too - " + merged.results().get(0).failure();
+        JourneyFile.Result onMerged = merged.results().get(0);
+        JourneyFile.Result further = null;
+        if (!onMerged.passed()) {
+            if (failed.step() < 1 || onMerged.step() <= failed.step()) {
+                return new Correction("it fails on the merged tree too"
+                    + (failed.step() < 1 || onMerged.step() < 1 ? ""
+                        : ", and no later than the journey it replaces (at step "
+                            + onMerged.step() + "; that one failed at step " + failed.step()
+                            + ")")
+                    + " - " + onMerged.failure(), null, journey);
+            }
+            further = onMerged;
         }
-        List<JourneyFile.Journey> onStart = new ArrayList<>(List.of(read.journey()));
+        List<JourneyFile.Journey> onStart = new ArrayList<>(List.of(journey));
         JourneyFile.Journey ending =
-            com.swarmcoder.verify.JourneyExpectations.lastExpectationAlone(read.journey());
+            com.swarmcoder.verify.JourneyExpectations.lastExpectationAlone(journey);
         if (ending != null) {
             onStart.add(ending);
         }
+        int leadingFrom = onStart.size();
+        onStart.addAll(com.swarmcoder.verify.JourneyExpectations.leadingAlone(journey));
         JourneyRunner.Outcome before = onStartTree.apply(onStart);
         if (before == null || !before.made() || before.results().isEmpty()) {
-            return "it could not be made on the tree the run started from: " + whyNot(before);
+            return new Correction("it could not be made on the tree the run started from: "
+                + whyNot(before), null, journey);
         }
         if (before.results().get(0).passed()) {
-            return "it passes on the application as it was before the story, so it shows "
-                + "nothing about what the story adds";
+            return new Correction("it passes on the application as it was before the story, so "
+                + "it shows nothing about what the story adds", null, journey);
         }
-        if (before.results().size() > 1 && before.results().get(1).passed()) {
-            return "what its last step expects (`" + lastStepOf(read.journey()) + "`) is "
+        if (ending != null && before.results().size() > 1 && before.results().get(1).passed()) {
+            return new Correction("what its last step expects (`" + lastStepOf(journey) + "`) is "
                 + "already on the entry page of the application as it was before the story, "
-                + "so its ending shows nothing about what the story adds";
+                + "so its ending shows nothing about what the story adds", null, journey);
         }
-        return null;
+        List<com.swarmcoder.verify.JourneyExpectations.Leading> there =
+            before.results().size() <= leadingFrom ? List.of()
+                : com.swarmcoder.verify.JourneyExpectations.alreadyThere(journey,
+                    before.results().subList(leadingFrom, before.results().size()));
+        if (!there.isEmpty()) {
+            return new Correction(
+                com.swarmcoder.verify.JourneyExpectations.alreadyThereObjection(there), null,
+                journey);
+        }
+        return new Correction(null, further, journey);
+    }
+
+    /** What follows a correction that was taken although it still fails, at a later step. */
+    enum NextMove {
+        /** The owning task's one worker repair round, with the corrected journey and its step. */
+        WORKERS,
+        /** The integration is made again; the journey fails there and its author is asked. */
+        AUTHOR_AGAIN,
+        /** Neither is left: the run stops, with the corrected journey committed. */
+        PARK
+    }
+
+    /**
+     * The next move after a correction that gets further was taken (section 75), from the
+     * task's own marks and the two step numbers - no model. Asked AFTER the review that
+     * produced the correction is recorded on the task.
+     *
+     * <ol>
+     *   <li>the task's one worker repair round is unused: the workers get the corrected
+     *       journey and the step it fails at now. The screen must expose what a step names
+     *       (section 69), so a step the screen does not answer is first theirs;</li>
+     *   <li>that round is used and the journey may still go to its author
+     *       ({@link #goesToItsAuthor}: fewer than {@link #MAX_REVIEWS} reviews, and it fails
+     *       later than at its last review): the author is asked once more, now shown the page
+     *       at the new step, which it has not seen;</li>
+     *   <li>otherwise nothing is left that could move the step, and the run stops.</li>
+     * </ol>
+     *
+     * <p>Every move uses up a mark that is never given back (the repair round; a review), so
+     * no sequence of moves repeats.
+     */
+    static NextMove afterFurther(Task task, JourneyFile.Result further) {
+        if (!task.journeyRepairAttempted()) {
+            return NextMove.WORKERS;
+        }
+        String path = further.journey().path();
+        return reviewsOf(task, path) < MAX_REVIEWS
+            && further.step() > lastReviewedStep(task, path)
+            ? NextMove.AUTHOR_AGAIN : NextMove.PARK;
+    }
+
+    /**
+     * The one move for a task with several such corrections: the workers when their round is
+     * unused (it covers every journey of the task); otherwise the author again when any of
+     * them may still go back; otherwise the stop.
+     */
+    static NextMove afterFurther(Task task, List<JourneyFile.Result> further) {
+        NextMove move = NextMove.PARK;
+        for (JourneyFile.Result result : further) {
+            NextMove one = afterFurther(task, result);
+            if (one == NextMove.WORKERS) {
+                return one;
+            }
+            move = one == NextMove.AUTHOR_AGAIN ? one : move;
+        }
+        return move;
+    }
+
+    /** The note on the task for a correction that was taken although it still fails. */
+    static String furtherNote(JourneyFile.Result replaced, JourneyFile.Result further,
+                              String reason) {
+        return "The journey's author answered that the journey was wrong and corrected it: "
+            + reason + " The correction still fails on the merged tree, but at step "
+            + further.step() + " of " + further.journey().steps().size() + " where the journey "
+            + "it replaces failed at step " + replaced.step() + " of "
+            + replaced.journey().steps().size() + "; it fails on the tree the run started from "
+            + "too, so it is taken and replaces the journey. It now fails on: "
+            + further.failure();
+    }
+
+    /**
+     * What the run stops on when a correction that gets further was taken and neither the
+     * workers' repair round nor another review by its author is left (section 75).
+     */
+    static String furtherAndNothingLeft(Task task, List<JourneyFile.Result> further) {
+        StringBuilder text = new StringBuilder("The journey went back to its author, whose "
+            + "correction gets further than the journey it replaces and still fails. The "
+            + "correction is committed with the run's tests. Task '" + task.title() + "':\n");
+        for (JourneyFile.Result result : further) {
+            text.append("- ").append(result.journey().path()).append(": ")
+                .append(result.failure()).append('\n');
+        }
+        return text.append(task.journeyReviewNote() == null ? "" : task.journeyReviewNote())
+            .append("\n\nNo worker was started: this task's one repair round is used, and a "
+                + "journey is reviewed by its author at most " + MAX_REVIEWS + " times in a "
+                + "run. Correct the screen or the journey by hand and resume.").toString();
+    }
+
+    /**
+     * The paragraph a repair worker is given after a correction that gets further: the journey
+     * as its author corrected it, and where it fails now.
+     */
+    static String repairEvidenceAfterCorrection(List<JourneyFile.Result> stillFailing) {
+        return repairEvidence(stillFailing) + "The journey above is the journey as its author "
+            + "CORRECTED it after it first failed; acceptance_test shows that file now. The "
+            + "steps before the failing one pass on what this task built.\n";
+    }
+
+    /**
+     * What the red check says about a journey that begins by expecting what the application
+     * already shows (section 75); null when it has no such step. A note, not a stop: its author
+     * is no longer in a session, and the run does not stop on a step that may be harmless.
+     */
+    static String startsOnWhatWasThere(JourneyFile.Journey journey,
+                                       List<JourneyFile.Result> leadingAlone) {
+        List<com.swarmcoder.verify.JourneyExpectations.Leading> there =
+            com.swarmcoder.verify.JourneyExpectations.alreadyThere(journey, leadingAlone);
+        return there.isEmpty() ? null : "NOTE - \"" + journey.name() + "\": "
+            + com.swarmcoder.verify.JourneyExpectations.alreadyThereObjection(there)
+            + " If the story replaces what that page shows, this journey fails at that step "
+            + "after the last merge and goes back to its author then.";
     }
 
     private static String whyNot(JourneyRunner.Outcome outcome) {

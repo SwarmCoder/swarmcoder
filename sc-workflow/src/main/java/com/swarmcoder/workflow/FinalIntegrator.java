@@ -152,8 +152,28 @@ public class FinalIntegrator {
      *                  could be taken; then the plain message the run stops on. No worker is
      *                  started: a worker cannot change a journey, and making the screen match
      *                  one its author calls wrong builds the wrong thing
+     * @param further   empty unless a correction was taken that still fails, at a later step,
+     *                  and the workers are next; see {@link #toTheWorkers}
      */
-    public record SentBack(boolean corrected, String disowned) {
+    public record SentBack(boolean corrected, String disowned, List<JourneyFile.Result> further) {
+
+        public SentBack(boolean corrected, String disowned) {
+            this(corrected, disowned, List.of());
+        }
+
+        /**
+         * A corrected journey was taken and committed although it still fails, at a later step
+         * than the journey it replaces (section 75, live run 101), and the task's repair round
+         * is the next move. No integration is made in between: what the browser made of the
+         * correction in this container is what the workers are given.
+         *
+         * @param stillFailing the task's journeys as they stand now and fail now: each
+         *                     correction that gets further, and each journey that stands
+         */
+        public static SentBack toTheWorkers(List<JourneyFile.Result> stillFailing) {
+            return new SentBack(false, null, List.copyOf(stillFailing));
+        }
+
         /** The journey stands as written; the repair round follows, with the author's answer. */
         public static final SentBack STANDS = new SentBack(false, null);
         public static final SentBack CORRECTED = new SentBack(true, null);
@@ -696,6 +716,20 @@ public class FinalIntegrator {
                 // No JourneyFailure on the result: nothing goes to the workers (section 70).
                 return new Result(integrationBranch, text + "\n\n" + back.disowned(),
                     verification);
+            }
+            if (back != null && back.further() != null && !back.further().isEmpty()) {
+                // The journey is a corrected one now and fails at a later step (section 75):
+                // the workers are given that journey and that step, not the one replaced.
+                StringBuilder now = new StringBuilder(text).append("\n\nThe journey went back "
+                    + "to its author, who corrected it. The correction is committed with the "
+                    + "run's tests; it gets further and still fails:");
+                for (JourneyFile.Result result : back.further()) {
+                    now.append("\n- journey \"").append(result.journey().name()).append("\" (")
+                        .append(result.journey().path()).append("): ").append(result.failure());
+                }
+                return new Result(integrationBranch, now.toString(), verification,
+                    new JourneyFailure(owner.id(),
+                        JourneysOfAPlan.repairEvidenceAfterCorrection(back.further())));
             }
         }
         return new Result(integrationBranch, text.toString(), verification, owner == null ? null

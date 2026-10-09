@@ -21,6 +21,27 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A corrected journey that gets further is kept.** When a journey fails after the last merge
+  and its author corrects it, the correction used to be taken only if it passed. One that
+  still fails, but at a later step than the journey it replaces, is now committed as the
+  journey, and the run goes on with the new failing step: the task's one worker repair round
+  if it is unused, otherwise a second review by the author if one is left, otherwise the run
+  stops with the better journey kept. The limits are unchanged: two reviews of a journey and
+  one repair round of a task in a run. A second review that changes nothing no longer stops a
+  run whose repair round is unused.
+- **A journey may not begin by expecting what the application already shows.** What a journey
+  expects before its first click, fill, select or key press is tried in a real browser on the
+  application as it is before the story. `check_journey` does not keep a draft with such a
+  step, and a correction with one is refused. The red check of the journeys logs a note for a
+  journey already written. For a draft that begins by looking, this builds and starts the
+  application once more while the tests are written.
+- **`check_journey` refuses a role written without `role=`**, such as
+  `textbox[name="Title"]`, and says how to write it. The browser reads that form as an element
+  of that name and finds nothing.
+- **A worker is told which names of its journey its code does not hold yet.** Under the
+  journey, `acceptance_test` lists the texts and accessible names the journey's selectors use
+  that no code of the worker's checkout holds at that moment. It is a note, read from the
+  code's texts with no browser.
 - **A journey step acts on what a person can see.** `click` and `fill` take the first visible
   match of a selector, and `expectVisible` passes when any match is visible. Before, the first
   match in the document was taken even when nobody could see it, so `expectVisible: "text=..."`

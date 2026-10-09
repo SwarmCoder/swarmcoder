@@ -200,6 +200,193 @@ public final class JourneyExpectations {
         return why;
     }
 
+    /** Most expectations at the head of one journey that are tried alone on the start tree. */
+    public static final int MAX_LEADING = 5;
+
+    /**
+     * An expectation a journey makes BEFORE it does anything: on the entry page, as the
+     * application shows it when it opens.
+     *
+     * @param step the step's number, from 1
+     */
+    public record Leading(int step, VerifySpec.StepSpec spec) {}
+
+    /**
+     * The {@code expectVisible} and {@code expectValue} steps a journey makes before its first
+     * fill, select, click or press (section 75, live run 101). They are made on the entry page,
+     * so each can be tried alone on the application as it was before the story: one that holds
+     * there is true of the STARTING application. It shows nothing about the story, and it fails
+     * on a correct implementation as soon as the story replaces what that page shows - run
+     * 101's journey began by expecting the start page's old text and failed at step 1 on a
+     * screen that was right. {@code expectHidden} is left out: what is not there is hidden on
+     * every page. At most {@link #MAX_LEADING}; decided from the steps' kinds, no word is read.
+     */
+    public static List<Leading> leading(JourneyFile.Journey journey) {
+        List<Leading> found = new ArrayList<>();
+        if (journey == null) {
+            return found;
+        }
+        for (int i = 0; i < journey.steps().size() && found.size() < MAX_LEADING; i++) {
+            VerifySpec.StepSpec step = journey.steps().get(i);
+            if (changes(step)) {
+                break;
+            }
+            if (step.expectVisible() != null || step.expectValue() != null) {
+                found.add(new Leading(i + 1, step));
+            }
+        }
+        return found;
+    }
+
+    /** Each of {@link #leading} as a journey of that one step, in the same order. */
+    public static List<JourneyFile.Journey> leadingAlone(JourneyFile.Journey journey) {
+        List<JourneyFile.Journey> alone = new ArrayList<>();
+        for (Leading one : leading(journey)) {
+            alone.add(new JourneyFile.Journey(journey.path(), journey.name() + " (step "
+                + one.step() + " alone, on the entry page)", List.of(one.spec())));
+        }
+        return alone;
+    }
+
+    /**
+     * The leading expectations a browser found true on the start tree.
+     *
+     * @param alone what the browser made of {@link #leadingAlone}, in the same order; a
+     *              missing or failed result establishes nothing and names no step
+     */
+    public static List<Leading> alreadyThere(JourneyFile.Journey journey,
+                                             List<JourneyFile.Result> alone) {
+        List<Leading> there = new ArrayList<>();
+        List<Leading> all = leading(journey);
+        for (int i = 0; i < all.size() && alone != null && i < alone.size(); i++) {
+            if (alone.get(i) != null && alone.get(i).passed()) {
+                there.add(all.get(i));
+            }
+        }
+        return there;
+    }
+
+    /** What is said about expectations that hold on the application before the story. */
+    public static String alreadyThereObjection(List<Leading> there) {
+        return String.join("; ", there.stream().map(one -> "step " + one.step() + " (`"
+                + one.spec().describe() + "`)").toList())
+            + (there.size() == 1 ? " is" : " are") + " already true on the entry page of the "
+            + "application as it is BEFORE the story (tried there in a real browser), and no "
+            + "step before " + (there.size() == 1 ? "it" : "them") + " does anything: "
+            + (there.size() == 1 ? "it shows" : "they show") + " nothing about the story, and "
+            + (there.size() == 1 ? "fails" : "fail") + " on a correct implementation as soon "
+            + "as the story changes what that page shows. Take " + (there.size() == 1 ? "it"
+                : "them") + " out, or expect what the story adds.";
+    }
+
+    /**
+     * Role names of the accessibility vocabulary that are not also the name of a page element.
+     * A selector part that begins with one of them and a bracket was meant as a role: as
+     * written, the browser driver reads it as a stylesheet selector for an element of that
+     * name, and no page has one. Roles that are element names too (button, form, table) are
+     * left out: there the stylesheet reading is a real selector.
+     */
+    private static final java.util.Set<String> ROLES_THAT_ARE_NO_ELEMENT = java.util.Set.of(
+        "textbox", "combobox", "checkbox", "radio", "link", "heading", "listbox", "option",
+        "tab", "tabpanel", "tablist", "row", "cell", "gridcell", "columnheader", "rowheader",
+        "searchbox", "spinbutton", "switch", "slider", "menuitem", "list", "listitem", "grid",
+        "tree", "treeitem", "alert", "status", "banner", "navigation", "region", "group",
+        "radiogroup", "img", "menubar", "tooltip", "progressbar", "separator", "scrollbar");
+
+    private static final Pattern BARE_ROLE = Pattern.compile("^([a-z]+)\\s*\\[");
+
+    /**
+     * The steps whose selector names a role without {@code role=} (section 75; the journey of
+     * live run 101 filled {@code textbox[name="..."]}, which finds nothing on any page). One
+     * line a step, saying how it is written. Read from the selector's form and the
+     * accessibility vocabulary's own names; no word of a story is looked at.
+     */
+    public static List<String> rolesWithoutPrefix(JourneyFile.Journey journey) {
+        List<String> found = new ArrayList<>();
+        if (journey == null) {
+            return found;
+        }
+        for (int i = 0; i < journey.steps().size(); i++) {
+            VerifySpec.StepSpec step = journey.steps().get(i);
+            String selector = step.click() != null ? step.click() : step.fill() != null
+                ? step.fill() : step.select() != null ? step.select()
+                : step.expectVisible() != null ? step.expectVisible()
+                : step.expectHidden() != null ? step.expectHidden() : step.expectValue();
+            if (selector == null) {
+                continue;
+            }
+            for (String part : selector.split(">>")) {
+                Matcher bare = BARE_ROLE.matcher(part.strip());
+                if (bare.find() && ROLES_THAT_ARE_NO_ELEMENT.contains(bare.group(1))) {
+                    found.add("step " + (i + 1) + ": `" + part.strip() + "` names a role "
+                        + "without `role=`, so the browser looks for an element <"
+                        + bare.group(1) + ">, which no page has. Write `role=" + part.strip()
+                        + "`");
+                    break;
+                }
+            }
+        }
+        return found;
+    }
+
+    private static final Pattern ROLE_NAME =
+        Pattern.compile("\\[name\\s*=\\s*([\"'])(.*?)\\1[^\\]]*\\]");
+
+    /**
+     * The names and texts a journey's selectors look for on the screen (section 75): the
+     * texts of {@link #textsOf} and the accessible names of {@code role=...[name="..."]}, of
+     * every step that acts on or expects to see something. Left out: what {@code expectHidden}
+     * names (it must not be there), a pattern, and an expected text an earlier step of the
+     * journey types or chooses - that is data, not a label of the screen.
+     */
+    public static List<String> namesUsed(JourneyFile.Journey journey) {
+        List<String> names = new ArrayList<>();
+        if (journey == null) {
+            return names;
+        }
+        List<String> typed = new ArrayList<>();
+        for (VerifySpec.StepSpec step : journey.steps()) {
+            String selector = step.click() != null ? step.click() : step.fill() != null
+                ? step.fill() : step.select() != null ? step.select()
+                : step.expectVisible() != null ? step.expectVisible() : step.expectValue();
+            boolean expects = step.expectVisible() != null;
+            if (selector != null) {
+                List<String> found = new ArrayList<>(textsOf(selector));
+                Matcher name = ROLE_NAME.matcher(selector);
+                while (name.find()) {
+                    if (!name.group(2).isBlank()) {
+                        found.add(name.group(2).strip());
+                    }
+                }
+                for (String text : found) {
+                    String wanted = text.toLowerCase(Locale.ROOT);
+                    boolean entered = expects && typed.stream()
+                        .anyMatch(value -> wanted.contains(value) || value.contains(wanted));
+                    if (!entered && !names.contains(text)) {
+                        names.add(text);
+                    }
+                }
+            }
+            if ((step.fill() != null || step.select() != null) && step.value() != null
+                    && !step.value().isBlank()) {
+                typed.add(step.value().strip().toLowerCase(Locale.ROOT));
+            }
+        }
+        return names;
+    }
+
+    /**
+     * The names of {@link #namesUsed} that no shipped code of a checkout holds. Empty when
+     * {@code heldByTheCheckout} is null: nothing is established then, and nothing is said.
+     */
+    public static List<String> namesNotHeld(JourneyFile.Journey journey,
+                                            Predicate<String> heldByTheCheckout) {
+        if (heldByTheCheckout == null) {
+            return List.of();
+        }
+        return namesUsed(journey).stream().filter(name -> !heldByTheCheckout.test(name)).toList();
+    }
+
     /**
      * The journey's last expectation on its own, made on the entry page: when that passes on the
      * start tree, what the journey ends on was there before the story, and a journey that fails

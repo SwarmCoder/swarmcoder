@@ -6971,3 +6971,175 @@ image). Cases added to `TheArchitectHandsItsFindingsToTheWorkersTest`,
 
 **Not exercised by any test:** `handOverAgainOnce` in a workflow (its two parts are tested);
 the review in a live browser with a real list.
+
+## 75. A correction that got further was refused, and a journey that began by looking at the old page (run 101, 2026-10-09)
+
+Run 101: the demo of run 100, every role on the local model, resumed from the saved plan. All
+four tasks were built with no repair round. Workers: 87 calls, 1,558,751 input and 25,170
+output tokens (run 100: 189 calls, 3,588,856 and 52,778). It parked at FINAL_INTEGRATION with
+no worker started. Nothing below was measured in a live run; the review is tested with a
+scripted model and what a browser would answer is given as a function.
+
+**What happened.** The journey had 11 steps: open the screen, add a record through a form, see
+it listed. Step 1 was `expectVisible` on the text of the start page - a text only the
+application as it was BEFORE the story shows, and that the story's screen replaces. It failed
+there on a screen that was right. The author answered `JOURNEY_WRONG` and handed in a
+correction whose first step expects the new screen's heading. That correction passed step 1
+and failed at step 2, a click on a button (timeout). Section 70 takes a correction only when
+it passes on the merged tree, so it was refused, the journey its author had just called wrong
+stayed, and the run stopped.
+
+### 1. A correction that gets further is taken
+
+`JourneysOfAPlan.judgeCorrection` (it replaces the body of `correctionRefused`, which stays
+as its refusal alone). A correction that still fails on the merged tree is taken when it fails
+at a LATER step than the journey it replaces failed at - from the two step numbers; a failure
+that is not a step's (number 0) on either side is never later. The other guards are asked as
+before: well formed; no fewer acting steps and fills; fails on the tree the run started from;
+its last expectation not already true there; and one new one (item 2). It is committed on the
+run's tests ref. What follows is `JourneysOfAPlan.afterFurther`, from the task's marks, with
+no model call.
+
+**The marks.** A journey is reviewed by its author at most twice in a run
+(`Task.journeyReviews`, section 71). A task has one worker repair round after a failed journey
+(`Task.journeyRepairAttempted`, section 63). No cap was added. Every row below that goes on
+uses up one of the two, and neither is given back, so no sequence repeats: a task with one
+journey is integrated at most four times.
+
+| the journey fails at step `a` and | what is done | then |
+|---|---|---|
+| it was never reviewed | review 1 by its author (a model session, section 70) | by its answer, the next five rows |
+| the author answers `SCREEN_WRONG`, or gives no usable answer | the journey stands | the round is unused: worker repair with the author's answer, then integration again. Used: the run stops |
+| the correction passes on the merged tree and the guards hold | taken, committed | integration again; no worker |
+| the correction fails later, at `b > a`, and the guards hold | taken, committed | no model: the round is unused - worker repair with the CORRECTED journey and step `b`, then integration again. Used, and a review is left - integration again, where it fails at `b` and goes to review 2. Neither - the run stops |
+| the correction fails at the same or an earlier step, or a guard refuses it | not taken; the journey is unchanged | the run stops. The review is not counted, so a resume asks again (section 70) |
+| the author answers `JOURNEY_WRONG` and hands in nothing, asked twice | - | the run stops, as in the row above |
+| it was reviewed once at step `r`, and `a > r` | review 2 | the same five rows. After it no review is left, so "a review is left" is false |
+| it was reviewed once and `a <= r`, or reviewed twice | no review | the round is unused: worker repair. Used: the run stops |
+
+Run 101 on this table: fails at 1; review 1; the correction fails at 2; taken; worker repair
+with step 2; integration; if it fails again at a later step, review 2; then a passing
+correction ends it, and anything else stops the run.
+
+**Decisions.**
+
+- *After a correction that gets further, the workers come first, not the author.* The screen
+  must expose exactly the names a journey's steps use (section 69), so a step the screen does
+  not answer is theirs first. If the name was the author's invention, the screen is made to
+  carry it; that is what the rule of section 69 already says.
+- *The review is recorded at the step the REPLACED journey failed at.* Its author saw the page
+  at that step and has not seen the page at `b`. So after the repair round any failure later
+  than `a` - also one still at `b` - goes to review 2.
+- *No usable answer still sends the journey to the workers* (section 70), not to a stop: the
+  author said nothing against the journey and the round is unused.
+- *Changed from section 71:* a second review that takes nothing stopped the run even when the
+  worker round was unused (it can be: a first correction that passed uses no round). Now the
+  journey goes to the workers then. With the round used it stops as before.
+- *No integration between taking the correction and the repair round.* The browser's result
+  for the correction in the merged tree's container is the evidence
+  (`FinalIntegrator.SentBack.toTheWorkers`, `JourneysOfAPlan.repairEvidenceAfterCorrection`).
+  The run is saved before the workers start, because they read the journey from the run's
+  tests commit as the store holds it.
+- *"Later" is a step number in two different journeys.* A correction could get a later number
+  by putting looks in front. Item 2 refuses the ones that are true before the story; a look at
+  something the story adds, put first, would still count. Not seen in any run; the note on the
+  task gives both steps.
+
+### 2. A first step that asserts the starting application
+
+`JourneyExpectations.leading`: the `expectVisible` and `expectValue` steps a journey makes
+before its first fill, select, click or press (at most 5). They are made on the entry page, so
+each is tried alone, in a real browser, on the tree the run started from - built and started
+as the red check does. One that holds there is true of the application before the story. From
+the steps' kinds and the real page; no word is read.
+
+- **`check_journey`** (`TestAuthorTools.knowingTheStartPage`, given by
+  `GreenfieldWorkflow.onTheStartTreeOf` through `TestAuthorClient.tryingOnTheStartTreeWith`,
+  per thread as the draft compiler is). **Decision: a hard refusal, one line, the draft is not
+  kept.** Considered and not done: a question the author may answer by giving the same file
+  again, as for a text nobody enters. Such a step shows nothing about the story whatever the
+  page keeps, and taking it out costs the journey nothing - the steps after it still fail when
+  the page did not load - so no journey needs it and nothing right is refused. Only a draft
+  that begins by looking starts a browser; each expectation is tried once in a session; one
+  start tree is built at a time. A start tree that cannot be built or started, or no browser,
+  concludes nothing and the draft is kept.
+- **A correction** is held to it in `judgeCorrection`, in the browser run on the start tree it
+  already makes.
+- **The red check** tries them with the journeys, in the same browser run, and logs a NOTE
+  (`JourneysOfAPlan.startsOnWhatWasThere`). **Decision: a note, not a stop.** The author is
+  not in a session then; stopping means every test of the run is written again, for a step
+  that is harmless when the story keeps that part of the page; and when it is not harmless,
+  item 1 now corrects it at final integration.
+
+Cost: for a journey that begins by looking, one build and start of the start tree in a
+container per new first expectation. No model call.
+
+### 3. A screen that lacks what the journey names, before final integration
+
+Journeys are made only at final integration (owner's decision, 2026-10-05). Run 100's
+candidate with no form passed verification. **Built, as a note to the worker:** under the
+journey that `acceptance_test` shows, the names the journey's selectors use that no shipped
+code of the checkout holds AS IT IS AT THAT CALL (`WorkerToolbox.journeyNamesNotInTheCheckout`,
+`JourneyExpectations.namesUsed`: `text=`, `:has-text(...)` and the accessible name of
+`role=...[name="..."]`; not what `expectHidden` names, not a pattern, not a text the journey
+typed or chose itself). Read by `ProjectTexts.heldIn`, the reader behind `texts_of`: string
+literals of the code and the page and message files, no model, no browser. Before the screen
+is written it lists every name; asked again it lists what is still missing. The task's one
+sentence about its journey says to ask again before `report_done`.
+
+**Not built.** The same line to the judge, and a note at hand-in: `report_done` ends the
+worker's session and nothing answers it; a way to send a hand-in back once is not small. So a
+worker that never asks again is told nothing. Not a failure anywhere: a name the screen puts
+together from parts, or takes from a file this reader does not read, is not seen, and the
+match is "some shipped text contains it, whatever the case" over the whole checkout, so it
+under-reports more than it over-reports.
+
+### 4. A role written without `role=` (found while checking item 5; not asked for)
+
+The saved journey of run 101 fills `textbox[name="..."]` and selects in
+`combobox[name="..."]` from its third step on. The browser driver reads that as a stylesheet
+selector for an element of that name, and no page has one. Run 101 never got to step 3.
+`JourneyExpectations.rolesWithoutPrefix`: a selector part that begins with a role name that is
+not also an element's name, then a bracket. `check_journey` refuses the draft and says how to
+write each. The list is the accessibility vocabulary's own role names, a fixed vocabulary of
+the selector language like the step names; roles that are element names too (`button`,
+`form`, `table`) are left alone, because there the stylesheet reading is a real selector.
+**Only in `check_journey`**, not in `JourneyFile.read`: final integration skips a journey
+that does not read as well formed, and a journey already committed must still be made.
+
+### 5. A run resumed from the stage saved before the workers
+
+The saved stage of run 101 holds the tests and the journey with the bad first step. Checked
+with no model: `AFailedJourneyGoesBackToItsAuthorTest` walks the table on that shape (fails at
+1, a correction that fails at 2 is taken, the workers are next, review 2 after the round,
+then the stop) and gives the draft to `check_journey` with a start page that shows the old
+text. The red check is behind the saved stage, so its note is not made.
+
+**Watch in the live resume.**
+
+- The review's `check_journey` now builds and starts the start tree when the correction
+  begins by looking: one container build inside the review, no tokens. If the new first step
+  names something the start page also shows, the draft is refused and the author must name
+  something else within its ten turns.
+- The same call refuses the steps written `textbox[...]` and `combobox[...]` (item 4). The
+  author has to rewrite them in review 1. If it runs out of turns with no kept draft, the run
+  stops as "journey wrong, no correction" and a resume asks again.
+- Then: "The correction still fails on the merged tree, but at step b ..." on the log, the
+  page reading at that step, ONE repair round for the screen's task whose evidence is the
+  corrected journey, and a second integration.
+- If the journey then fails later, review 2. After it only a passing correction goes on.
+- The data the first attempt left in the container is still there when the correction is made
+  (section 69).
+
+**Not exercised by any test:** `sendJourneyBackToItsAuthor` as a whole and
+`FinalIntegrator.makeJourneys` with a correction that gets further (both need a container
+with a browser) - the judging, the next move, the notes and the result type are tested as
+parts; saving the run before the repair round; `onTheStartTreeOf` and the red check's note in
+a workflow (the probe is given as a function in the tests); the worker's note in a live
+session.
+
+**Tests.** Cases added to `AFailedJourneyGoesBackToItsAuthorTest`,
+`WhatAJourneyExpectsIsJudgedWithNoModelTest`, `AWorkerReadsTheAcceptanceTestItMustMeetTest`.
+
+**Left.** The judge is not told what a candidate's screen lacks. A journey handed in as a
+file in one reply is not held to items 2 and 4 before the red check's note. A live run.
