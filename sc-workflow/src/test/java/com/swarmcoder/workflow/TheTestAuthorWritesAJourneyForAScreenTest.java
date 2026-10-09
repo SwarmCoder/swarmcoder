@@ -76,6 +76,9 @@ class TheTestAuthorWritesAJourneyForAScreenTest {
           - click: "role=link[name=\\"Orders\\"]"
           - click: "role=button[name=\\"Add order\\"]"
           - expectVisible: "role=textbox[name=\\"Customer\\"]"
+        proves:
+          - criterion: 1
+            steps: "1-3"
         """;
 
     private static final String CLAIM =
@@ -112,7 +115,7 @@ class TheTestAuthorWritesAJourneyForAScreenTest {
                     // Asked for the journey: first with an address, which a journey may not have,
                     case 3 -> ScriptedAgentLlm.Turn.call("check_journey",
                         Map.of("path", JOURNEY_FILE,
-                            "content", JOURNEY.replace("steps:", "url: /orders/new\nsteps:")));
+                            "content", JOURNEY.replace("\nsteps:", "\nurl: /orders/new\nsteps:")));
                     // then over an earlier story's journey, which is never changed,
                     case 4 -> ScriptedAgentLlm.Turn.call("check_journey",
                         Map.of("path", EARLIER_JOURNEY, "content", JOURNEY));

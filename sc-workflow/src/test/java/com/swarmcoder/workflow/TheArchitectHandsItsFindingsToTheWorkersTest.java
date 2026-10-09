@@ -410,6 +410,37 @@ class TheArchitectHandsItsFindingsToTheWorkersTest {
             """;
     }
 
+    /**
+     * Live run 103 (section 76): a finding kept from the middle of a class left the imports
+     * behind, and a worker given it imported the type from a package that does not exist.
+     */
+    @Test
+    void aFindingCarriesTheImportsOfItsLookupThatItsLinesUse() {
+        String[] result = {
+            "package com.example.server;",
+            "",
+            "import com.example.store.Command;",
+            "import com.example.store.Unused;",
+            "import static com.example.store.Ids.next;",
+            "import java.util.List;",
+            "",
+            "public class Commands {",
+            "    public static final class Create implements Command<String> {",
+            "        public String run(List<String> all) { return String.valueOf(next()); }",
+            "    }",
+            "}"};
+        String kept = String.join(System.lineSeparator(), result[8], result[9], result[10]);
+
+        assertThat(DraftTools.importsUsed(result, 9, 11, kept, 3_000)).containsExactly(
+            "import com.example.store.Command;", "import static com.example.store.Ids.next;",
+            "import java.util.List;");
+        assertThat(DraftTools.importsUsed(result, 9, 11, kept, 40))
+            .as("inside the finding's own bound").containsExactly("import com.example.store.Command;");
+        assertThat(DraftTools.importsUsed(result, 1, 12,
+            String.join(System.lineSeparator(), result), 3_000))
+            .as("already among the kept lines").isEmpty();
+    }
+
     private static void write(Path file, String content) throws Exception {
         Files.createDirectories(file.getParent());
         Files.writeString(file, content);

@@ -48,6 +48,8 @@ import java.util.Set;
  *
  * <ul>
  *   <li>a type the start tree declares: the file the tree has it in;</li>
+ *   <li>a type declared inside another type of the plan or of the tree: the file of the
+ *       outermost type it is declared in ({@link NestedContracts#outermost});</li>
  *   <li>a new type: {@code <source root>/<package as folders>/<Type>.java}. The source root is,
  *       in this order, the one a path of the planner's own write set for this task lies in; the
  *       one that already holds the contract's package or the nearest package above it; the only
@@ -118,6 +120,13 @@ final class ComputedReservation {
         Map<String, List<String>> subtypes = types == null ? Map.of()
             : ChangeBreaksExistingCode.subtypesIn(types);
         List<String> javaRoots = javaSourceRoots(layout);
+        // A contract for a type declared inside another type is in that type's file (live run
+        // 103, section 76: a folder named after the outer class was computed for each nested
+        // one). The plan's own contracts and the tree say which names are types.
+        Set<String> plannedTypes = NestedContracts.typeNames(graph, null);
+        ProjectTypes declared = types;
+        java.util.function.Predicate<String> isType = name -> plannedTypes.contains(name)
+            || (declared != null && declared.declares(name));
         for (Task task : graph.tasks()) {
             if (task == null || task.deliveredContracts().isEmpty()) {
                 continue;
@@ -134,8 +143,12 @@ final class ComputedReservation {
                 if (contract == null || !contract.namesAType()) {
                     continue;
                 }
-                String fullName = contract.typeName().strip();
-                String fileName = contract.simpleTypeName() + ".java";
+                String ownName = contract.typeName().strip();
+                String fullName = NestedContracts.outermost(ownName, isType);
+                boolean nested = !fullName.equals(ownName);
+                int lastDot = fullName.lastIndexOf('.');
+                String packageName = lastDot < 0 ? "" : fullName.substring(0, lastDot);
+                String fileName = fullName.substring(lastDot + 1) + ".java";
                 Path existing = types != null && types.declares(fullName)
                     ? types.fileOf(fullName) : null;
                 if (existing != null) {
@@ -150,8 +163,8 @@ final class ComputedReservation {
                                 + "; the planned path is dropped");
                         }
                     }
-                    ChangeBreaksExistingCode.Broken broken =
-                        ChangeBreaksExistingCode.brokenBy(types, subtypes, repoRoot, contract);
+                    ChangeBreaksExistingCode.Broken broken = nested ? null
+                        : ChangeBreaksExistingCode.brokenBy(types, subtypes, repoRoot, contract);
                     if (broken != null) {
                         computed.addAll(broken.files().keySet());
                         lines.add("'" + task.title() + "': adding "
@@ -162,7 +175,7 @@ final class ComputedReservation {
                     }
                     continue;
                 }
-                String packagePath = contract.packageName().replace('.', '/');
+                String packagePath = packageName.replace('.', '/');
                 String relative = (packagePath.isEmpty() ? "" : packagePath + "/") + fileName;
                 String plannedFile = null;
                 for (String entry : writeSet) {
@@ -176,7 +189,7 @@ final class ComputedReservation {
                     continue;
                 }
                 String root = sourceRootFor(writeSet, javaRoots, types, repoRoot,
-                    contract.packageName());
+                    packageName);
                 if (root == null) {
                     lines.add("'" + task.title() + "': no file was computed for the new type "
                         + fullName + " - which module it belongs in cannot be told from the "

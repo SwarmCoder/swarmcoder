@@ -226,6 +226,17 @@ public interface AgentRuntime {
     record ToolBinding(String name, String description, Object target, Method method) {}
 
     /**
+     * On a {@code String} parameter of a tool's method: a call that leaves the argument out is
+     * run with the empty string. For an argument the tool's own description lets a caller
+     * leave empty (live run 103: five calls of one tool failed in the binding for an argument
+     * described as "empty for all of a short result"). See {@link OmittedArguments}.
+     */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(java.lang.annotation.ElementType.PARAMETER)
+    @interface MayBeOmitted {
+    }
+
+    /**
      * Consulted after every assistant turn — the early-kill hook (spec §11.3). Returning a
      * KillReason terminates the session immediately with that reason.
      */

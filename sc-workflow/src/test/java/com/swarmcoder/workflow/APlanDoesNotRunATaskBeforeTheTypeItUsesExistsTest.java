@@ -85,25 +85,31 @@ class APlanDoesNotRunATaskBeforeTheTypeItUsesExistsTest {
     }
 
     @Test
-    void run90sPlanGoesBackWithThePairAndTheEdgeToWrite() {
+    void run90sPlanIsTurnedRoundWhereItsReadSetNamesTheFileToCome() {
+        // Until section 76 this went back to the planner with the pair and the edge to write.
+        // The read set is a fact, nothing the creating task delivers or reads comes from the
+        // screens' task, and the planner's edge ran directly against it: it is turned round.
         // As the planner wrote them: {"from":"task-3","to":"task-1"}, {"from":"task-3","to":"task-2"}.
         TaskGraph graph = graph(new TaskEdge(screens.id(), create.id()),
             new TaskEdge(screens.id(), texts.id()));
 
         TypeDependencyOrder.Outcome outcome = TypeDependencyOrder.apply(graph, null, repo);
 
-        assertThat(outcome.violations()).hasSize(1);
-        assertThat(outcome.violations().get(0))
-            .contains("'" + SCREENS + "' has UtcDateTime in its read set")
-            .contains("does not exist until task '" + CREATE + "' creates it")
-            .contains("FROM the task that must finish first TO the task that waits")
-            .contains("{\"from\": <id of '" + CREATE + "'>, \"to\": <id of '" + SCREENS + "'>}");
+        assertThat(outcome.violations()).isEmpty();
+        assertThat(outcome.turned()).hasSize(1);
+        assertThat(outcome.turned().get(0))
+            .contains("'" + CREATE + "' now finishes before '" + SCREENS + "'")
+            .contains("the read set of '" + SCREENS + "' names UtcDateTime");
         assertThat(outcome.notes())
             .as("AddTexts is already in the tree: naming it needs no order, as before")
             .anySatisfy(n -> assertThat(n).contains("mentions AddTexts")
                 .contains("the planner's order is kept"));
-        assertThat(graph.dependencies()).as("nothing is turned round here: which of the two "
-            + "things the planner said is wrong is its call").hasSize(2);
+        assertThat(graph.dependencies()).as("the edge against the read set is turned; the one "
+            + "about a type already in the tree is the planner's and stays").hasSize(2);
+        assertThat(graph.dependencies()).anyMatch(edge -> edge.from().equals(create.id())
+            && edge.to().equals(screens.id()));
+        assertThat(graph.dependencies()).anyMatch(edge -> edge.from().equals(screens.id())
+            && edge.to().equals(texts.id()));
     }
 
     @Test

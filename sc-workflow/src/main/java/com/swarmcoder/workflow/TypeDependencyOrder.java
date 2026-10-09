@@ -89,6 +89,17 @@ import java.util.regex.Pattern;
  *       another task). Adding A→B would make a cycle. With contract evidence this is a violation
  *       fed back to the planner: the plan's ordering contradicts its own types, and which half the
  *       planner got wrong is its call, not this class's.</li>
+ *       <b>Except an edge written against a fact with no fact of its own (live run 103, section
+ *       76).</b> A planner on a small local model wrote every edge of a six-task plan from the
+ *       task that waits to the task it waits for - twice, in drafts 1 and 4 of 13. Each draft
+ *       came back with ten ordering objections and four more that only followed from them, and
+ *       the planner wrote the whole plan again. Where the plan's own edge runs directly from
+ *       the task that uses a type to the task that writes it, the use is a contract's Java or
+ *       a read set, and nothing the writer delivers or reads comes from the user, the two
+ *       cannot run in the planner's order and there is nothing to choose: the edge is turned
+ *       round and the planner is told in a note. It still goes back when there is a fact each
+ *       way, when the order runs through a third task, when the only evidence is wording, and
+ *       when turning the edges would close a cycle.</li>
  *   <li><b>Each task's contract uses a type the other writes.</b> Two types that name each other
  *       cannot be compiled apart in either order. Also a violation: they belong in one task.</li>
  *   <li><b>The only evidence is the task's prose instructions</b>, not a contract's Java. Prose is
@@ -171,7 +182,24 @@ public final class TypeDependencyOrder {
      *                   satisfy, or one the plan orders backwards
      * @param notes      uses that were deliberately left alone, and why, for the run log
      */
-    public record Outcome(List<String> added, List<String> violations, List<String> notes) {}
+    /**
+     * @param turned one line for every edge of the plan that ran against a fact and was turned
+     *               round (live run 103, section 76); empty when none was
+     */
+    public record Outcome(List<String> added, List<String> violations, List<String> notes,
+                          List<String> turned) {
+
+        public Outcome(List<String> added, List<String> violations, List<String> notes) {
+            this(added, violations, notes, List.of());
+        }
+
+        /** What was put right in the plan with no question asked: edges added and turned. */
+        public List<String> corrections() {
+            List<String> all = new ArrayList<>(turned);
+            all.addAll(added);
+            return all;
+        }
+    }
 
     /** One task's code naming a type another task writes. */
     record Use(Task user, Task writer, String typeName, ApiContract contract, boolean fromContract,
@@ -240,6 +268,54 @@ public final class TypeDependencyOrder {
         byPair.keySet().stream().filter(p -> !order.contains(p)).forEach(order::add);
 
         boolean changed = false;
+        // An edge the planner wrote against a fact, with no fact for its own direction, is
+        // turned round (live run 103, section 76). Before the pairs are judged, so that every
+        // check after this one reads the plan as it will run.
+        List<String> turned = new ArrayList<>();
+        List<TaskEdge> trial = new ArrayList<>(edges);
+        List<String> lines = new ArrayList<>();
+        for (List<UUID> pair : order) {
+            List<Use> list = byPair.get(pair);
+            if (list.stream().noneMatch(Use::hard)) {
+                break; // the pairs backed by a fact come first
+            }
+            Task writer = list.get(0).writer();
+            Task user = list.get(0).user();
+            if (byPair.getOrDefault(List.of(user.id(), writer.id()), List.of()).stream()
+                    .anyMatch(Use::hard)) {
+                continue; // a fact each way: which task they belong in is the planner's call
+            }
+            boolean against = trial.removeIf(edge -> user.id().equals(edge.from())
+                && writer.id().equals(edge.to()));
+            if (!against) {
+                continue; // ordered through a third task, or not at all: judged below
+            }
+            if (trial.stream().noneMatch(edge -> writer.id().equals(edge.from())
+                    && user.id().equals(edge.to()))) {
+                trial.add(new TaskEdge(writer.id(), user.id()));
+            }
+            boolean contract = list.stream().anyMatch(Use::fromContract);
+            lines.add("'" + writer.title() + "' now finishes before '" + user.title() + "': "
+                + (contract ? "the contract '" + user.title() + "' delivers uses "
+                    : "the read set of '" + user.title() + "' names ")
+                + typesOf(list) + ", which '" + writer.title() + "' writes. The plan's edge "
+                + "ran the other way and nothing '" + writer.title() + "' delivers or reads "
+                + "comes from '" + user.title() + "', so the edge was turned round");
+        }
+        if (!lines.isEmpty()) {
+            Map<UUID, Set<UUID>> turnedReach = closure(graph.tasks(), trial);
+            if (turnedReach != null) {
+                // Turned only when the plan is still a plan afterwards: a cycle among the
+                // turned edges means the planner's order had a reason these facts do not
+                // show, and every pair is then judged as it was written.
+                edges.clear();
+                edges.addAll(trial);
+                reach.clear();
+                reach.putAll(turnedReach);
+                turned.addAll(lines);
+                changed = true;
+            }
+        }
         Set<List<UUID>> reported = new HashSet<>();
         for (List<UUID> pair : order) {
             List<Use> list = byPair.get(pair);
@@ -347,7 +423,7 @@ public final class TypeDependencyOrder {
         if (changed) {
             graph.setDependencies(edges);
         }
-        return new Outcome(added, violations, notes);
+        return new Outcome(added, violations, notes, turned);
     }
 
     /**
@@ -482,7 +558,7 @@ public final class TypeDependencyOrder {
     }
 
     /** True when a member or the signature of {@code contract} names the type {@code simple}. */
-    private static boolean namesInItsJava(ApiContract contract, String simple) {
+    static boolean namesInItsJava(ApiContract contract, String simple) {
         if (simple == null || simple.isBlank()) {
             return false;
         }

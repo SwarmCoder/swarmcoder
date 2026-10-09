@@ -19,7 +19,40 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   review of a failed journey and both answers of `check_journey` now list every step with what
   it is for.
 
+- **A journey says which of its steps prove which criterion.** A journey file has a third
+  key, `proves`: one entry for each criterion of the story, by number, with either
+  `steps: "<first>-<last>"` or `notOnScreen: "<why>"`. The test author is asked for it and
+  `check_journey` does not keep a journey that leaves a criterion out. When the steps named
+  for a criterion use only controls the rest of the journey also uses, the author is asked
+  once whether they really exercise it. The entries are written to the run's log and the run
+  report, with that note where it applies, so that whoever accepts a story sees what the
+  browser actually did for each criterion. Before, a story about editing a record was
+  accepted on a journey that never used the screen's edit control. Journey files without
+  `proves` are read as before; nothing has to be changed in an existing project.
+- **A task that spans several parts of the build is pointed out to the planner.** When the
+  types one task delivers lie in more than one source root, `check_plan` and the PLAN log
+  name the task and the types on each side, as a proposal to split it. It never sends a plan
+  back.
+
 ### Fixed
+
+- **The task planner is no longer sent back for things the plan's own facts decide.** A
+  planner on a small model wrote thirteen drafts of one plan and ended by putting six tasks'
+  work into one. Four things are now put right by the checks and told to the planner as
+  notes it need not answer: a dependency written the wrong way round between a task that
+  uses a type and the task that writes it (it is turned round when nothing supports the
+  planner's direction); a class declared inside another that no task was said to deliver (it
+  goes to the task of the outer class, and its file is the outer class's file, not a folder
+  named after it); and a new file the plan's other new files use, which used to be reported
+  as unreachable when no existing code used its module yet. A plan is still sent back when
+  two tasks' types name each other, when an order contradicts a type through a third task,
+  and when a new screen has no existing file to be opened from.
+- **A tool argument described as optional may be left out.** A model that omitted the `lines`
+  argument of `keep_for_workers`, or the argument of a worker's `acceptance_test`, got an
+  internal error in place of the tool's answer, and the architect's findings from that turn
+  were lost. The call now runs with the argument empty.
+- **A finding kept for the workers carries the imports its lines use.** A worker given a few
+  lines from the middle of an example class had to guess where their types come from.
 
 - **A corrected journey that gets further is kept.** When a journey fails after the last merge
   and its author corrects it, the correction used to be taken only if it passed. One that

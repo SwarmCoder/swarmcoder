@@ -793,6 +793,28 @@ public final class ReachableCode {
      */
     public static String planObjection(Graph graph, List<PlannedTask> tasks,
                                        Predicate<String> exists) {
+        return planObjection(graph, tasks, exists, Map.of());
+    }
+
+    /**
+     * The same, told which of the plan's new files use which (live run 103, section 76).
+     *
+     * <p>The rule above asks, for each new file on its own, whether a task may change something
+     * reachable in a source root whose code ALREADY uses the new file's root. A new interface in
+     * a shared module of a project whose client and server did not yet use that module had no
+     * such root: ten plan drafts were sent back for it, although a new server class of the same
+     * plan implemented it and was itself taken as found by the framework. The planner got past
+     * the objection only by putting everything into one task. Reaching is transitive: a new
+     * file that another new file of the plan uses is reached when that one is - connected from
+     * a foothold, or found by the framework. Two new files that only use each other stay
+     * unconnected.
+     *
+     * @param usedBy a new file's path to the paths of the plan's new files whose code names
+     *               its type, read from the plan's contracts and read sets by the caller
+     */
+    public static String planObjection(Graph graph, List<PlannedTask> tasks,
+                                       Predicate<String> exists,
+                                       Map<String, ? extends Collection<String>> usedBy) {
         if (graph == null || !graph.determined() || tasks == null || tasks.isEmpty()) {
             return null;
         }
@@ -805,6 +827,7 @@ public final class ReachableCode {
         // Where the plan may change something the application already reaches, by source root.
         Set<String> footholds = new LinkedHashSet<>();
         List<String> planned = new ArrayList<>();
+        Set<String> newFiles = new LinkedHashSet<>();
         for (PlannedTask task : tasks) {
             boolean saysDiscovered = false;
             for (String annotation : discovery) {
@@ -840,6 +863,9 @@ public final class ReachableCode {
                 if (!isProduction(path)) {
                     continue;
                 }
+                if (!exists.test(path)) {
+                    newFiles.add(path);
+                }
                 if (exists.test(path)) {
                     if (reachable.contains(path)) {
                         footholds.add(sourceRootOf(path));
@@ -860,6 +886,22 @@ public final class ReachableCode {
             Set<String> from = graph.rootsUsing(sourceRootOf(path));
             if (!from.isEmpty() && !intersects(from, footholds)) {
                 added.add(path);
+            }
+        }
+        // A new file another new file uses is reached when that one is.
+        boolean again = usedBy != null && !usedBy.isEmpty();
+        while (again) {
+            again = false;
+            for (String path : List.copyOf(added)) {
+                Collection<String> users = usedBy.get(path);
+                for (String user : users == null ? List.<String>of() : users) {
+                    String by = normalise(user);
+                    if (!by.equals(path) && newFiles.contains(by) && !added.contains(by)) {
+                        added.remove(path);
+                        again = true;
+                        break;
+                    }
+                }
             }
         }
         if (added.isEmpty()) {

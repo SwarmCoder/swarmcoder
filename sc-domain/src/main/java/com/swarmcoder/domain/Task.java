@@ -181,6 +181,13 @@ public class Task {
      */
     private List<String> computedReservation;
     /**
+     * What this task's journeys say proves each criterion: one line an entry of a journey
+     * file's {@code proves}, with the steps named (live run 103, section 76). A record for the
+     * run report and for whoever accepts the story; nothing is decided from it. Null for a
+     * task whose tests were written before the field existed.
+     */
+    private List<String> journeyProofs;
+    /**
      * Files the selected candidate changed outside the reservation the plan gave this task,
      * allowed by rule because no other task of the plan held them and nothing protects them
      * (section 73). They are added to {@link #writeSet} when the candidate is selected; this
@@ -307,6 +314,15 @@ public class Task {
     }
     public List<String> getJourneyPaths() { return journeyPaths; }
     public void setJourneyPaths(List<String> journeyPaths) { this.journeyPaths = journeyPaths; }
+
+    /** Never null: empty when no journey of this task says which steps prove what. */
+    public List<String> journeyProofs() {
+        return journeyProofs == null ? List.of() : journeyProofs;
+    }
+    public List<String> getJourneyProofs() { return journeyProofs; }
+    public void setJourneyProofs(List<String> journeyProofs) {
+        this.journeyProofs = journeyProofs;
+    }
 
     public String journeyWaiver() { return journeyWaiver; }
     public String getJourneyWaiver() { return journeyWaiver; }

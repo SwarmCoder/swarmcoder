@@ -469,6 +469,11 @@ final class HarnessRunReport {
                     + "(every first candidate failed it the same way): ")
                     .append(task.authoredTests().reviewNote().strip()).append('\n');
             }
+            if (!task.journeyProofs().isEmpty()) {
+                sb.append("What its journey says proves each criterion (the author's own "
+                    + "statement, checked only for form):\n");
+                task.journeyProofs().forEach(line -> sb.append("- ").append(line).append('\n'));
+            }
             if (task.journeyReviewNote() != null && !task.journeyReviewNote().isBlank()) {
                 sb.append("Journey sent back to its author before any worker repair (it failed "
                     + "in the browser at final integration): ")

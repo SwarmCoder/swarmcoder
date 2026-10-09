@@ -928,6 +928,10 @@ public class GreenfieldWorkflow {
                             planValidator.validate(candidate, planScope, layout, design, repoPath),
                             candidate, design);
                         verdict.warnings().forEach(w -> log("PLAN warning: " + w));
+                        if (verdict.ok()) {
+                            PlanSizeGuide.proposals(candidate, layout)
+                                .forEach(line -> log("PLAN: note — " + line));
+                        }
                         if (!verdict.ok() && lastTry) {
                             // The last attempt's only fault is work no check needs: drop it rather
                             // than park the run over it (harness run 40, 2026-09-26). Safe cases
@@ -2714,6 +2718,24 @@ public class GreenfieldWorkflow {
                 // And its journeys: files of the same commit, claimed the same way, kept apart
                 // because a browser makes them and the build does not compile them.
                 task.setJourneyPaths(List.copyOf(authored.journeys()));
+                // What each journey says proves which criterion (section 76): on the run's log
+                // and kept with the task, for the report and for whoever accepts the story.
+                List<String> proofs = new ArrayList<>();
+                for (String journeyPath : authored.journeys()) {
+                    try {
+                        Path file = treeToWriteIn.resolve(journeyPath);
+                        JourneyFile.Read read = !Files.isRegularFile(file) ? null
+                            : JourneyFile.read(journeyPath, Files.readString(file));
+                        if (read != null && read.ok()) {
+                            proofs.addAll(read.journey().proofLines(
+                                TestAuthorClient.criteriaTexts(forTask)));
+                        }
+                    } catch (IOException | RuntimeException unreadable) {
+                        // the journey is read again, with care, at its red check
+                    }
+                }
+                proofs.forEach(line -> log("TEST_AUTHORING: journey " + line));
+                task.setJourneyProofs(proofs.isEmpty() ? null : List.copyOf(proofs));
                 allWritten.addAll(authored.journeys());
                 // The answer given in place of a journey (section 64) is taken only where the
                 // graph left room for it, and is then on the task and in the log - never silent.
@@ -5732,6 +5754,11 @@ public class GreenfieldWorkflow {
 
             @Override
             public List<String> plan(TaskGraph draft, DesignDocument design) {
+                return planChecked(draft, design).objections();
+            }
+
+            @Override
+            public ArchitectClient.PlanDraft planChecked(TaskGraph draft, DesignDocument design) {
                 StoryScope scope = scopeFor(run);
                 BuildLayout.Layout layout = repoLayout();
                 withAcceptanceTestDir(draft, AcceptanceTestLocation.resolve(layout).protectedDir());
@@ -5745,7 +5772,11 @@ public class GreenfieldWorkflow {
                 if (verdict.ok() && !rules.isEmpty() && draft.tasks() != null) {
                     objections.addAll(ForbiddenTechGuard.check(rules, draft.tasks()));
                 }
-                return objections;
+                // What the checks decided from the plan's own facts is a note, not an
+                // objection (live run 103, section 76); so is where a task could be split.
+                List<String> notes = new ArrayList<>(verdict.corrections());
+                notes.addAll(PlanSizeGuide.proposals(draft, layout));
+                return new ArchitectClient.PlanDraft(objections, notes);
             }
         });
     }

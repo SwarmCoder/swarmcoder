@@ -1735,7 +1735,10 @@ public class ArchitectClient {
         + "wrong way.\n"
         + "2. CHECK YOUR DRAFT. Call check_plan with the complete JSON object described above, as "
         + "one string. It runs the build's own mechanical checks and returns their objections, "
-        + "all of them at once. Fix every objection and check again. Give it a first draft as "
+        + "all of them at once. Fix every objection and check again. What it lists under NOTES "
+        + "is not an objection: an order between two tasks that the types they use decide, and "
+        + "the task of a type declared inside another, are put right for you in the plan that "
+        + "runs - never write the plan again for a note. Give it a first draft as "
         + "soon as you can write one: a draft you have checked is kept if this session ends "
         + "early, a plan still in your head is not, and what you read many turns ago is cut "
         + "to its first lines to keep each call small.\n"
@@ -1762,6 +1765,22 @@ public class ArchitectClient {
          * @param design the design the plan decomposes, as the planner was given it
          */
         List<String> plan(TaskGraph draft, DesignDocument design);
+
+        /**
+         * The same check with what it put right in the draft and what it proposes (live run
+         * 103, section 76): notes the planner is told and need not answer.
+         */
+        default PlanDraft planChecked(TaskGraph draft, DesignDocument design) {
+            return new PlanDraft(plan(draft, design), List.of());
+        }
+    }
+
+    /**
+     * @param objections what would send the plan back
+     * @param notes      edges added or turned round from the types the tasks use, nested types
+     *                   given to their outer type's task, and proposals; never objections
+     */
+    public record PlanDraft(List<String> objections, List<String> notes) {
     }
 
     /** Closes without an exception, so it reads as a plain try-with-resources. */
@@ -1929,8 +1948,17 @@ public class ArchitectClient {
                     return DraftTools.Checked.unreadable("no task could be read out of it; the "
                         + "tasks go in a \"tasks\" array at the top of the object");
                 }
-                return new DraftTools.Checked(true,
-                    checks == null ? List.of() : checks.plan(draft, design));
+                // What a draft was, on the log: live run 103's thirteen drafts were recorded
+                // as a length each, so what the planner changed between them is not known.
+                log.info("check_plan draft: {} task(s) {}, {} edge(s)", draft.tasks().size(),
+                    draft.tasks().stream().map(t -> "'" + t.title() + "' ("
+                        + t.deliveredContracts().size() + " contract(s))").toList(),
+                    draft.dependencies() == null ? 0 : draft.dependencies().size());
+                if (checks == null) {
+                    return new DraftTools.Checked(true, List.of());
+                }
+                PlanDraft checked = checks.planChecked(draft, design);
+                return new DraftTools.Checked(true, checked.objections(), checked.notes());
             });
     }
 

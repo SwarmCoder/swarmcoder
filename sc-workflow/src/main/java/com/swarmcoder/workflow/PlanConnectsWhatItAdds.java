@@ -25,7 +25,11 @@ import com.swarmcoder.knowledge.ReachableCode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * A plan must be able to connect what it adds to the application that is there.
@@ -44,7 +48,9 @@ import java.util.List;
  * model: a plan that writes a new production source file, while no task may change anything the
  * application already reaches from which that file could be used, is sent back with the files
  * named and the places the application is entered today. A new type its task says carries one of
- * the project's own discovery annotations is found by the framework and is not counted. A tree
+ * the project's own discovery annotations is found by the framework and is not counted. Nor is a
+ * new file that another new file of the plan uses, when that one is connected or found by the
+ * framework ({@link #usedBy}, live run 103). A tree
  * whose graph cannot be built, or that has no entry point, is not judged.
  *
  * <p>{@code -Dswarmcoder.verify.unreachableAddedCode=off} switches it off, with the checks of the
@@ -110,6 +116,63 @@ final class PlanConnectsWhatItAdds {
             } catch (RuntimeException unreadable) {
                 return true; // a path that cannot be looked at is not called new
             }
-        });
+        }, usedBy(plan, design));
+    }
+
+    /**
+     * Which file of the plan is used by which: the file of a type a task delivers, to the files
+     * of the types whose contracts name it in their Java, and to the files of the types of a
+     * task whose read set names it. Read from the plan's contracts and paths; no wording.
+     * See {@link ReachableCode#planObjection(ReachableCode.Graph, List,
+     * java.util.function.Predicate, Map)} for the run this is for.
+     */
+    static Map<String, Set<String>> usedBy(TaskGraph plan,
+                                           com.swarmcoder.domain.DesignDocument design) {
+        Set<String> known = NestedContracts.typeNames(plan, design);
+        // each delivered type: its file in its task's write set, and the contract
+        Map<ApiContract, String> fileOf = new LinkedHashMap<>();
+        Map<Task, Set<String>> filesOf = new LinkedHashMap<>();
+        for (Task task : plan.tasks()) {
+            for (ApiContract contract : task.deliveredContracts()) {
+                if (contract == null || !contract.namesAType()) {
+                    continue;
+                }
+                String outer = NestedContracts.outermost(contract.typeName().strip(),
+                    known::contains);
+                String wanted = "/" + outer.replace('.', '/') + ".java";
+                for (String entry : task.writeSet() == null ? Set.<String>of() : task.writeSet()) {
+                    String path = entry == null ? "" : entry.strip().replace((char) 92, '/');
+                    if (("/" + path).endsWith(wanted)) {
+                        fileOf.put(contract, path);
+                        filesOf.computeIfAbsent(task, t -> new LinkedHashSet<>()).add(path);
+                    }
+                }
+            }
+        }
+        Map<String, Set<String>> usedBy = new LinkedHashMap<>();
+        for (Map.Entry<ApiContract, String> used : fileOf.entrySet()) {
+            String simple = used.getKey().simpleTypeName();
+            for (Map.Entry<ApiContract, String> user : fileOf.entrySet()) {
+                if (!user.getValue().equals(used.getValue())
+                        && TypeDependencyOrder.namesInItsJava(user.getKey(), simple)) {
+                    usedBy.computeIfAbsent(used.getValue(), k -> new LinkedHashSet<>())
+                        .add(user.getValue());
+                }
+            }
+            for (Task task : plan.tasks()) {
+                for (String read : task.readSet() == null ? Set.<String>of() : task.readSet()) {
+                    String path = read == null ? "" : read.strip().replace((char) 92, '/');
+                    if (path.equals(used.getValue())) {
+                        for (String file : filesOf.getOrDefault(task, Set.of())) {
+                            if (!file.equals(used.getValue())) {
+                                usedBy.computeIfAbsent(used.getValue(),
+                                    k -> new LinkedHashSet<>()).add(file);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return usedBy;
     }
 }

@@ -502,6 +502,8 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 }
                 consecutiveTextTurns = 0;
 
+                // An argument its tool lets a caller leave out is the empty string (run 103).
+                calls = OmittedArguments.filled(calls, spec.tools());
                 for (MessagePart.Tool.Call call : calls) {
                     tracer.toolCall(call.getTool(), call.getArgs());
                 }

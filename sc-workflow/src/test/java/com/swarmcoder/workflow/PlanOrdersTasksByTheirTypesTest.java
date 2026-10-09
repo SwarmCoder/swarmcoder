@@ -171,7 +171,9 @@ class PlanOrdersTasksByTheirTypesTest {
     // --- when it does not add the edge ---------------------------------------------------------
 
     @Test
-    void aPlanThatOrdersTheUserBeforeTheWriterGoesBackToThePlanner() {
+    void aPlanThatOrdersTheUserBeforeTheWriterWithNoFactForItIsTurnedRound() {
+        // Section 76 (live run 103): this went back to the planner until a planner wrote every
+        // edge of a plan this way round, twice, and was sent ten objections each time.
         Task model = task("Model", "Write Book.", Set.of(SHARED + "Book.java"), BOOK);
         Task service = task("Service", "Write the service.", Set.of(SHARED + "BooksService.java"),
             contract("BooksService", PKG + "BooksService", List.of("List<Book> getBooks()")));
@@ -180,9 +182,11 @@ class PlanOrdersTasksByTheirTypesTest {
 
         TaskGraphValidator.Verdict verdict = validator.validate(graph, null, null, null);
 
-        assertThat(verdict.violations()).anySatisfy(v -> assertThat(v)
-            .contains("'Service' uses Book").contains("must depend on 'Model'"));
-        assertThat(graph.dependencies()).containsExactly(new TaskEdge(service.id(), model.id()));
+        assertThat(verdict.violations()).noneMatch(v -> v.contains("'Service' uses Book"));
+        assertThat(verdict.warnings()).anyMatch(w -> w.startsWith("turned dependency:")
+            && w.contains("'Model' now finishes before 'Service'"));
+        assertThat(verdict.corrections()).hasSize(1);
+        assertThat(graph.dependencies()).containsExactly(new TaskEdge(model.id(), service.id()));
     }
 
     @Test
