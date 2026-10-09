@@ -44,6 +44,15 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **Every journey starts on the application as the tree gives it.** A journey that failed and
+  was corrected by its author was made again in the same container and the same tree, so an
+  application that keeps its data on disk still showed what the first attempt had saved, and
+  a correct application failed the corrected journey (live run 104). Each journey is now made
+  on its own copy of the built tree, in a container of its own, and both are thrown away
+  afterwards: at final integration, after a review, in `check_journey` and on the tree the
+  run started from. One journey no longer sees another's data either. The application is
+  started once per journey instead of once per batch.
+
 - **The task planner is no longer sent back for things the plan's own facts decide.** A
   planner on a small model wrote thirteen drafts of one plan and ended by putting six tasks'
   work into one. Four things are now put right by the checks and told to the planner as

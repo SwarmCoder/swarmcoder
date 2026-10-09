@@ -4097,8 +4097,9 @@ public class GreenfieldWorkflow {
 
     /**
      * Makes journeys on the tree the run STARTED from: a throwaway worktree at the start point,
-     * built with the contract's {@code compile} and {@code existing} commands, the application
-     * started the way the contract says, a real browser in the container. No model. Used by the
+     * built with the contract's {@code compile} and {@code existing} commands, then for each
+     * journey a copy of the built tree in a container of its own (section 77), the application
+     * started there the way the contract says, a real browser in that container. No model. Used by the
      * red check of the journeys and to try a corrected journey (section 69).
      *
      * @param label keeps this worktree and branch apart from another use in the same run
@@ -4114,7 +4115,8 @@ public class GreenfieldWorkflow {
             String buildFailed = null;
             JourneyRunner.Outcome outcome;
             if (!JourneyFile.canRun(spec)) {
-                outcome = JourneyRunner.run(null, spec, journeys, com.swarmcoder.verify.BlobSink.NONE, new StringBuilder());
+                outcome = JourneyRunner.run(null, spec, journeys,
+                    com.swarmcoder.verify.BlobSink.NONE, new StringBuilder());
             } else {
                 ExecTarget target = buildBoxes.use(worktree, "The red check of the journeys", true);
                 List<String> build = new ArrayList<>();
@@ -4137,8 +4139,11 @@ public class GreenfieldWorkflow {
                         break;
                     }
                 }
-                outcome = JourneyRunner.run(target, spec, journeys, com.swarmcoder.verify.BlobSink.NONE,
-                    new StringBuilder());
+                // Built once here; each journey is then made on its own copy of what was
+                // built, in its own container (section 77).
+                outcome = JourneyRunner.run(
+                    buildBoxes.cleanStarts(worktree, "A journey on the tree the run starts from"),
+                    spec, journeys, com.swarmcoder.verify.BlobSink.NONE, new StringBuilder());
             }
             // Read while the tree is still there, and only when a journey gives a reason to.
             Map<String, List<com.swarmcoder.verify.JourneyExpectations.Unentered>> unentered =

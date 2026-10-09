@@ -25,9 +25,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Makes journeys in a tree that has been built: starts the application the way the project's
+ * Makes journeys on a tree that has been built: starts the application the way the project's
  * contract says ({@code browser.serve}) and has the browser inside the container carry out each
- * journey from the entry page (section 63). No model, and nothing on this PC: outside a container
+ * journey from the entry page (section 63). Never in the tree itself: each journey is made in
+ * its own copy of it, in its own container (section 77). No model, and nothing on this PC: outside a container
  * with a browser the answer is "could not run", never a run here.
  *
  * <p>Unlike the browser stage of an ordinary verification, a journey that could not be made is
@@ -60,11 +61,35 @@ public final class JourneyRunner {
     }
 
     /**
-     * @param target   the container holding the built tree
+     * A place one journey is made in, and nothing else: a copy of the built tree as it stood, in
+     * a container nothing has been started in. Closing it throws both away.
+     */
+    public interface Start extends AutoCloseable {
+        ExecTarget target();
+
+        @Override
+        void close();
+    }
+
+    /** Hands out one {@link Start} per call; never the same one twice. */
+    @FunctionalInterface
+    public interface Starts {
+        /** @throws RuntimeException when no such place could be had; nothing is run then */
+        Start open();
+    }
+
+    /**
+     * Makes each journey on the application as the tree itself gives it (section 77, live run
+     * 104). Every journey gets its own {@link Start}: the application is started once per
+     * journey, in a copy of the tree, and what it wrote is thrown away with the copy. So a
+     * journey never meets what another journey saved, nor what an earlier attempt at the same
+     * journey saved - wherever the application keeps it.
+     *
+     * @param starts   where a journey is made; asked once per journey
      * @param contract the project's verification contract
      * @param log      the run's log of the stage; appended to
      */
-    public static Outcome run(ExecTarget target, VerifySpec contract,
+    public static Outcome run(Starts starts, VerifySpec contract,
                               List<JourneyFile.Journey> journeys, BlobSink blobs,
                               StringBuilder log) {
         if (!JourneyFile.canRun(contract)) {
@@ -74,27 +99,37 @@ public final class JourneyRunner {
         if (journeys == null || journeys.isEmpty()) {
             return new Outcome(null, null, List.of());
         }
+        if (starts == null) {
+            return new Outcome("there is no container to make the journeys in", null, List.of());
+        }
         VerifySpec.BrowserSpec browser = contract.browser();
         String entry = JourneyFile.entryUrl(browser);
-        List<VerifySpec.PageCheckSpec> checks = new ArrayList<>();
-        for (JourneyFile.Journey journey : journeys) {
-            checks.add(journey.toCheck(entry));
-        }
-        BrowserCheckResults results = new BrowserVerifier(blobs).run(target,
-            new VerifySpec.BrowserSpec(browser.serve(), browser.readyProbe(),
-                browser.readyTimeoutSeconds(), checks, browser.port()),
-            log == null ? new StringBuilder() : log);
-        if (results.couldNotTry()) {
-            return new Outcome(results.couldNotTryReason(), null, List.of());
-        }
-        List<PageCheck> pages = results.checks() == null ? List.of() : results.checks();
-        String didNotStart = didNotStart(pages);
-        if (didNotStart != null) {
-            return new Outcome(null, didNotStart, List.of());
-        }
+        StringBuilder said = log == null ? new StringBuilder() : log;
         List<JourneyFile.Result> made = new ArrayList<>();
-        for (int i = 0; i < journeys.size(); i++) {
-            made.add(JourneyFile.resultOf(journeys.get(i), i < pages.size() ? pages.get(i) : null));
+        for (JourneyFile.Journey journey : journeys) {
+            BrowserCheckResults results;
+            try (Start start = starts.open()) {
+                results = new BrowserVerifier(blobs).run(start.target(),
+                    new VerifySpec.BrowserSpec(browser.serve(), browser.readyProbe(),
+                        browser.readyTimeoutSeconds(), List.of(journey.toCheck(entry)),
+                        browser.port()),
+                    said);
+            } catch (RuntimeException e) {
+                // No clean place, no journey: one made on what an earlier one left proves nothing.
+                return new Outcome("journey \"" + journey.name() + "\" was not made, because a "
+                    + "copy of the tree in a container of its own could not be had: "
+                    + e.getMessage(), null, List.of());
+            }
+            if (results.couldNotTry()) {
+                return new Outcome(results.couldNotTryReason(), null, List.of());
+            }
+            List<PageCheck> pages = results.checks() == null ? List.of() : results.checks();
+            String didNotStart = didNotStart(pages);
+            if (didNotStart != null) {
+                // The same tree and the same command: the next start would end the same way.
+                return new Outcome(null, didNotStart, List.of());
+            }
+            made.add(JourneyFile.resultOf(journey, pages.isEmpty() ? null : pages.get(0)));
         }
         return new Outcome(null, null, List.copyOf(made));
     }

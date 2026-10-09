@@ -129,8 +129,8 @@ public class FinalIntegrator {
          * @param task         the task that claims the failed journeys
          * @param failed       its journeys that failed, each with the failing step and what the
          *                     page showed
-         * @param onMergedTree makes journeys in the merged tree's container: the application
-         *                     is started again and a browser carries them out
+         * @param onMergedTree makes journeys on the merged tree: for each, the application is
+         *                     started on a new copy of the tree and a browser carries it out
          * @param mergedTree   the merged tree itself, for a lookup that must see what the run
          *                     built (the author's other lookups read the project as it was
          *                     before the story)
@@ -622,8 +622,8 @@ public class FinalIntegrator {
     }
 
     /**
-     * Makes every journey the merged tree holds, in the container the tree was just built and
-     * verified in. Null when all passed or there is none; otherwise the failure the run stops on.
+     * Makes every journey the merged tree holds, each on its own copy of the tree that was just
+     * built and verified, in a container of its own (section 77). Null when all passed or there is none; otherwise the failure the run stops on.
      *
      * <p>A journey that could not be made is not passed over: the story has a screen, and
      * nothing else shows a person can use it. A journey of this run that fails names the task
@@ -653,14 +653,12 @@ public class FinalIntegrator {
         }
         Optional<VerifySpec> spec = VerifySpecLoader.loadTrusted(gitService.repoPath(), worktree);
         StringBuilder browserLog = new StringBuilder();
-        JourneyRunner.Outcome outcome;
-        ExecTarget target = null;
-        if (spec.isEmpty() || !JourneyFile.canRun(spec.get())) {
-            outcome = JourneyRunner.run(null, spec.orElse(null), journeys, BlobSink.NONE, browserLog);
-        } else {
-            target = boxes.use(worktree, "Final integration", true);
-            outcome = JourneyRunner.run(target, spec.get(), journeys, BlobSink.NONE, browserLog);
-        }
+        // Each journey on its own copy of the built tree, in its own container (section 77):
+        // what one journey saves is not there for the next, nor for a correction made later.
+        JourneyRunner.Starts starts = spec.isEmpty() || !JourneyFile.canRun(spec.get()) ? null
+            : boxes.cleanStarts(worktree, "A journey of final integration");
+        JourneyRunner.Outcome outcome =
+            JourneyRunner.run(starts, spec.orElse(null), journeys, BlobSink.NONE, browserLog);
         if (outcome.couldNotRun() != null || outcome.didNotStart() != null) {
             String why = outcome.couldNotRun() != null ? outcome.couldNotRun()
                 : "the application did not start in the merged tree: " + outcome.didNotStart();
@@ -698,13 +696,13 @@ public class FinalIntegrator {
         text.append("\n\nA journey fails when a person cannot do what it describes: the screen "
             + "is not reachable from the entry page, or what the step names is not on it.");
         log.warn("Run {}: {}", run.id(), text);
-        // Back to its author before any worker (section 69), while this container still holds
-        // the built tree: a correction is made in it at once.
-        if (owner != null && journeySendBack != null && target != null) {
-            ExecTarget live = target;
+        // Back to its author before any worker (section 69), while the built tree is still
+        // there: a correction is made at once, on a new copy of it, never on what the failed
+        // attempt left behind (section 77).
+        if (owner != null && journeySendBack != null && starts != null) {
             VerifySpec contract = spec.get();
             SentBack back = journeySendBack.review(owner, List.copyOf(ofOwner), worktree,
-                again -> JourneyRunner.run(live, contract, again, BlobSink.NONE,
+                again -> JourneyRunner.run(starts, contract, again, BlobSink.NONE,
                     new StringBuilder()));
             if (back != null && back.corrected()) {
                 return new Result(integrationBranch, text + "\n\nThe journey went back to its "

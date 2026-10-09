@@ -90,7 +90,8 @@ class AJourneyIsMadeOnATreeByHandTest {
             }
             long began = System.currentTimeMillis();
             JourneyRunner.Outcome outcome =
-                JourneyRunner.run(target, spec, journeys, BlobSink.NONE, log);
+                JourneyRunner.run(boxes.cleanStarts(tree, "A journey made by hand"), spec,
+                    journeys, BlobSink.NONE, log);
             System.out.println("[BY HAND] journeys made in "
                 + (System.currentTimeMillis() - began) / 1000 + " s: couldNotRun="
                 + outcome.couldNotRun() + " didNotStart=" + outcome.didNotStart());
