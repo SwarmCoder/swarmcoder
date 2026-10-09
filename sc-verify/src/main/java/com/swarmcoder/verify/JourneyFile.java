@@ -66,7 +66,35 @@ public final class JourneyFile {
 
     private static final Set<String> TOP_KEYS = Set.of("journey", "steps");
     private static final List<String> ACTIONS =
-        List.of("click", "fill", "press", "expectVisible", "expectHidden");
+        List.of("click", "fill", "select", "press", "expectVisible", "expectHidden",
+            "expectValue");
+    /** The steps that carry a {@code value}: what is typed, chosen, or expected to be held. */
+    private static final Set<String> WITH_VALUE = Set.of("fill", "select", "expectValue");
+
+    /**
+     * Every step a journey has, one line each, saying what it is for. Given wherever an author
+     * writes or corrects a journey, so that none has to look the vocabulary up (live run 100:
+     * a review spent five of its ten turns searching the project for how a journey chooses
+     * from a drop-down list, and there was no way to).
+     */
+    public static final String VOCABULARY =
+        "  - click: \"<selector>\"          # click a button, a link, a tab, a row\n"
+        + "  - fill: \"<selector>\"           # type into a text field\n"
+        + "    value: \"<what is typed>\"\n"
+        + "  - select: \"<selector>\"         # choose in a drop-down list or combobox\n"
+        + "    value: \"<the option, as it reads>\"\n"
+        + "  - press: \"Enter\"               # press a key\n"
+        + "  - expectVisible: \"<selector>\"  # this is on the page and can be seen\n"
+        + "  - expectHidden: \"<selector>\"   # this is not on the page, or cannot be seen\n"
+        + "  - expectValue: \"<selector>\"    # this field or drop-down list holds the value\n"
+        + "    value: \"<what it holds or shows as chosen>\"\n";
+
+    /** What an author must know about choosing, in two sentences. */
+    public static final String CHOOSING = "To choose an option use `select` on the control, "
+        + "with the option's text as `value` - never click the option: the options of a closed "
+        + "drop-down list are not on the page for a click or an expectVisible to find. What a "
+        + "field or a drop-down list currently holds is checked with `expectValue`, not with "
+        + "expectVisible.";
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
 
     private JourneyFile() {}
@@ -180,7 +208,8 @@ public final class JourneyFile {
         JsonNode list = root.path("steps");
         if (!list.isArray() || list.isEmpty()) {
             problems.add("`steps` is missing or empty: a list, each entry one of click, fill "
-                + "(with value), press, expectVisible, expectHidden");
+                + "(with value), select (with value), press, expectVisible, expectHidden, "
+                + "expectValue (with value)");
         } else if (list.size() > MAX_STEPS) {
             problems.add("`steps` has " + list.size() + " entries; a journey has at most "
                 + MAX_STEPS + ". Write several journeys instead");
@@ -193,10 +222,10 @@ public final class JourneyFile {
             }
             if (problems.isEmpty()) {
                 VerifySpec.StepSpec last = steps.get(steps.size() - 1);
-                if (last.expectVisible() == null && last.expectHidden() == null) {
+                if (!last.looks()) {
                     problems.add("the last step is `" + last.describe() + "`. A journey ends by "
-                        + "looking: its last step is expectVisible or expectHidden, naming what "
-                        + "the person sees when it has worked");
+                        + "looking: its last step is expectVisible, expectHidden or expectValue, "
+                        + "naming what the person sees when it has worked");
                 }
             }
         }
@@ -233,13 +262,27 @@ public final class JourneyFile {
                 + "); it has " + (actions.isEmpty() ? "none" : String.join(" and ", actions)));
             return null;
         }
-        boolean fills = actions.get(0).equals("fill");
-        if (fills && !node.has("value")) {
-            problems.add(where + " fills a field and gives no `value` to type into it");
+        String action = actions.get(0);
+        boolean valued = WITH_VALUE.contains(action);
+        if (valued && !node.has("value")) {
+            problems.add(where + (action.equals("fill")
+                ? " fills a field and gives no `value` to type into it"
+                : action.equals("select")
+                    ? " selects in a control and gives no `value`: the option to choose, as it "
+                        + "reads on the screen"
+                    : " expects a control to hold something and gives no `value`: what the "
+                        + "field holds, or the option the list shows as chosen"));
             sound = false;
         }
-        if (!fills && node.has("value")) {
-            problems.add(where + " has a `value` but does not `fill`: only fill types a value");
+        if (valued && !action.equals("fill") && node.has("value")
+                && node.get("value").isValueNode() && node.get("value").asText("").isBlank()) {
+            problems.add(where + ": the `value` of " + action + " is empty");
+            sound = false;
+        }
+        if (!valued && node.has("value")) {
+            problems.add(where + " has a `value` but is a " + action + ": only fill (what is "
+                + "typed), select (the option chosen) and expectValue (what the control holds) "
+                + "take a value");
             sound = false;
         }
         if (!sound) {
@@ -247,7 +290,7 @@ public final class JourneyFile {
         }
         return new VerifySpec.StepSpec(text(node, "click"), text(node, "fill"),
             text(node, "value"), text(node, "press"), text(node, "expectVisible"),
-            text(node, "expectHidden"));
+            text(node, "expectHidden"), text(node, "select"), text(node, "expectValue"));
     }
 
     /** A key that asks for a page to be loaded, in any of the spellings a browser driver has. */

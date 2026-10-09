@@ -129,13 +129,30 @@ public record VerifySpec(
      *
      * @param click         the element to click
      * @param fill          the field to type into, with {@code value}
-     * @param value         what is typed into {@code fill}
+     * @param value         what is typed into {@code fill}, chosen in {@code select}, or held
+     *                      by the control of {@code expectValue}
      * @param press         a key pressed on the page, e.g. {@code Enter}
      * @param expectVisible an element that must be (or become) visible
      * @param expectHidden  an element that must be absent or hidden
+     * @param select        a control a person chooses one of several options in - a drop-down
+     *                      list, a combobox - with {@code value}: the option, by the text it
+     *                      shows or by its value. An option of a closed drop-down list is not on
+     *                      the page for a click to find (live run 100), so choosing is a step
+     *                      of its own
+     * @param expectValue   a field or a control that must hold (or come to hold) {@code value}:
+     *                      what a text field contains, or the option a drop-down list shows as
+     *                      chosen. What a control holds is not text on the page, so
+     *                      {@code expectVisible} cannot see it
      */
     public record StepSpec(String click, String fill, String value, String press,
-                           String expectVisible, String expectHidden) {
+                           String expectVisible, String expectHidden, String select,
+                           String expectValue) {
+
+        /** A step as it was before a journey could choose an option or read a control. */
+        public StepSpec(String click, String fill, String value, String press,
+                        String expectVisible, String expectHidden) {
+            this(click, fill, value, press, expectVisible, expectHidden, null, null);
+        }
 
         /** The step in words, for the log and for the result: {@code click text=Logbook}. */
         public String describe() {
@@ -144,6 +161,9 @@ public record VerifySpec(
             }
             if (fill != null) {
                 return "fill " + fill;
+            }
+            if (select != null) {
+                return "select \"" + (value == null ? "" : value) + "\" in " + select;
             }
             if (press != null) {
                 return "press " + press;
@@ -154,7 +174,16 @@ public record VerifySpec(
             if (expectHidden != null) {
                 return "expect hidden " + expectHidden;
             }
+            if (expectValue != null) {
+                return "expect value \"" + (value == null ? "" : value) + "\" in "
+                    + expectValue;
+            }
             return "nothing";
+        }
+
+        /** True for a step that looks and changes nothing. */
+        public boolean looks() {
+            return expectVisible != null || expectHidden != null || expectValue != null;
         }
     }
 

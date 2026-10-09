@@ -120,6 +120,43 @@ class PlanOrdersTasksByTheirTypesTest {
     }
 
     @Test
+    void aTaskThatDeliversNoContractIsToldTheTypesOfTheTasksItWaitsFor() {
+        // Live run 100: the planner now writes what a task delivers in a sentence or two, and
+        // a task with no contract of its own - a screen - showed no use of any type. Its
+        // workers asked for the model type's shape six times.
+        Task model = task("Model", "Write the model.", Set.of(SHARED + "Book.java"), BOOK);
+        Task service = task("Service", "Write the service.",
+            Set.of(SHARED + "BooksService.java"), BOOKS_SERVICE);
+        Task view = task("View", "Show what is stored and let a person add to it.",
+            Set.of("client/src/main/java/com/acme/client/MainView.java"));
+        Task alone = task("Notes", "Write the release notes.", Set.of("NOTES.md"));
+        TaskGraph graph = graph(List.of(model, service, view, alone), List.of(
+            new TaskEdge(model.id(), service.id()), new TaskEdge(service.id(), view.id())));
+        DesignDocument design = new DesignDocument(UUID.randomUUID(), 1, "books", List.of(),
+            List.of(), List.of(BOOK, BOOKS_SERVICE), List.of(), null, null);
+        String aloneBefore = alone.instructions();
+
+        List<String> logged = TypeDependencyOrder.annotate(graph, design);
+
+        assertThat(view.instructions()).contains(TypeDependencyOrder.BRIEF_HEADING)
+            .as("the type of the task it waits for, with its members and where it lives")
+            .contains("  - " + PKG + "BooksService{")
+            .contains("written by task 'Service', which finishes before yours starts")
+            .as("and the type that one names in its members, written by a task before both")
+            .contains("  - " + PKG + "Book{")
+            .contains("written by task 'Model'");
+        assertThat(view.instructions().indexOf(PKG + "BooksService{"))
+            .as("nearest first").isLessThan(view.instructions().indexOf(PKG + "Book{"));
+        assertThat(alone.instructions())
+            .as("a task that waits for nothing is told nothing").isEqualTo(aloneBefore);
+        assertThat(logged).anySatisfy(line -> assertThat(line).contains("'View'"));
+
+        String once = view.instructions();
+        TypeDependencyOrder.annotate(graph, design);
+        assertThat(view.instructions()).as("idempotent").isEqualTo(once);
+    }
+
+    @Test
     void validatingTheStoredPlanAgainAddsNothingMore() {
         Run39 plan = run39();
         validator.validate(plan.graph, null, null, plan.design);

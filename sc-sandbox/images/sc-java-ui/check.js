@@ -15,6 +15,7 @@
  *     "checks": [
  *       { "url": "/", "assertNoConsoleErrors": true, "assertVisible": ["h1"], "screenshot": true },
  *       { "url": "/", "steps": [ { "label": "click text=Orders", "click": "text=Orders" },
+ *                                { "label": "select ...", "select": "#state", "value": "Open" },
  *                                { "label": "expect visible #new", "expectVisible": "#new" } ] }
  *     ]
  *   }
@@ -119,21 +120,27 @@ async function checkOne(context, check, baseUrl, navTimeout) {
       }
       try {
         if (step.click != null) {
-          await page.locator(step.click).first().click({ timeout: stepTimeout });
+          await seen(page, step.click).click({ timeout: stepTimeout });
           await page.waitForLoadState('networkidle', { timeout: stepTimeout }).catch(() => {});
         } else if (step.fill != null) {
-          await page.locator(step.fill).first().fill(step.value || '', { timeout: stepTimeout });
+          await seen(page, step.fill).fill(step.value || '', { timeout: stepTimeout });
+        } else if (step.select != null) {
+          await choose(page, step.select, step.value || '', stepTimeout);
+          await page.waitForLoadState('networkidle', { timeout: stepTimeout }).catch(() => {});
         } else if (step.press != null) {
           await page.keyboard.press(step.press);
           await page.waitForLoadState('networkidle', { timeout: stepTimeout }).catch(() => {});
         } else if (step.expectVisible != null) {
-          await page.locator(step.expectVisible).first()
+          await seen(page, step.expectVisible)
             .waitFor({ state: 'visible', timeout: stepTimeout });
         } else if (step.expectHidden != null) {
-          await page.locator(step.expectHidden).first()
+          await seen(page, step.expectHidden)
             .waitFor({ state: 'hidden', timeout: stepTimeout });
+        } else if (step.expectValue != null) {
+          await holds(page, step.expectValue, step.value || '', stepTimeout);
         } else {
-          throw new Error('a step must click, fill, press, expectVisible or expectHidden');
+          throw new Error('a step must click, fill, select, press, expectVisible, expectHidden '
+            + 'or expectValue');
         }
         assertions.push({ selector: name, passed: true, message: 'done' });
       } catch (e) {
@@ -192,11 +199,116 @@ async function checkOne(context, check, baseUrl, navTimeout) {
 }
 
 /*
+ * What a step acts on or looks at: the first match A PERSON CAN SEE. A selector's first match in
+ * the document may be one nobody sees - the option of a closed drop-down list that reads the same
+ * as a row of the table below it (live run 100: the row was there and `text=...` found the
+ * option first, so the journey failed on a screen that was right). So: click and fill take the
+ * first visible match, expectVisible passes when any match is visible, and expectHidden passes
+ * when none is.
+ */
+function seen(page, selector) {
+  return page.locator(selector).locator('visible=true').first();
+}
+
+// The drop-down list a selector names: the element itself, or the one list inside it.
+const LIST_OF = `(el) => {
+  if (el.tagName === 'SELECT') { return el; }
+  const inside = el.querySelectorAll ? el.querySelectorAll('select') : [];
+  if (inside.length === 1) { return inside[0]; }
+  if (el.shadowRoot && el.shadowRoot.querySelectorAll('select').length === 1) {
+    return el.shadowRoot.querySelector('select');
+  }
+  return null;
+}`;
+
+/*
+ * Chooses one option, as a person does. A drop-down list of the browser's own is chosen in by
+ * the option's text (or its value); what it offers is in the failure when it has no such option.
+ * A control that is not one - a combobox the application draws itself - is opened by a click and
+ * the option is clicked where it then appears.
+ */
+async function choose(page, selector, wanted, timeout) {
+  const control = seen(page, selector);
+  await control.waitFor({ state: 'visible', timeout });
+  const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  const options = await control.evaluate(new Function('el', `
+    const list = (${LIST_OF})(el);
+    return list === null ? null : Array.from(list.options).map((option) =>
+      [(option.label || option.textContent || '').replace(/\\s+/g, ' ').trim(), option.value]);
+  `));
+  if (options === null) {
+    await control.click({ timeout });
+    const option = page.locator('role=option[name=' + JSON.stringify(wanted) + ']')
+      .locator('visible=true').first();
+    try {
+      await option.click({ timeout });
+    } catch (e) {
+      throw new Error('the control opened and showed no option "' + wanted + '" to click');
+    }
+    return;
+  }
+  let index = options.findIndex((option) => option[0] === wanted.trim());
+  if (index < 0) {
+    index = options.findIndex((option) => option[1] === wanted);
+  }
+  if (index < 0) {
+    index = options.findIndex((option) => same(option[0], wanted));
+  }
+  if (index < 0) {
+    throw new Error('the list has no option "' + wanted + '"; it offers: '
+      + options.slice(0, 20).map((option) => '"' + option[0] + '"').join(', '));
+  }
+  await control.evaluate(new Function('el', 'index', `
+    const list = (${LIST_OF})(el);
+    if (list.disabled) { throw new Error("the list is disabled: nothing can be chosen in it"); }
+    list.selectedIndex = index;
+    list.dispatchEvent(new Event('input', { bubbles: true }));
+    list.dispatchEvent(new Event('change', { bubbles: true }));
+  `), index);
+}
+
+/*
+ * Waits until a field or a control holds a value: what a text field contains, or the option a
+ * drop-down list shows as chosen (by its text or its value). What it held instead is in the
+ * failure.
+ */
+async function holds(page, selector, wanted, timeout) {
+  const control = seen(page, selector);
+  await control.waitFor({ state: 'visible', timeout });
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const held = await control.evaluate(new Function('el', `
+      const list = (${LIST_OF})(el);
+      if (list !== null) {
+        const chosen = list.selectedOptions[0];
+        return chosen ? [(chosen.label || chosen.textContent || ''), chosen.value] : [''];
+      }
+      const all = [];
+      if (typeof el.value === 'string' && el.value !== '') { all.push(el.value); }
+      if (el.getAttribute('aria-valuetext')) { all.push(el.getAttribute('aria-valuetext')); }
+      if (all.length === 0) { all.push(el.innerText || el.textContent || ''); }
+      return all;
+    `));
+    const clean = held.map((one) => String(one).replace(/\s+/g, ' ').trim());
+    if (clean.includes(wanted.replace(/\s+/g, ' ').trim())) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('it holds "' + clean[0].slice(0, 120) + '", not "' + wanted + '"');
+    }
+    await page.waitForTimeout(200);
+  }
+}
+
+/*
  * The page as a person and a selector meet it, read from the browser with no model: the roles
  * and accessible names of what is on it, the placeholders of its fields (a placeholder is often
- * taken for a name), and its visible text. Bounded, because it travels through the exec channel
- * and is then shown to a model: at most 100 elements, 20 placeholders, 1,200 characters of text
- * and 4,000 characters in all. Never throws; '' when nothing could be read.
+ * taken for a name), what each drop-down list offers and shows as chosen (an author cannot
+ * correct a journey that chooses without knowing the options, and the text of the page lists
+ * them as if they were on it), and its visible text. Bounded, because it travels through the
+ * exec channel and is then shown to a model: at most 100 elements, 10 lists of 20 options, 20
+ * placeholders, 1,200 characters of text and 4,000 characters in all. Never throws; '' when
+ * nothing could be read.
  */
 async function pageSeen(page) {
   const parts = [];
@@ -231,6 +343,43 @@ async function pageSeen(page) {
     }
     if (lines.length) {
       parts.push('elements, as role "accessible name":\n' + lines.join('\n'));
+    }
+  } catch (ignored) {
+    // a reading, not a result
+  }
+  try {
+    const lists = await page.evaluate(() => {
+      const found = [];
+      const walk = (root) => {
+        for (const el of root.querySelectorAll('*')) {
+          if (el.tagName === 'SELECT' && found.length < 10) {
+            found.push(el);
+          }
+          if (el.shadowRoot) {
+            walk(el.shadowRoot);
+          }
+        }
+      };
+      walk(document);
+      return found.map((list) => {
+        const label = list.getAttribute('aria-label')
+          || (list.labels && list.labels[0] ? list.labels[0].innerText : '')
+          || list.getAttribute('name') || list.id || '';
+        const chosen = list.selectedOptions[0];
+        return [label, chosen ? (chosen.label || chosen.textContent) : '',
+          Array.from(list.options).slice(0, 20).map((o) => o.label || o.textContent),
+          list.options.length];
+      });
+    });
+    const lines = lists.map((list) =>
+      '  ' + (clean(list[0], 120) ? '"' + clean(list[0], 120) + '"' : 'a list with no label')
+        + ' shows "' + clean(list[1], 60) + '"; it offers '
+        + list[2].map((option) => '"' + clean(option, 60) + '"').join(', ')
+        + (list[3] > list[2].length ? ' and ' + (list[3] - list[2].length) + ' more' : ''));
+    if (lines.length) {
+      parts.push('drop-down lists (a `select` step chooses in one; an option is not on the '
+        + 'page for a click or an expectVisible to find, and what a list shows as chosen is '
+        + 'read with expectValue):\n' + lines.join('\n'));
     }
   } catch (ignored) {
     // a reading, not a result

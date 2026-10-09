@@ -99,10 +99,14 @@ public final class DraftTools {
     private final List<DesignFinding> kept = new ArrayList<>();
     private boolean remindedToKeep;
 
-    /** The most lines of a lookup's result one finding carries. */
-    static final int FINDING_LINES = 20;
+    /**
+     * The most lines of a lookup's result one finding carries. Forty, not twenty (live run 100):
+     * a whole small class of a reference example is 30 to 40 lines after its header, and input
+     * tokens on the workers' server are cheap beside the lookups a worker makes without them.
+     */
+    static final int FINDING_LINES = 40;
     /** The most characters of code one finding carries; cut at a line's end. */
-    static final int FINDING_SNIPPET_CHARS = 1_600;
+    static final int FINDING_SNIPPET_CHARS = 3_200;
     /** The most characters of the sentence. */
     static final int FINDING_NOTE_CHARS = 400;
     /** A safety stop, not a budget: how many findings one design may carry. */
@@ -235,10 +239,23 @@ public final class DraftTools {
                             + wanted + " is outside it.";
                     }
                 }
-                boolean cut = last - first + 1 > FINDING_LINES;
-                if (cut) {
-                    last = first + FINDING_LINES - 1;
+                // More lines than a finding carries: sent back, never cut to its first lines.
+                // Live run 100: five of thirteen findings named a whole file from the line
+                // after its licence header; each was kept as its first twenty lines - the
+                // package line, the imports and a comment - and the workers given them read
+                // the same five files again. The head of a range is not what the architect
+                // meant, and only it knows which lines are.
+                if (last - first + 1 > FINDING_LINES) {
+                    return "NOT KEPT: " + (wanted.isEmpty() ? "that lookup's result has "
+                        + all.length + " lines" : wanted + " is " + (last - first + 1)
+                        + " lines") + ", and a finding carries at most " + FINDING_LINES
+                        + ". Name the lines that DO the thing the note says (first-last, counted "
+                        + "from the first line of that result) - not a file's package line, its "
+                        + "imports or its comments. Or look the one member or type up on its "
+                        + "own (body_of <Type>#<member>, body_of <Type>) and keep that result "
+                        + "whole. Two places that both matter are two findings.";
                 }
+                boolean cut = false;
                 StringBuilder text = new StringBuilder();
                 int taken = 0;
                 for (int i = first; i <= last; i++) {
@@ -252,9 +269,8 @@ public final class DraftTools {
                 snippet = text.toString().stripTrailing();
                 took = taken == 0 ? "no line (the first one is longer than a finding carries)"
                     : "lines " + first + "-" + (first + taken - 1) + " of " + all.length
-                    + (cut ? " (a finding carries at most " + FINDING_LINES + " lines and "
-                        + FINDING_SNIPPET_CHARS + " characters; name other lines, or keep a "
-                        + "second finding, if the part that matters is further down)" : "");
+                    + (cut ? " (a finding carries at most " + FINDING_SNIPPET_CHARS
+                        + " characters; keep the rest as a second finding if it matters)" : "");
             }
             String sentence = note.strip().replaceAll("\\s+", " ");
             if (sentence.length() > FINDING_NOTE_CHARS) {
@@ -274,8 +290,9 @@ public final class DraftTools {
                         + "the ceiling, so this one was not kept.";
                 }
                 kept.add(finding);
-                log.info("keep_for_workers: [{}] from {} ({}), {} kept", subject == null
-                    ? "the whole project" : subject, source, took, kept.size());
+                log.info("keep_for_workers: [{}] from {} ({}), {} characters, {} kept",
+                    subject == null ? "the whole project" : subject, source, took,
+                    finding.size(), kept.size());
                 return "KEPT for " + (subject == null ? "every task (the whole project)"
                     : "the tasks that build or change " + subject) + ": " + took + " of "
                     + source + ". " + kept.size() + " kept so far.";
@@ -330,7 +347,8 @@ public final class DraftTools {
                         + "lookup it came from, as you called it - the tool, a space, its "
                         + "argument (for example: body_of OrderService#save). lines: first-last "
                         + "within that lookup's result (for example 3-14; at most "
-                        + FINDING_LINES + " lines), empty for all of a short result, or none "
+                        + FINDING_LINES + " lines - the lines that do the thing, not a "
+                        + "file's imports), empty for all of a short result, or none "
                         + "for the sentence alone. note: the fact in one sentence. You never "
                         + "type the code: the lines are copied from the lookup.",
                     this, DraftTools.class.getMethod("keepForWorkers", String.class,

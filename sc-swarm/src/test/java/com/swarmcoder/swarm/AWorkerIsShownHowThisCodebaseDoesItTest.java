@@ -288,6 +288,19 @@ class AWorkerIsShownHowThisCodebaseDoesItTest {
         assertThat(librarian.assembleBrief(project, sentenceOnly).renderedMarkdown())
             .as("a sentence is not code: the example stands")
             .contains("How this codebase does this");
+
+        // Live run 100: a task that delivers no contract carries findings about what it is
+        // built on, not about what it builds; "every contract it delivers" is true of nothing.
+        Task buildsOnIt = taskWithNoContracts();
+        buildsOnIt.setArchitectFindings(List.of(new com.swarmcoder.domain.DesignFinding(
+            UUID.fromString("00000000-0000-0000-0000-0000000000c6"), "OrderService",
+            "body_of com.ledgerworks.sample.PayslipServiceImpl#save",
+            "A caller of a service does it like this.", "session.commit();")));
+        assertThat(librarian.assembleBrief(project, buildsOnIt).renderedMarkdown())
+            .as("it keeps what a task with no findings is shown, and has the findings as well")
+            .isEqualTo(librarian.assembleBrief(project, taskWithNoContracts())
+                .renderedMarkdown())
+            .doesNotContain("How to build this is in your task");
     }
 
     @Test

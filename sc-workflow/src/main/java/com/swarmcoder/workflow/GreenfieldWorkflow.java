@@ -1098,6 +1098,7 @@ public class GreenfieldWorkflow {
                 }
                 case TEST_AUTHORING -> {
                     log("Processing TEST_AUTHORING...");
+                    handOverAgainOnce(run, "TEST_AUTHORING");
                     // The test author writes executable acceptance tests into the protected
                     // dir BEFORE any worker runs (spec §14) — committed on the run's OWN ref,
                     // swarm/tests/<runId>, cut from the pinned base. Not on the delivery branch:
@@ -1148,6 +1149,7 @@ public class GreenfieldWorkflow {
                 case EXECUTING -> {
                     log("Processing EXECUTING...");
                     settleJourneyOwnersOnce(run, "EXECUTING");
+                    handOverAgainOnce(run, "EXECUTING");
                     if (run.nothingToBuild()) {
                         log("EXECUTING - nothing is built: every check of this run was already "
                             + "satisfied by the code it started from, so no worker is started. "
@@ -1619,6 +1621,11 @@ public class GreenfieldWorkflow {
                     + path + ") of task '" + task.title() + "' failed in the browser. Before "
                     + "any worker repairs anything it goes back to its author, with the "
                     + "failing step and what the page showed.");
+                // What the author is shown, on the run's log (live run 100: whether the page
+                // reading named a list's options could not be told afterwards).
+                logger.info("The page as the browser read it at the failing step of {}: {}", path,
+                    result.seen() == null ? "(no reading)"
+                        : result.seen().replaceAll("\\s*\\R\\s*", " | "));
                 TestAuthorClient.JourneyReviewed reviewed = roles.testAuthor()
                     .reviewFailedJourney(worktree, mergedTree, task, design, storyCriteria,
                         path, content, JourneysOfAPlan.sendBackEvidence(result));
@@ -1721,6 +1728,52 @@ public class GreenfieldWorkflow {
     }
 
     /** The runs whose journeys' owners were settled in this process; see below. */
+    private final Set<UUID> handedOverAgain =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Before the tests are written and before workers build, once per run in this process:
+     * each task carries the architect's findings today's rule gives it, and is told the types
+     * of the tasks it waits for (section 74). At PLAN both are done as the plan is accepted;
+     * here a plan saved before a rule changed is put right - a run resumed from a later stage
+     * (live run 100's screen task was given none of thirteen findings; a rerun from its saved
+     * plan would otherwise start its workers with none again). Changes nothing, and says
+     * nothing, when every task already carries what it would be given.
+     */
+    private void handOverAgainOnce(Run run, String stage) {
+        if (run.taskGraphId() == null || run.designId() == null
+                || !handedOverAgain.add(run.id())) {
+            return;
+        }
+        try {
+            TaskGraph graph = artifactStore.root().taskGraphs.get(run.taskGraphId());
+            DesignDocument design = artifactStore.root().designs.get(run.designId());
+            if (graph == null || design == null || graph.tasks() == null) {
+                return;
+            }
+            boolean changed = false;
+            if (ArchitectHandover.stale(graph, design)) {
+                for (String line : ArchitectHandover.attach(graph, design)) {
+                    log(stage + ": " + line);
+                }
+                changed = true;
+            }
+            for (String line : TypeDependencyOrder.annotate(graph, design)) {
+                log(stage + ": " + line);
+                changed = true;
+            }
+            if (changed) {
+                graph.tasks().forEach(artifactStore::saveTask);
+                log(stage + ": this plan was accepted before today's rules for what a task is "
+                    + "handed; its tasks now carry the findings and the types those rules "
+                    + "give them. Nothing else of the plan changed.");
+            }
+        } catch (RuntimeException e) {
+            log(stage + ": what each task is handed could not be brought up to date (" + e
+                + "); the tasks keep what the plan recorded.");
+        }
+    }
+
     private final Set<UUID> journeyOwnersSettled =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
 

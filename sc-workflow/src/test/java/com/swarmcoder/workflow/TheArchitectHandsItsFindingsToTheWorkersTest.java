@@ -22,6 +22,7 @@ import com.swarmcoder.domain.DesignDocument;
 import com.swarmcoder.domain.DesignFinding;
 import com.swarmcoder.domain.SwarmPolicy;
 import com.swarmcoder.domain.Task;
+import com.swarmcoder.domain.TaskEdge;
 import com.swarmcoder.domain.TaskGraph;
 import com.swarmcoder.domain.TaskState;
 import com.swarmcoder.inference.VllmClient;
@@ -201,6 +202,107 @@ class TheArchitectHandsItsFindingsToTheWorkersTest {
 
         assertThat(ArchitectHandover.forTask(task, design(aboutService, aboutScreen),
             ArchitectHandover.DEFAULT_MAX_CHARS).findings()).containsExactly(aboutScreen);
+    }
+
+    @Test
+    void aTaskThatWaitsForAnotherIsGivenWhatWasEstablishedAboutWhatThatOneDelivers() {
+        // Live run 100: the facts about how a screen is written against a service were kept
+        // as facts about the service's contract. The task that wrote the screen delivered no
+        // contract and was given none of them.
+        Task model = task("Order type", Set.of(), order);
+        Task api = task("Order service", Set.of(), service);
+        Task view = task("The screen that lists orders", Set.of("client/src/main/java/Main.java"));
+        TaskGraph graph = new TaskGraph(UUID.randomUUID(), 1, null,
+            new ArrayList<>(List.of(model, api, view)), new ArrayList<>(List.of(
+                new TaskEdge(model.id(), api.id()), new TaskEdge(api.id(), view.id()))));
+        DesignDocument design = design(aboutOrder, aboutService, aboutProject, aboutNothingBuilt);
+
+        assertThat(ArchitectHandover.forTask(view, design, ArchitectHandover.DEFAULT_MAX_CHARS)
+            .findings()).as("taken alone it delivers nothing and reserves no such type")
+            .containsExactly(aboutProject);
+        assertThat(ArchitectHandover.forTask(view, graph, design,
+            ArchitectHandover.DEFAULT_MAX_CHARS).findings())
+            .as("the whole project first, then the task it waits for directly, then the one "
+                + "that one waits for; nothing about what no task builds")
+            .containsExactly(aboutProject, aboutService, aboutOrder);
+        assertThat(ArchitectHandover.forTask(model, graph, design,
+            ArchitectHandover.DEFAULT_MAX_CHARS).findings())
+            .as("a task is not given what the tasks AFTER it are about")
+            .containsExactly(aboutOrder, aboutProject);
+
+        view.setArchitectFindings(new ArrayList<>(List.of(aboutProject)));
+        model.setArchitectFindings(new ArrayList<>(List.of(aboutOrder, aboutProject)));
+        api.setArchitectFindings(new ArrayList<>(List.of(aboutService, aboutProject, aboutOrder)));
+        assertThat(ArchitectHandover.stale(graph, design))
+            .as("a plan accepted before this rule is seen to be behind it").isTrue();
+        ArchitectHandover.attach(graph, design);
+        assertThat(view.architectFindings())
+            .containsExactly(aboutProject, aboutService, aboutOrder);
+        assertThat(ArchitectHandover.stale(graph, design)).isFalse();
+    }
+
+    @Test
+    void aRangeLongerThanAFindingCarriesIsSentBackAndNeverKeptAsItsFirstLines()
+            throws Exception {
+        // Live run 100: five of thirteen findings named a file from the line after its
+        // header to its end and were kept as the first twenty lines - package and imports.
+        Path app = world.resolve("app");
+        write(app.resolve("pom.xml"), "<project><artifactId>app</artifactId></project>");
+        StringBuilder source = new StringBuilder("package com.acme.shop;\n\n");
+        for (int i = 0; i < DraftTools.FINDING_LINES + 5; i++) {
+            source.append("import java.util.Thing").append(i).append(";\n");
+        }
+        source.append("\npublic class Catalog {\n    public void register() { Registry.add(this); }\n}\n");
+        write(app.resolve("src/main/java/com/acme/shop/Catalog.java"), source.toString());
+        int registers = (int) source.toString().lines().takeWhile(l -> !l.contains("register()"))
+            .count() + 1;
+        Librarian librarian = new Librarian(new Context7Client("http://localhost:1/sse"), null,
+            List.of(), app, null, world.resolve("cache"));
+        String lookup = "project/src/main/java/com/acme/shop/Catalog.java";
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(
+                conversation -> designJson(),
+                (turn, conversation) -> switch (turn) {
+                    case 1 -> ScriptedAgentLlm.Turn.call("read_file", Map.of("path", lookup));
+                    case 2 -> ScriptedAgentLlm.Turn.call("keep_for_workers", Map.of(
+                        "about", "Rating", "lookup", "read_file " + lookup, "lines", "",
+                        "note", "A catalog registers itself."));
+                    case 3 -> ScriptedAgentLlm.Turn.call("keep_for_workers", Map.of(
+                        "about", "Rating", "lookup", "read_file " + lookup,
+                        "lines", "1-" + (DraftTools.FINDING_LINES + 1),
+                        "note", "A catalog registers itself."));
+                    case 4 -> ScriptedAgentLlm.Turn.call("keep_for_workers", Map.of(
+                        "about", "Rating", "lookup", "read_file " + lookup,
+                        "lines", (registers - 3) + "-" + (registers + 3),
+                        "note", "A catalog registers itself."));
+                    case 5 -> ScriptedAgentLlm.Turn.call("check_design", Map.of("design", designJson()));
+                    default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("finalJson", ""));
+                })) {
+            VllmClient client = new VllmClient(llm.baseUrl(), null, "scripted", true);
+            CloudGate gate = new CloudGate(10_000_000, null);
+            ArchitectClient architect = new ArchitectClient(client, gate);
+            architect.setLookupAgent(new LookupAgent(librarian.curator(), librarian, app, gate,
+                new KoogAgentRuntime(), null, null));
+
+            DesignDocument design = architect.design("Let a customer rate a title");
+
+            assertThat(llm.sessionRequests.get(0))
+                .as("told what a finding is for, in words that name no framework")
+                .contains("with the tasks built on it")
+                .contains("what the compiler will not tell a worker")
+                .contains("never a file's package line and imports");
+            assertThat(llm.sessionRequests.get(2)).as("a whole long result is not kept")
+                .contains("NOT KEPT: that lookup's result has")
+                .contains("a finding carries at most " + DraftTools.FINDING_LINES)
+                .contains("Name the lines that DO the thing");
+            assertThat(llm.sessionRequests.get(3)).as("nor a named range that is too long")
+                .contains("NOT KEPT: 1-" + (DraftTools.FINDING_LINES + 1) + " is "
+                    + (DraftTools.FINDING_LINES + 1) + " lines");
+            assertThat(design.findings()).hasSize(1);
+            assertThat(design.findings().get(0).snippet())
+                .as("what is kept are the lines the architect named, not the head of the file")
+                .contains("public void register() { Registry.add(this); }")
+                .doesNotContain("package com.acme.shop");
+        }
     }
 
     @Test

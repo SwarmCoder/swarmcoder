@@ -96,14 +96,21 @@ public final class JourneyExpectations {
         return texts;
     }
 
-    /** True when a step does something a person does: fill, click or press. */
+    /** True when a step does something a person does: fill, select, click or press. */
     static boolean changes(VerifySpec.StepSpec step) {
-        return step.fill() != null || step.click() != null || step.press() != null;
+        return step.fill() != null || step.click() != null || step.press() != null
+            || step.select() != null;
     }
 
-    /** How many steps of the journey change something. */
+    /**
+     * How many things a person does in the journey. A {@code select} counts as two: it stands
+     * for opening the control and choosing in it, which a journey written before that step
+     * existed spells as two clicks or as a click and key presses - so a correction that turns
+     * those into one {@code select} uses the screen no less (live run 100).
+     */
     public static int changing(JourneyFile.Journey journey) {
-        return (int) journey.steps().stream().filter(JourneyExpectations::changes).count();
+        return journey.steps().stream()
+            .mapToInt(step -> step.select() != null ? 2 : changes(step) ? 1 : 0).sum();
     }
 
     private static int filling(JourneyFile.Journey journey) {
@@ -127,7 +134,10 @@ public final class JourneyExpectations {
         List<String> typed = new ArrayList<>();
         for (int i = 0; i < journey.steps().size(); i++) {
             VerifySpec.StepSpec step = journey.steps().get(i);
-            if (step.fill() != null && step.value() != null && !step.value().isBlank()) {
+            // What a step types, and what it chooses: a chosen option's text was put there
+            // by the journey as much as a typed one, and the screen may show it afterwards.
+            if ((step.fill() != null || step.select() != null) && step.value() != null
+                    && !step.value().isBlank()) {
                 typed.add(step.value().strip().toLowerCase(Locale.ROOT));
             }
             if (step.expectVisible() == null) {
@@ -201,7 +211,7 @@ public final class JourneyExpectations {
             return null;
         }
         VerifySpec.StepSpec last = journey.steps().get(journey.steps().size() - 1);
-        if (last.expectVisible() == null) {
+        if (last.expectVisible() == null && last.expectValue() == null) {
             return null;
         }
         return new JourneyFile.Journey(journey.path(), journey.name()

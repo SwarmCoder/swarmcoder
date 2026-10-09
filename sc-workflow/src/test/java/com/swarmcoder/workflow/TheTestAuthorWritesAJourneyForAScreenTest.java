@@ -137,7 +137,10 @@ class TheTestAuthorWritesAJourneyForAScreenTest {
                 .contains("THIS IS THE SAME CONVERSATION")
                 .contains("What is missing is the JOURNEY");
             assertThat(llm.sessionRequests.get(3))
-                .contains("NOT A VALID JOURNEY").contains("`url` is not a key of a journey");
+                .contains("NOT A VALID JOURNEY").contains("`url` is not a key of a journey")
+                .as("a draft sent back is told the steps there are")
+                .contains("The steps a journey has, and nothing else:")
+                .contains(com.swarmcoder.verify.JourneyFile.VOCABULARY);
             assertThat(llm.sessionRequests.get(4))
                 .contains("already holds an earlier story's journey");
             assertThat(llm.sessionRequests.get(5)).contains("VALID - kept");
@@ -268,7 +271,11 @@ class TheTestAuthorWritesAJourneyForAScreenTest {
             .contains("No step loads an address")
             .contains("It must FAIL on the application as it is today")
             .contains("one more entry")
-            .doesNotContain("check_journey");
+            .doesNotContain("check_journey")
+            .as("every step there is, each with what it is for, and how to choose (run 100)")
+            .contains(com.swarmcoder.verify.JourneyFile.VOCABULARY)
+            .contains(com.swarmcoder.verify.JourneyFile.CHOOSING)
+            .contains("`value` only with fill, select and expectValue");
         assertThat(TestAuthorClient.agentSystem("You are a test author.", DIR + "/accept", true))
             .contains("4. THE JOURNEY.").contains("check_journey");
         assertThat(TestAuthorClient.agentSystem("You are a test author.", DIR + "/accept"))

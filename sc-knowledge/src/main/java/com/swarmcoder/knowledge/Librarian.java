@@ -729,10 +729,16 @@ public class Librarian {
      * (run 90: four files of a reference chat client for two screens the project already had);
      * a finding was chosen by the role that designed the task. Where the architect kept
      * nothing for a contract, the example is still what the worker has.
+     *
+     * <p>A task that delivers no contract is never covered: "every contract it delivers" is
+     * then true of nothing, and the findings such a task carries are about what it is built on
+     * (the contracts of the tasks it waits for), not about what it builds - a screen written
+     * against a service, in live run 100. It keeps the example and has the findings as well.
      */
     static boolean coveredByTheArchitect(Task task) {
         List<com.swarmcoder.domain.DesignFinding> findings = task.architectFindings();
-        if (findings.stream().noneMatch(f -> f != null && f.hasSnippet())) {
+        if (task.deliveredContracts().isEmpty()
+                || findings.stream().noneMatch(f -> f != null && f.hasSnippet())) {
             return false;
         }
         for (ApiContract contract : task.deliveredContracts()) {

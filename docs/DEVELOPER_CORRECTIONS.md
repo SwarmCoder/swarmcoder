@@ -6758,3 +6758,216 @@ tree. `WorkerToolbox` stays in the trust kernel.
 `TheTestAuthorIsShownARealTestTest`, `WorkerToolboxTest`; cases added to
 `AWorkerIsShownHowThisCodebaseDoesItTest`, `APlanThatCannotConnectWhatItAddsIsSentBackTest`,
 `HarnessRunReportTest`.
+
+## 74. A journey that could not choose from a list, findings that missed the task that needed them, and what the calls were made of (run 100, 2026-10-09)
+
+Run 100 was the first run with section 73: every role on the local model, a small demo with a
+model type, a service interface, a server and one browser screen, resumed from requirements. It
+parked at FINAL_INTEGRATION. Nothing below was measured in a live run; the checker was run in
+the browser image on a static page, the rest is tested with a scripted model.
+
+**Tokens** (calls | input | output; the baseline is the same story on the old design, runs 98
+and 99).
+
+| role | run 100 | baseline |
+|---|---|---|
+| architect | 43 \| 2,256,209 \| 57,507 | 53 \| 2,268,502 \| 51,879 |
+| task planner | 2 \| 24,938 \| 3,564 | 25 \| 997,835 \| 41,342 |
+| test author | 41 \| 1,215,687 \| 60,958 | 32 \| 816,516 \| 46,385 |
+| workers | 189 \| 3,588,856 \| 52,778 | 126 \| 2,953,339 \| 49,179 |
+
+### 1. The journey could not choose from a drop-down list
+
+The screen had three text fields, a drop-down list of the browser's own with three options, a
+button and a list of rows; it was right. The journey clicked the list and then
+`click text=<option>`. An option of a closed list is in the document and not on the page: the
+click waited ten seconds and failed (step 5 of 10). In its review the author gave
+`check_journey` a draft with a `select` step, which was refused - there was no such step - and
+then opened the list with the keyboard and ended on `expectVisible text=<option>`. That failed
+too (step 11 of 11), although the row just added showed the text: the first element with that
+text was again the option. The run parked.
+
+**Changed.**
+
+- **Two steps** (`VerifySpec.StepSpec`, `JourneyFile`, the checker `check.js`): `select` with
+  `value` chooses an option by the text it shows or by its value; `expectValue` with `value`
+  waits until a field or a list holds it. In a list of the browser's own the option is set and
+  the change events are sent; a control that is not one is clicked and the option
+  (`role=option`) is clicked where it appears. A list with no such option fails with what it
+  offers; `expectValue` fails with what the control held.
+- **The first match a person can see** (`check.js`, `seen`). Click and fill act on the first
+  visible match; `expectVisible` passes when any match is visible; `expectHidden` passes when
+  none is. Before, all four took the first match in the document. `expectHidden` is stricter
+  than it was: a hidden first match with a visible second one used to pass.
+- **The page reading names each list**, what it shows as chosen and up to 20 options, for 10
+  lists, before the visible text - which lists the options too, as if they were on the page.
+- **The vocabulary is given, not looked up** (`JourneyFile.VOCABULARY`, `CHOOSING`): every
+  step with one line on what it is for, in the author's brief, in the review's opening, and in
+  both answers of `check_journey`.
+- **Judging** (`JourneyExpectations`): a chosen option counts as entered by the journey, so
+  the author is not asked about it; a `select` counts as two acting steps, so a correction that
+  turns click-and-click into one `select` is not refused as asking for less; a journey may end
+  on `expectValue`, and that ending is tried alone on the start tree like any other.
+- A worker whose task claims a journey is told that a control a step selects in must offer an
+  option reading exactly as the step's value. The page reading is now on the run's log.
+
+**Not checked:** a drawn combobox whose options are not `role=option`; a list with several
+choices at once; a journey handed in as a file in one reply gets the vocabulary but not the
+`check_journey` answers.
+
+### 2. Did the findings help the workers?
+
+Per task, two workers each:
+
+| task | calls | output tokens | tool calls | findings given |
+|---|---|---|---|---|
+| model types | 10 | 1,568 | 16 | 3 |
+| service interface | 12 | 1,540 | 16 | 6 |
+| server | 37 | 7,787 | 64 | 8 |
+| screen, first round | 64 | 19,657 | 99 | **0** |
+| screen, repair round (the run's only one) | 64 | 22,226 | 92 | **0** |
+| baseline: model, interface and server as one task | 25 | 6,789 | 43 | - |
+| baseline: screen, first round | 26 | 6,819 | 49 | - |
+| baseline: screen, repair round | 73 | 35,571 | 103 | - |
+
+Lookups by kind are recorded for the workers together, not per task (tree and graph 87 calls,
+49,810 characters; language server 43, 29,581; whole files 21, 65,196; shell reads 20, 12,663;
+acceptance-test reads 14, 15,947; search 5, 34,680).
+
+**The 13 findings.** Characters per finding were not logged (they are now); the three tasks
+that got any were given 2,101, 4,890 and 7,880 characters.
+
+| # | said to be about | kept from | lines kept |
+|---|---|---|---|
+| 1 | the model type | the reference example's model class | 20, the head of 99 |
+| 2 | the service interface | the example's interface | 14, all of it |
+| 3 | the store's root type | the example's root | 20, the head of 27 |
+| 4 | the root's provider | the example's provider | 10, all of it |
+| 5 | the server class | the example's server class | 20, the head of 40 |
+| 6 | the server class | the example's write commands | 20, the head of 123 |
+| 7 | the status type | the framework's annotation processor | 6 |
+| 8 | the server class | the example's queries | 20, the head of 26 |
+| 9 | the server class | the example's server build file | 11 |
+| 10 | the service interface | the example's screen | 2: the import of the generated client class |
+| 11 | the service interface | the example's screen | 10: one field of a form |
+| 12 | the service interface | the example's client entry class | 16: the screen is mounted on a thread of its own, with the comment saying why |
+| 13 | the model type | the project's own existing model class | 11, all of it |
+
+**What went wrong.**
+
+- **The screen's task was given none.** The first screen failed in the browser with the
+  framework's message for calling the server from a stack that cannot wait. Finding 12 is
+  exactly that fact, with the code. The architect said findings 10 to 12 were about the service
+  interface - the only contract they concern, since a screen was no contract of the design.
+  `ArchitectHandover` gave them to the tasks that wrote the interface and the server; the
+  screen's task delivers no contract and matched nothing. It took 128 of the 189 worker calls.
+  It had also lost the planner's how-to (section 73) and gained nothing in its place: the
+  baseline's first round took 26 calls.
+- **Five findings were the head of a file.** Asked for a whole file from the line after its
+  licence header, `keep_for_workers` kept the first 20 lines: the package line, the imports and
+  a comment. The server's two workers then read those same five example files, one read each.
+- **The screen's workers were told of no type.** `TypeDependencyOrder.annotate` reads uses
+  from contracts and from instructions. A task with no contract and three sentences of
+  instructions showed none. In the run the model type's shape was asked for six times, and
+  the generated client class was looked for three times in a package that does not exist.
+
+**Changed.**
+
+- **A task is given the findings about what the tasks it waits for deliver**
+  (`ArchitectHandover.forTask`, a fifth step after the four of section 73; nearest task first;
+  from the plan's edges, no wording read). On run 100's plan the screen's task now gets
+  findings 2, 10, 11, 12 and, through the interface's task, 1, 7 and 13.
+- **A task that delivers no contract keeps the librarian's example**
+  (`Librarian.coveredByTheArchitect`): "every contract it delivers has a finding" was true of
+  nothing, and would have taken the example away the moment such a task got a finding.
+- **A range longer than a finding carries is sent back, never cut to its head**
+  (`DraftTools.keepForWorkers`). The answer says to name the lines that do the thing, or to
+  look the one member up and keep that whole. **Decision:** a finding now carries 40 lines and
+  3,200 characters (was 20 and 1,600) and a task 24,000 characters of findings (was 12,000):
+  input is cheap on the workers' server, and a small class of an example is 30 to 40 lines.
+- **The architect's instruction** (`DESIGN_HOW` 2) now says, with no framework named: a fact
+  travels with the tasks that build a contract and with the tasks built on it, so a fact about
+  code that uses a contract is about that contract; keep above all what compiles when it is
+  left out and fails only when the application runs, with the code and what goes wrong without
+  it; keep the lines that do the thing, never a file's package line and imports; every part of
+  the design a task will write needs at least one fact, the parts no test can execute most.
+- **A task is told the types of the tasks it waits for**
+  (`TypeDependencyOrder.annotate`): their type contracts, and the ones those name in their
+  members when their writer finishes first, at most 12.
+- **A plan saved before these rules is put right on resume**
+  (`GreenfieldWorkflow.handOverAgainOnce`, at TEST_AUTHORING and EXECUTING, once per run):
+  findings are given again when `ArchitectHandover.stale`, and the type block is added where
+  it is missing. It logs only when something changed.
+
+### 3. The test author's 41 calls and 60,958 output tokens
+
+The server's totals are exact; the split is by the time each phase took at the role's own rate
+(21.8 output tokens a second).
+
+| phase | calls | output tokens, about |
+|---|---|---|
+| lookups before the first draft (35 lookups) | 12 | 13,600 |
+| draft 1 of the test, refused before compiling: it reached the project's code by reflection | 1 | 5,400 |
+| lookups after the refusal: how a test reaches a service (18 lookups) | 7 | 11,100 |
+| draft 2, healthy | 1 | 9,700 |
+| the journey: three whole-file reads, one draft, the same draft given again | 3 | 4,800 |
+| a helper class and the test once more, both healthy, and the hand-in | 4 | 6,600 |
+| **writing the tests and the journey** | **28** | **51,200** |
+| first review of the journey (the screen was wrong; two turns) | 2 | 4,100 |
+| second review (ended by its cap of ten turns) | 11 | 5,700 |
+
+What drove it: one draft refused for reflection and the 7 lookup turns after it, about 26,000
+output tokens with the rewrite. That refusal is the rule working. The journey itself was cheap.
+The question about a text no step enters (section 69) cost one call each time it was asked,
+for the option's text; a `select` now counts as entering it.
+
+**The second review.** Five of its ten turns and all twelve of its lookups went on searching
+the project and the reference for how a journey chooses from a list. Nothing there describes
+journeys. Its `select` draft was refused, its keyboard draft was kept on the tenth turn, and
+the turn cap ended the session before `report_done`: that is the "no reason". It was not shown
+the list's options as options: the reading held them only inside the visible text. All of it is
+item 1.
+
+### 4. The planner's 2 calls
+
+One `check_plan` with no objection, then the hand-in. Four tasks in three waves: model types;
+service interface; server and screen side by side. The edge from the interface to the model
+types was added from the contract; the server's and the screen's edges were the planner's own.
+Every task reserved 2 files, the ones the planner named, and none was taken beyond the plan.
+The journey went to the screen's task at TEST_AUTHORING. Instructions were 431 to 3,040 tokens
+with the contract statement, and said what to deliver.
+
+What the short instructions lost: the type block for a task without a contract (item 2, fixed).
+**Left:** `TypeDependencyOrder` can still add no edge for a task that delivers no contract and
+names no type in its instructions; here the planner wrote the edge. Nothing checks that such a
+task waits for what it is built on.
+
+### 5. Seen and left
+
+- A candidate whose screen had no form survived verification: a journey is not made per
+  candidate (section 69), so the first look at a screen is final integration.
+- The test author read a 19,574-character example screen whole to write a 10-step journey.
+- The line numbers `keep_for_workers` takes count the lookup's result, which is not always the
+  file's own numbering (a result was two lines longer than its file). The ranges of run 100
+  were the ones meant.
+- Findings 1, 3, 5, 6 and 8 of a design saved before today stay heads of files.
+- 70% of worker time went to candidates that were not selected; three of four tasks would have
+  been delivered by one worker.
+
+### A rerun
+
+Resume from the saved plan (`3-plan`). The plan is sound, so the planner need not run again;
+the tests and the journey are written again with the new steps, so the journey chooses with
+`select` from the start; and the findings and the type block are brought up to date as
+TEST_AUTHORING begins. From `4-build` the old journey is kept and must first fail and be
+corrected in review. The architect's new instruction and the refusal of long ranges need a new
+design, from the requirements snapshot.
+
+**Tests.** New: `AJourneyChoosesInAListAndReadsWhatAControlHoldsTest` (one case in the browser
+image). Cases added to `TheArchitectHandsItsFindingsToTheWorkersTest`,
+`PlanOrdersTasksByTheirTypesTest`, `AWorkerIsShownHowThisCodebaseDoesItTest`,
+`TheTestAuthorWritesAJourneyForAScreenTest`, `AFailedJourneyGoesBackToItsAuthorTest`,
+`AJourneyFileIsReadAndJudgedWithNoModelTest`.
+
+**Not exercised by any test:** `handOverAgainOnce` in a workflow (its two parts are tested);
+the review in a live browser with a real list.

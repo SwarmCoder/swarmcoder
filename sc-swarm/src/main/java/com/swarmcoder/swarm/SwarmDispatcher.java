@@ -876,7 +876,8 @@ public class SwarmDispatcher {
                 instructions.append("This task also claims a journey (acceptance_test shows "
                     + "it): the screen must expose exactly the roles, accessible names and "
                     + "texts its selectors use, and be reachable from the entry page by its "
-                    + "steps.\n");
+                    + "steps. Where a step selects, the control it names must offer an option "
+                    + "that reads exactly as the step's value.\n");
             }
         }
         if (protectedPaths != null && !protectedPaths.isEmpty()) {

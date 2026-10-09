@@ -138,8 +138,22 @@ import java.util.regex.Pattern;
  * instructions listed only the types it must DELIVER. {@link #annotate} appends, to each task's
  * instructions, every type its code uses that an earlier task writes: the fully-qualified name (with
  * the contract's members when there is a contract), and the task that writes it.
+ *
+ * <p><b>Also the types of the tasks it waits for (live run 100, section 74).</b> A use is read
+ * from a task's contracts first and from its instructions second. Since section 73 the planner
+ * writes one to three sentences on what a task delivers, and a task that delivers no contract -
+ * a screen written against a service - then shows no use at all: its workers were told of no
+ * type, asked for the shape of the model type six times and looked for the service's generated
+ * client class in a package that does not exist. The plan's own edge is evidence that needs no
+ * wording: a task that waits for another is built on what that one delivers. So the block also
+ * lists the type contracts of the tasks a task waits for directly, and the type contracts those
+ * name in their members when their writer finishes first too - at most
+ * {@value #BUILT_ON_LIMIT} a task.
  */
 public final class TypeDependencyOrder {
+
+    /** The most types a task is told of from the tasks it waits for; nearest first. */
+    static final int BUILT_ON_LIMIT = 12;
 
     /** The heading of the block {@link #annotate} appends; also how a second call knows it ran. */
     static final String BRIEF_HEADING =
@@ -365,6 +379,7 @@ public final class TypeDependencyOrder {
                 byUser.computeIfAbsent(use.user().id(), k -> new ArrayList<>()).add(use);
             }
         }
+        addWhatATaskIsBuiltOn(graph.tasks(), edges, reach, design, byUser);
         for (List<Use> usesOfOne : byUser.values()) {
             Task user = usesOfOne.get(0).user();
             String instructions = user.instructions() == null ? "" : user.instructions();
@@ -392,6 +407,94 @@ public final class TypeDependencyOrder {
                 + "from other tasks live: " + String.join(", ", new TreeSet<>(seen)));
         }
         return lines;
+    }
+
+    /**
+     * Adds, for each task, the type contracts delivered by the tasks it waits for directly, and
+     * the type contracts those name in their members when the task that writes them finishes
+     * before this one too. Read from the plan's edges and the contracts' Java, never from a
+     * task's wording. A type already listed for the task, or one it writes itself, is left out.
+     */
+    private static void addWhatATaskIsBuiltOn(List<Task> tasks, List<TaskEdge> edges,
+                                              Map<UUID, Set<UUID>> reach, DesignDocument design,
+                                              Map<UUID, List<Use>> byUser) {
+        Map<UUID, Task> byId = new LinkedHashMap<>();
+        Map<String, Task> writerOf = new LinkedHashMap<>();
+        Map<String, ApiContract> contractOf = new LinkedHashMap<>();
+        for (Task task : tasks) {
+            if (task == null || task.id() == null) {
+                continue;
+            }
+            byId.put(task.id(), task);
+            for (ApiContract contract : task.deliveredContracts()) {
+                if (contract != null && contract.namesAType()) {
+                    writerOf.putIfAbsent(contract.typeName().strip(), task);
+                    contractOf.putIfAbsent(contract.typeName().strip(), contract);
+                }
+            }
+        }
+        Map<UUID, Integer> added = new HashMap<>();
+        for (TaskEdge edge : edges) {
+            Task user = edge == null ? null : byId.get(edge.to());
+            Task first = edge == null ? null : byId.get(edge.from());
+            if (user == null || first == null) {
+                continue;
+            }
+            List<Use> listed = byUser.computeIfAbsent(user.id(), k -> new ArrayList<>());
+            Set<String> told = new HashSet<>();
+            for (Use use : listed) {
+                told.add(use.typeName());
+            }
+            for (ApiContract own : user.deliveredContracts()) {
+                if (own != null && own.namesAType()) {
+                    told.add(own.typeName().strip());
+                }
+            }
+            Deque<ApiContract> open = new ArrayDeque<>();
+            for (ApiContract contract : first.deliveredContracts()) {
+                if (contract != null && contract.namesAType()) {
+                    open.add(contract);
+                }
+            }
+            int builtOn = added.getOrDefault(user.id(), 0);
+            while (!open.isEmpty() && builtOn < BUILT_ON_LIMIT) {
+                ApiContract contract = open.poll();
+                String type = contract.typeName().strip();
+                Task writer = writerOf.get(type);
+                Set<UUID> after = writer == null ? null : reach.get(writer.id());
+                if (writer == null || after == null || !after.contains(user.id())
+                        || !told.add(type)) {
+                    continue;
+                }
+                listed.add(new Use(user, writer, type, contract, false, false, false));
+                builtOn++;
+                for (ApiContract other : contractOf.values()) {
+                    if (other != contract && namesInItsJava(contract, other.simpleTypeName())) {
+                        open.add(other);
+                    }
+                }
+            }
+            added.put(user.id(), builtOn);
+            if (listed.isEmpty()) {
+                byUser.remove(user.id());
+            }
+        }
+    }
+
+    /** True when a member or the signature of {@code contract} names the type {@code simple}. */
+    private static boolean namesInItsJava(ApiContract contract, String simple) {
+        if (simple == null || simple.isBlank()) {
+            return false;
+        }
+        Pattern word = Pattern.compile("(?<![A-Za-z0-9_$])" + Pattern.quote(simple)
+            + "(?![A-Za-z0-9_$])");
+        for (String member : contract.members()) {
+            if (member != null && word.matcher(member).find()) {
+                return true;
+            }
+        }
+        return contract.signatureSketch() != null
+            && word.matcher(contract.signatureSketch()).find();
     }
 
     // --- reading the plan --------------------------------------------------------------------------
