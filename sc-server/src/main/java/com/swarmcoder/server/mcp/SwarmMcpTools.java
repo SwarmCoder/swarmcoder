@@ -31,6 +31,7 @@ import com.swarmcoder.console.api.ProjectDto;
 import com.swarmcoder.console.api.RunGraphDto;
 import com.swarmcoder.console.api.RunSummaryDto;
 import com.swarmcoder.console.api.SessionSummaryDto;
+import com.swarmcoder.console.api.SupervisorService;
 import com.swarmcoder.console.api.TraceEventDto;
 import com.swarmcoder.domain.Decision;
 import com.swarmcoder.domain.DecisionState;
@@ -93,14 +94,39 @@ public final class SwarmMcpTools {
     private final GraphService graph;
     private final ControlService control;
     private final boolean readOnly;
+    /** The supervisor's tools, or null when this server was built without them. */
+    private final SupervisorMcpTools supervisor;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** The three tools that changed something before the supervisor's were added. */
+    private static final Set<String> OWN_WRITE_TOOLS =
+        Set.of("start_run", "decide_run", "answer_decision");
 
     public SwarmMcpTools(ObserverService observer, GraphService graph, ControlService control,
                          boolean readOnly) {
+        this(observer, graph, control, readOnly, null);
+    }
+
+    /**
+     * @param supervisor the service behind the supervisor's tools, or null to leave them out
+     */
+    public SwarmMcpTools(ObserverService observer, GraphService graph, ControlService control,
+                         boolean readOnly, SupervisorService supervisor) {
         this.observer = observer;
         this.graph = graph;
         this.control = control;
         this.readOnly = readOnly;
+        this.supervisor = supervisor == null ? null : new SupervisorMcpTools(supervisor, control);
+    }
+
+    /**
+     * The name of every tool that changes something. The transport refuses each of these unless
+     * the caller presents the installation's MCP secret; see {@link McpSecret}.
+     */
+    public static Set<String> writeToolNames() {
+        Set<String> names = new LinkedHashSet<>(OWN_WRITE_TOOLS);
+        names.addAll(SupervisorMcpTools.WRITE_TOOLS);
+        return names;
     }
 
     // --- registration ----------------------------------------------------------------------------
@@ -233,8 +259,14 @@ public final class SwarmMcpTools {
                 + "the selected project only. No arguments.",
             schema(), args -> listProjects()));
 
+        if (supervisor != null) {
+            // First, not last: a supervising model is told to start with wait_for_attention, and
+            // the tools it loops on should be the ones it meets first.
+            tools.addAll(0, supervisor.readTools());
+        }
+
         if (readOnly) {
-            log.info("MCP: read-only — the four tools that change something are not offered.");
+            log.info("MCP: read-only — the tools that change something are not offered.");
             return tools;
         }
 
@@ -258,13 +290,17 @@ public final class SwarmMcpTools {
 
         tools.add(tool("answer_decision",
             "CHANGES SOMETHING. Writes an answer to one question in the queue. It records the "
-                + "answer and nothing else: it does not restart a run or retry a task.",
+                + "answer and nothing else: it does not restart a run or retry a task. To answer "
+                + "and restart the stopped build, use answer_question.",
             schema("""
                 {"decision_id": {"type":"string"},
                  "answer": {"type":"string","description":"The answer to record."}}""",
                 "decision_id", "answer"),
             args -> answerDecision(str(args, "decision_id"), str(args, "answer"))));
 
+        if (supervisor != null) {
+            tools.addAll(supervisor.writeTools());
+        }
         return tools;
     }
 
@@ -1028,8 +1064,11 @@ public final class SwarmMcpTools {
             node.put("path", nn(project.getPrimaryPath()));
             node.put("selected", project.isCurrent());
         }
-        root.put("note", "Every other tool here reads the selected project only. This server "
-            + "cannot switch projects — do that in the Console.");
+        root.put("note", supervisor == null
+            ? "Every other tool here reads the selected project only. This server "
+                + "cannot switch projects — do that in the Console."
+            : "Every other tool here works on the selected project only. switch_project selects "
+                + "another.");
         return finish(root, "list_projects", "nothing — this reply is already bounded");
     }
 
@@ -1268,7 +1307,7 @@ public final class SwarmMcpTools {
 
     // --- MCP scaffolding ---------------------------------------------------------------------------
 
-    private static SyncToolRegistration tool(
+    static SyncToolRegistration tool(
             String name, String description, String inputSchema,
             java.util.function.Function<Map<String, Object>, String> body) {
         return new SyncToolRegistration(
@@ -1289,7 +1328,7 @@ public final class SwarmMcpTools {
     }
 
     /** A tools/list input schema; {@code properties} is the raw JSON of the properties object. */
-    private static String schema(String properties, String... required) {
+    static String schema(String properties, String... required) {
         StringBuilder sb = new StringBuilder("{\"type\":\"object\",\"properties\":");
         sb.append(properties).append(",\"required\":[");
         for (int i = 0; i < required.length; i++) {
@@ -1298,16 +1337,16 @@ public final class SwarmMcpTools {
         return sb.append("]}").toString();
     }
 
-    private static String schema() {
+    static String schema() {
         return "{\"type\":\"object\",\"properties\":{}}";
     }
 
-    private static String str(Map<String, Object> args, String key) {
+    static String str(Map<String, Object> args, String key) {
         Object value = args == null ? null : args.get(key);
         return value == null ? "" : String.valueOf(value);
     }
 
-    private static int num(Map<String, Object> args, String key, int fallback) {
+    static int num(Map<String, Object> args, String key, int fallback) {
         Object value = args == null ? null : args.get(key);
         if (value instanceof Number number) {
             return number.intValue();

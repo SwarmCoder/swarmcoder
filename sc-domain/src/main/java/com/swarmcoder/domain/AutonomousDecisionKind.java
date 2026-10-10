@@ -55,5 +55,19 @@ public enum AutonomousDecisionKind {
      * a person reading the question — once. A second stop on the same story is left for a person,
      * exactly as an unattended stop has always been; see {@code UnattendedPilot}.
      */
-    RETRIED_PARKED_STORY
+    RETRIED_PARKED_STORY,
+
+    // --- appended 2026-10-10 for the supervisor connection; see AutonomousDecision.actor ---------
+
+    /** A delivery that came back for a verdict, accepted. */
+    ACCEPTED_DELIVERY,
+
+    /** A delivery, or a stopped story, sent back to be built again with a note saying why. */
+    SENT_BACK_DELIVERY,
+
+    /** A question a build stopped to ask, answered, and the build handed back to its engine. */
+    ANSWERED_RUN_QUESTION,
+
+    /** A story's build started by hand rather than by the queue. */
+    STARTED_STORY
 }

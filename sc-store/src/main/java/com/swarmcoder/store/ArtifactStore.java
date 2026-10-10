@@ -107,6 +107,29 @@ public class ArtifactStore implements AutoCloseable {
         return root;
     }
 
+    /**
+     * Called after every durable write, on the writer thread. It exists so something can WAIT for
+     * the store to change without polling it; a listener must do no more than wake a waiter.
+     */
+    private final List<Runnable> writeListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** Adds a listener told after every durable write. Adding the same one twice is a no-op. */
+    public void addWriteListener(Runnable listener) {
+        if (listener != null && !writeListeners.contains(listener)) {
+            writeListeners.add(listener);
+        }
+    }
+
+    private void written() {
+        for (Runnable listener : writeListeners) {
+            try {
+                listener.run();
+            } catch (RuntimeException ignored) {
+                // a listener is a doorbell; a broken one must never fail a write
+            }
+        }
+    }
+
     public <T> Future<T> append(Callable<T> mutation) {
         return writerThread.submit(() -> {
             T result = mutation.call();
@@ -121,6 +144,7 @@ public class ArtifactStore implements AutoCloseable {
                 root.guidedFlows(), root.flowQuestions(), root.flowProposals(),
                 root.flowDiscussions(), root.pendingExecs());
             storageManager.storeRoot(); // covers newly initialized fields after class evolution
+            written();
             return result;
         });
     }
@@ -196,6 +220,7 @@ public class ArtifactStore implements AutoCloseable {
             var storer = storageManager.createEagerStorer();
             storer.store(target);
             storer.commit();
+            written();
             return null;
         });
     }

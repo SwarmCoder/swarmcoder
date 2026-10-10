@@ -81,6 +81,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * than running to a real failure. While autonomous mode is on, {@link AutonomousBuild#step} gives a
  * parked story one automatic try again before falling back to leaving it stopped; see
  * {@code AutonomousBuild.retryParkedStories}.
+ *
+ * <h2>Supervised running, added 2026-10-10</h2>
+ *
+ * <p>A third way to run, chosen by {@code overnight.supervised} in the settings: an outside
+ * supervising model, connected to SwarmCoder's MCP server, runs the build as a person would. The
+ * pilot then only starts the next story whose predecessors are delivered. It accepts nothing and
+ * answers nothing: every delivery and every question waits for the supervisor, and each of its
+ * answers is written to the decision log with the actor "supervisor". Autonomous running cannot be
+ * switched on while this is set, because the two disagree about who answers a question.
  */
 public final class UnattendedPilot {
 
@@ -146,6 +155,15 @@ public final class UnattendedPilot {
         }
         UUID projectId = context.currentProjectId();
         if (projectId == null) {
+            return;
+        }
+        if (context.supervisedMode()) {
+            // Supervised (2026-10-10): the queue still runs one story after another, but the two
+            // things this pilot otherwise does for a person are left to the supervising model
+            // connected over MCP. Nothing is accepted here, and the autonomous front half, which
+            // answers the analyst's questions itself, is not stepped. A delivery waits as
+            // "back for your verdict" until the supervisor accepts it or sends it back.
+            startWhatIsReady(context, projectId);
             return;
         }
         AutonomousMode.Session session = AutonomousMode.runningFor(projectId);

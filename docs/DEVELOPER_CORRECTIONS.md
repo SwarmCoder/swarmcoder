@@ -7493,3 +7493,93 @@ the browser image are there). Run with it: `AJourneyFileIsReadAndJudgedWithNoMod
 - An application that keeps its data outside the container (a database server it reaches over
   a network). The container has no network, so there is none today.
 - Run 104 has not been made again with this change.
+
+## 78. A supervisor connection: an outside model runs a whole build over MCP (2026-10-10)
+
+**The decision (owner, 2026-10-10).** An outside supervising model, connected as an MCP client,
+may run a multi-story build the way a person does in the Console: answer every question the
+application asks a person, supply missing project information, steer when a step fails, and
+accept or send back deliveries. It MAY pass the gates a person passes (agreeing requirements,
+accepting a delivery). It must cost the supervisor few tokens: woken only when something needs
+it, each item short and able to be read alone, no logs.
+
+**What existed.** The MCP server had 13 read tools and 3 tools that change something, on a
+loopback port with no credential. `answer_decision` wrote text on a decision and resumed
+nothing. A parked run was handed back to its engine in two places only: at process start
+(`RunResumer`) and in the journey harness (`CoordinatorAsk`), which had its own
+record-and-resume. `UnattendedPilot` started stories in turn and accepted the ones the
+application had proved finished.
+
+**What was built.**
+
+1. *Tools over the existing services.* `SupervisorMcpTools` (sc-server) over a new
+   `SupervisorService` (sc-console-api), implemented by `SupervisorDesk` (sc-console). Each act
+   calls the service a person's click reaches: `GuidedFlowServiceImpl`,
+   `PlanningFlowServiceImpl`, `BrdServiceImpl`, `BacklogServiceImpl`, `ControlService`. Nothing
+   is re-implemented and no model is called. The tool list is in
+   `docs/Agent-Knowledge-And-Operations.md` 7.5.
+2. *Answer and resume, in the product.* `DecisionAnswers.answerAndResume` records the answer
+   in the form the product reads and, when the decision's run is parked, hands the run back
+   through `ConsoleContext.resumeRun`, bound in sc-app to the run's own project engine. Two
+   guards came with it from the harness or were added: a run is not handed back within 3
+   seconds of parking (the parking thread is still finishing), and not twice for the same
+   stop (two questions of one park answered one after the other). `CoordinatorAsk` now answers
+   through this class; its own options list and its own resolve-then-resume are gone. The
+   harness offers one answer it did not before, `repair` for a rule question, because the
+   product acts on it.
+3. *`next_attention`.* `SupervisorDesk.attention()` reads the store and lists what needs the
+   supervisor, most urgent first; the tool returns the first as one `AttentionItem`, cut to
+   1,300 characters of text so the reply stays under about 1,500.
+4. *`wait_for_attention`.* Sleeps on a condition that `ArtifactStore` signals after each
+   durable write (new: `addWriteListener`, called from `append` and `storeChanged`), then
+   looks again, at most once a second while writes come in bursts. One call waits 100 seconds
+   at most, under the transport's 120-second reply limit.
+5. *Decision log.* `AutonomousDecision` gained an `actor` field (null on old rows and on what
+   the application decides itself; "supervisor" here), and `AutonomousDecisionKind` gained
+   four constants ON THE END: `ACCEPTED_DELIVERY`, `SENT_BACK_DELIVERY`,
+   `ANSWERED_RUN_QUESTION`, `STARTED_STORY`. `decision_log` reads the supervisor's entries.
+6. *Supervised running.* `overnight.supervised` in the settings. The pilot then only starts
+   the next startable story; it accepts nothing, the autonomous front half is not stepped, and
+   switching autonomous running on is refused. Default off; with it off no behaviour changed.
+
+**Security (coordinator's decision).** A tool that changes something is not usable on an open
+port. `McpSecret` makes a 32-byte random secret on first start, in the file `mcp-secret`
+beside the settings file (owner-only permissions where the file system has them). The
+transport refuses a `tools/call` for any tool in `SwarmMcpTools.writeToolNames()` unless the
+request carries `Authorization: Bearer <secret>`. This includes the three older tools
+(`start_run`, `decide_run`, `answer_decision`), which is a breaking change for a client that
+used them. With no secret available every such tool is refused. The secret is not logged and
+no tool returns it. Read tools and loopback-only are unchanged.
+
+**Tests.** New: `SupervisorDeskTest` (sc-console; a delivery item and its acceptance, sending
+back, answer-and-resume, no second hand-back for one stop, an answer for a run that carried
+on, waiting and waking, skip, supervised pilot, analyst questions and their log entries),
+`SupervisorMcpToolsTest` (sc-server; item size, guarded-list invariant, read-only, refusal
+without and acceptance with the secret over a real socket, secret file). Run with them:
+`UnattendedRunningTest`, `AutonomousModeTest`, `SwarmMcpServerTest`, `SwarmMcpToolsTest`,
+`CoordinatorAskTest`, `McpApiConfigTest`.
+
+**Not checked:**
+
+- No real supervising model has driven a build through these tools, and no live run was made.
+  Item wording, the order of urgency and the 1,300-character cut are untested against a model.
+- Answer-and-resume was tested with a stand-in for the engine. A real parked run resumed
+  through `WorkflowEngine.advanceAsync` from a running Console (not at start-up, not in the
+  harness) has not been made.
+- The planner's items, `agree_requirements`, `promote_story`, `start_flow`, `add_document`
+  and `apply_proposals` have no test of their own; they are thin calls into services that
+  have theirs.
+- Reading a store written before `AutonomousDecision.actor` existed. EclipseStore maps an
+  added field on its own and other classes here have gained fields the same way, but this
+  class was not opened from an old store in a test.
+- `wait_for_attention` over the deprecated event-stream transport, and with several clients
+  waiting at once.
+- The secret file's protection on Windows is the user folder's own; no access list is set.
+- The change journal (`ChangeEvent`) still says "human" for a requirement agreed, a story
+  marked ready and a story sent back through these tools; only acceptance records
+  "supervisor" there. The decision log is the complete record.
+- A budget question (`BUDGET_EXTENSION`) is only recorded with a note. Budgets are being
+  changed elsewhere and were left alone.
+- The Console does not show that supervised running is on, and its own answer box still only
+  records.
+

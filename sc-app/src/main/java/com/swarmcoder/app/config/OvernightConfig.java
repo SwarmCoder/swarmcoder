@@ -35,11 +35,30 @@ package com.swarmcoder.app.config;
  *                             can see the other's work and the second only meets it at the merge.
  *                             Speed is not the point here; a queue that can be understood in the
  *                             morning is.
+ * @param supervised           an outside supervising model, connected to SwarmCoder's MCP server,
+ *                             runs the builds the way a person does. Stories are started one after
+ *                             another as with {@code enabled}, but the application accepts nothing
+ *                             and answers nothing itself: every delivery and every question waits
+ *                             for the supervisor. It takes precedence over {@code enabled}, and
+ *                             needs {@code mcpApi.enabled} to be of any use. Absent means false, and
+ *                             then nothing about the product changes.
  */
-public record OvernightConfig(boolean enabled, Integer maxConcurrentStories) {
+public record OvernightConfig(boolean enabled, Integer maxConcurrentStories, Boolean supervised) {
 
     public OvernightConfig(boolean enabled) {
-        this(enabled, null);
+        this(enabled, null, null);
+    }
+
+    public OvernightConfig(boolean enabled, Integer maxConcurrentStories) {
+        this(enabled, maxConcurrentStories, null);
+    }
+
+    /**
+     * Whether an outside supervising model runs the builds: stories start one after another, and
+     * every delivery and every question waits for the supervisor. Absent means false.
+     */
+    public boolean isSupervised() {
+        return supervised != null && supervised;
     }
 
     /** How many stories may build at once — never less than one, whatever the file says. */

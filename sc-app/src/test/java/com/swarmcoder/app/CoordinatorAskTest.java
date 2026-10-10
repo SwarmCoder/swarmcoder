@@ -166,7 +166,8 @@ class CoordinatorAskTest {
     void aRuleQuestionAnswerIsWrittenInTheFormTheProductReads() {
         var rule = CoordinatorAsk.optionsFor(DecisionKind.GUIDELINE_REVIEW);
         assertThat(rule).extracting(CoordinatorAsk.Option::token)
-            .containsExactly("keep", "reword", "allow", "stop");
+            .describedAs("the product's own answers for a rule question, then the harness's stop")
+            .containsExactly("keep", "reword", "allow", "repair", "stop");
         assertThat(CoordinatorAsk.responseFor(DecisionKind.GUIDELINE_REVIEW,
             new CoordinatorAsk.Answer("reword", " use bundles where possible ")))
             .isEqualTo("reword: use bundles where possible");
@@ -237,7 +238,7 @@ class CoordinatorAskTest {
             assertThat(question.get("workflowState").asText()).isEqualTo("EXECUTING");
             assertThat(question.get("alsoPending")).hasSize(1);
             List<String> tokens = new ArrayList<>(question.get("options").findValuesAsText("token"));
-            assertThat(tokens).containsExactly("keep", "reword", "allow", "stop");
+            assertThat(tokens).containsExactly("keep", "reword", "allow", "repair", "stop");
         }
     }
 

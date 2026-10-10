@@ -181,6 +181,12 @@ public final class AutonomousMode {
         if (isRunning()) {
             return "error: it is already running - stop it before starting it again";
         }
+        if (context.supervisedMode()) {
+            return "error: this installation is set to supervised running (overnight.supervised), "
+                + "where an outside supervisor answers every question and accepts every delivery. "
+                + "Running it unattended as well would have two parties deciding the same things. "
+                + "Turn supervised running off in Settings first.";
+        }
         if (context.analystModel() == null) {
             return "error: no analyst model is configured, so nothing can read your documents. "
                 + "Set roles.requirementsAnalyst (or roles.chat) in Settings first.";

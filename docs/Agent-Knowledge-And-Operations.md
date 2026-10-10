@@ -1386,6 +1386,7 @@ Docker sandbox state, workers and runs in flight, pending approvals, cloud-budge
 | `rag/refs/` | the reference text index (per root **set**) and the semantic relation store (`<label>-<hash>/semantic.json.gz`, per **root**) | Yes — rebuilt from the checkout; costs indexing time, and up to ten minutes per root for the LST pass. |
 | `primers/` | cached model-distilled per-file summaries | Yes — but regenerating them costs model calls. |
 | `wt/` | linked git worktrees: one per worker candidate, plus `tests-<runId>`, `progress-<runId>`, `integration-<runId>`, `retest-<runId>-<candidateId>` | Yes **when nothing is building**. A produced diff reaches the store before a worktree is normally removed, so nothing durable is lost — but deleting under a running worker breaks that worker. |
+| `mcp-secret` | the secret a caller must send to run any MCP tool that changes something (7.5). Made the first time the MCP server starts with `readOnly` off. Never logged, never returned by a tool. | Yes - a new one is made on the next start, and every client must be given it again. |
 | `logs/` | `swarmcoder.log` plus daily-rolled files, 14-day history enforced by logback | Yes, always. Self-pruning. |
 | `bin/` | a downloaded `mergiraf` merge-driver binary | Yes — falls back to PATH, then to ordinary git merges. |
 | `targets/` | **on branch `brownfield` only** — the jsoup clone and its per-case trees | Yes; costs a re-clone (2 seconds, 12 MB). |
@@ -1452,6 +1453,70 @@ else quieted. The lines worth grepping:
 For a live view, use the console's run graph rather than the log — a harness run serves its own
 (5.1, "Watching a harness run live"); for a post-mortem, the transcript pane
 and the pending-exec row are what survive a worker that killed its own JVM.
+
+### The MCP server: watching a build, and running one from outside (2026-10-10)
+
+`mcpApi.enabled: true` opens SwarmCoder's own MCP server on loopback (`SwarmMcpServer`, default port
+8931, Streamable HTTP at `/mcp`). It owns no data: every tool is a call into a Console service.
+
+**Who may do what.** Tools that only read need nothing. Every tool that changes something needs
+`Authorization: Bearer <secret>`, where the secret is the contents of `~/.swarmcoder/mcp-secret`
+(`McpSecret`; made on first start). The check is in the transport (`LoopbackHttpTransport.refusal`):
+a `tools/call` naming a guarded tool without the secret gets a JSON-RPC error and the tool is never
+run. `SwarmMcpTools.writeToolNames()` is the guarded list, and a test fails if a tool described as
+changing something is not on it. `mcpApi.readOnly: true` leaves those tools out altogether.
+
+**Watching** (read): `swarm_status`, `run_diagnosis`, `run_detail`, `list_runs`, `session_events`,
+`event_payload`, `session_prompt`, `blob_text`, `run_diff`, `pending_decisions`, `search_history`,
+`insights`, `list_projects`. Older tools that change something: `start_run`, `decide_run`,
+`answer_decision` (records an answer, restarts nothing).
+
+**Supervising** - an outside model running a whole build the way a person does (`SupervisorMcpTools`
+over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a model.
+
+| tool | changes something | what it does |
+|---|---|---|
+| `wait_for_attention` | no | Blocks (100 s at most per call) until something needs the supervisor, then returns that one item. Sleeps on a condition the store signals after each durable write (`ArtifactStore.addWriteListener`); no polling. |
+| `next_attention` | no | The same item without waiting. `skip=n` passes over the n most urgent. |
+| `view_flow` | no | The analyst's or planner's flow: state, questions and proposals with their ids. |
+| `list_backlog` | no | Every story: key, title, state, what it builds on, why it waits. |
+| `decision_text` | no | The whole text of a question a build stopped to ask, and the answers it accepts. |
+| `decision_log` | no | What the supervisor decided: asked, answered, when. |
+| `create_project`, `switch_project` | yes | `ControlService.createProject` / `switchProject`. |
+| `add_document` | yes | Pasted text as a document of the analyst's flow; `technical` marks a document about how to build. |
+| `start_flow` | yes | Starts the analyst or the planner (reopening a finished or failed flow first). |
+| `answer_flow_question`, `submit_answers` | yes | Answers (or skips) one question; submits the round. |
+| `apply_proposals` | yes | Accepts all proposals but those in `reject`, and applies them. |
+| `agree_requirements` | yes | `BrdService.promoteRequirement` / `promoteAllDrafts`. A gate a person normally passes. |
+| `promote_story`, `start_story` | yes | `BacklogService.promoteStory` / `startSession`. |
+| `accept_delivery` | yes | Accepts a story back for a verdict; the story records `acceptedBy = supervisor`. A gate a person normally passes. |
+| `send_back` | yes | `BacklogService.retryStory` with the note. |
+| `answer_question` | yes | Answers a question a build stopped to ask and hands the parked run back to its engine (`DecisionAnswers.answerAndResume`). |
+
+**One item** (`AttentionItem`) carries `kind`, `project`, `story`, `question`, `options`, `evidence`
+and `answerWith` (the tool call that answers it, ids filled in). Its texts are cut to 1,300 characters
+in total, evidence first, then the end of the question; options and `answerWith` are never cut. Kinds,
+most urgent first: `RUN_QUESTION` (a parked run with an unanswered question), `STORY_STOPPED`,
+`DELIVERY`, `ANALYST_QUESTION` / `_SUBMIT` / `_PROPOSALS` / `_FAILED`, `AGREE_REQUIREMENTS`, the same
+four for `PLANNER_`, `PROMOTE_STORIES`, `START_ANALYST`, `START_PLANNER`, `START_STORY` (not when the
+queue starts stories itself), and `FINISHED` when every story is delivered or dropped.
+
+**Answer and resume.** `DecisionAnswers` holds the answers the product acts on per decision kind:
+`keep` / `reword` / `allow` / `repair` for a rule question (the first word is what
+`RuleQuestions.parse` reads), `retry` with optional text for a blocked task, `note` for a budget or
+approval question. It writes the answer through `ControlServiceImpl.resolveDecision` and, when the
+decision's run is parked, calls `ConsoleContext.resumeRun`, which sc-app binds to that project's
+`WorkflowEngine.advanceAsync`. A run is not handed back sooner than 3 seconds after it parked, and
+not twice for the same stop. The journey harness (`CoordinatorAsk`) answers through this same class.
+
+**The record.** Each supervisor act is an `AutonomousDecision` with `actor = "supervisor"` in the
+project's existing list (`ArtifactStore.recordAutonomousDecision`), so it also shows where that list
+is shown. The per-entity change journal still names "human" for agreeing a requirement, marking a
+story ready and sending one back, because those services write that word themselves.
+
+**Supervised running.** `overnight.supervised: true` (`ConsoleContext.supervisedMode`): each tick of
+`UnattendedPilot` only starts the next startable READY story. It accepts nothing, and the autonomous
+front half, which answers the analyst's questions itself, is not stepped and cannot be switched on.
 
 ## 7.6 Development conventions
 

@@ -861,6 +861,52 @@ public final class ConsoleContext {
         }
     }
 
+    /**
+     * Whether an outside supervising model is running this project's builds: stories are started
+     * one after another as in unattended mode, but nothing is accepted and no question is answered
+     * by the application; both wait for the supervisor. Off unless the settings file says so.
+     */
+    private java.util.function.BooleanSupplier supervised = () -> false;
+
+    public ConsoleContext withSupervised(java.util.function.BooleanSupplier enabled) {
+        this.supervised = enabled == null ? () -> false : enabled;
+        return this;
+    }
+
+    public boolean supervisedMode() {
+        try {
+            return supervised.getAsBoolean();
+        } catch (Exception e) {
+            return false;   // unreadable means the product behaves as it always did
+        }
+    }
+
+    /**
+     * Hands a parked run back to the workflow engine of the project it belongs to, exactly as a
+     * run left parked is handed back when the process starts. Returns "" or "error: ...".
+     *
+     * <p>Supplied by whoever owns the engines (sc-app in the product, the harness in a journey
+     * run). Absent, nothing can be resumed and the caller is told so.
+     */
+    private java.util.function.Function<UUID, String> runResume;
+
+    public ConsoleContext withRunResume(java.util.function.Function<UUID, String> resume) {
+        this.runResume = resume;
+        return this;
+    }
+
+    public String resumeRun(UUID runId) {
+        if (runResume == null) {
+            return "error: this process has no way to hand a run back to its engine";
+        }
+        try {
+            String result = runResume.apply(runId);
+            return result == null ? "" : result;
+        } catch (RuntimeException e) {
+            return "error: the run could not be handed back to its engine: " + e;
+        }
+    }
+
     public void approveRun(UUID runId) {
         refuseFromTheBrowserIfWatching("approve a run");
         approve.accept(runId);

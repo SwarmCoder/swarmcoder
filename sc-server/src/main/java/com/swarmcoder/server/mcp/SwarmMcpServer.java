@@ -20,6 +20,7 @@ package com.swarmcoder.server.mcp;
 import com.swarmcoder.console.api.ControlService;
 import com.swarmcoder.console.api.GraphService;
 import com.swarmcoder.console.api.ObserverService;
+import com.swarmcoder.console.api.SupervisorService;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -65,8 +66,28 @@ public final class SwarmMcpServer {
      */
     public SwarmMcpServer(ObserverService observer, GraphService graph, ControlService control,
                           int port, String basePath, boolean readOnly) {
+        this(observer, graph, control, port, basePath, readOnly, null, null);
+    }
+
+    /**
+     * The server with the supervisor's tools and the secret that guards every tool that changes
+     * something.
+     *
+     * <p><b>A tool that changes something is never offered on an open port.</b> Each such call
+     * must carry {@code Authorization: Bearer <writeSecret>}; with a null secret every one of them
+     * is refused, which is what the six-argument constructor gets. Tools that only read need
+     * nothing, as before.
+     *
+     * @param supervisor  the service behind the supervisor's tools, or null to leave them out
+     * @param writeSecret what a caller must present to run a tool that changes something; never
+     *                    logged, never returned by any tool
+     */
+    public SwarmMcpServer(ObserverService observer, GraphService graph, ControlService control,
+                          int port, String basePath, boolean readOnly,
+                          SupervisorService supervisor, String writeSecret) {
         this.transport = new LoopbackHttpTransport(basePath, port);
-        this.tools = new SwarmMcpTools(observer, graph, control, readOnly);
+        this.transport.guardTools(SwarmMcpTools.writeToolNames(), writeSecret);
+        this.tools = new SwarmMcpTools(observer, graph, control, readOnly, supervisor);
     }
 
     /**
@@ -92,6 +113,9 @@ public final class SwarmMcpServer {
         String url = "http://127.0.0.1:" + bound + transport.basePathForClients() + "/mcp";
         log.info("MCP server listening on {} (loopback only). Connect with: "
             + "claude mcp add --transport http {} {}", url, SERVER_NAME, url);
+        log.info("MCP: tools that change something need the secret in the file '{}' in the "
+            + "SwarmCoder home folder, sent as the header 'Authorization: Bearer <secret>'. "
+            + "Tools that only read need nothing.", McpSecret.FILE_NAME);
         log.info("MCP: the deprecated event-stream transport is still served at {}, but a client "
             + "using it stops working when SwarmCoder restarts.", sseUrl());
         return url;

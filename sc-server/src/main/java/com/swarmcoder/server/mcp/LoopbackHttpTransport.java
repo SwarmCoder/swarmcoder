@@ -183,6 +183,53 @@ public final class LoopbackHttpTransport implements ServerMcpTransport {
         this.requestedPort = requestedPort;
     }
 
+    /**
+     * The tools that change something, and the secret a caller must present to run one.
+     *
+     * <p>Empty by default, which guards nothing: a server offering only read tools behaves exactly
+     * as it always did. When tools are named here and the secret is null, every one of them is
+     * refused. There is no setting that offers a write tool on an open port.
+     */
+    private volatile java.util.Set<String> guardedTools = java.util.Set.of();
+    private volatile String writeSecret;
+
+    /**
+     * Names the tools that need the secret. Called once, before {@link #start()}.
+     *
+     * @param tools  tool names that change something
+     * @param secret what {@code Authorization: Bearer} must carry; null refuses them all
+     */
+    public void guardTools(java.util.Set<String> tools, String secret) {
+        this.guardedTools = tools == null ? java.util.Set.of() : java.util.Set.copyOf(tools);
+        this.writeSecret = secret;
+    }
+
+    /**
+     * Why this message may not be run, or null when it may.
+     *
+     * <p>Only a {@code tools/call} naming a guarded tool is ever refused. Everything else, the
+     * handshake, the tool list and every read tool, passes with no header at all.
+     */
+    String refusal(McpSchema.JSONRPCMessage message, String authorization) {
+        if (guardedTools.isEmpty() || !(message instanceof McpSchema.JSONRPCRequest request)
+                || !"tools/call".equals(request.method())
+                || !(request.params() instanceof Map<?, ?> params)) {
+            return null;
+        }
+        Object name = params.get("name");
+        if (name == null || !guardedTools.contains(String.valueOf(name))) {
+            return null;
+        }
+        if (McpSecret.matches(writeSecret, authorization)) {
+            return null;
+        }
+        return "Refused: " + name + " changes something, and tools that change something need "
+            + "this installation's MCP secret. Send it as the header 'Authorization: Bearer "
+            + "<secret>'. The secret is in the file '" + McpSecret.FILE_NAME + "' in the "
+            + "SwarmCoder home folder, beside the settings file. Tools that only read need "
+            + "nothing.";
+    }
+
     /** One open event stream: the client's output, and the latch its serving thread waits on. */
     private static final class Stream {
         final String id;
@@ -444,6 +491,19 @@ public final class LoopbackHttpTransport implements ServerMcpTransport {
             return;
         }
 
+        String refused = refusal(message, exchange.getRequestHeaders().getFirst("Authorization"));
+        if (refused != null) {
+            // A JSON-RPC error on a 200, not a 401: a 401 tells an MCP client the whole server
+            // wants a login, and the read tools must keep working with no header.
+            byte[] bytes = errorReply(request.id(), -32001, refused).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+            return;
+        }
+
         // The client's id is set aside and a token of ours goes out in its place, so an answer can
         // never be handed to the wrong caller. See Pending.
         String token = "sc-" + UUID.randomUUID();
@@ -582,6 +642,18 @@ public final class LoopbackHttpTransport implements ServerMcpTransport {
             message = McpSchema.deserializeJsonRpcMessage(json, body);
         } catch (Exception e) {
             plain(exchange, 400, "That is not a JSON-RPC message: " + e.getMessage());
+            return;
+        }
+
+        String refused = refusal(message, exchange.getRequestHeaders().getFirst("Authorization"));
+        if (refused != null && message instanceof McpSchema.JSONRPCRequest request) {
+            exchange.sendResponseHeaders(202, -1);
+            exchange.close();
+            try {
+                stream.event("message", errorReply(request.id(), -32001, refused));
+            } catch (IOException e) {
+                drop(stream);
+            }
             return;
         }
 
