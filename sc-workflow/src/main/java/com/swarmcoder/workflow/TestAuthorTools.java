@@ -85,6 +85,9 @@ public final class TestAuthorTools {
     private boolean journeyWaivable;
     private String journeyWaiver;
     private String journeyWaiverPath;
+    /** What the story shows that nothing on screen creates (section 80), and the path given. */
+    private String nothingCreates;
+    private String nothingCreatesPath;
     /** Whether the project as it stands holds a text; null when that cannot be asked. */
     private java.util.function.Predicate<String> heldByTheProject;
     /** Makes journeys on the tree the run started from; null when that cannot be done here. */
@@ -283,6 +286,8 @@ public final class TestAuthorTools {
         this.journeyWaivable = false;
         this.journeyWaiver = null;
         this.journeyWaiverPath = null;
+        this.nothingCreates = null;
+        this.nothingCreatesPath = null;
         this.journeys.clear();
         this.journeyChecks = 0;
         this.askedAboutUnentered = null;
@@ -314,6 +319,20 @@ public final class TestAuthorTools {
     /** The path the answer was given under; with {@link #journeyWaiver()} it is handed in. */
     String journeyWaiverPath() {
         return journeyWaiverPath;
+    }
+
+    /**
+     * The answer that the story cannot be proven on an empty application (section 80): what it
+     * shows that no screen lets a person create. Null when none was given, or a journey was
+     * kept after it.
+     */
+    String nothingCreates() {
+        return nothingCreates;
+    }
+
+    /** The path that answer was given under; with {@link #nothingCreates()} it is handed in. */
+    String nothingCreatesPath() {
+        return nothingCreatesPath;
     }
 
     /** The journeys to hand in: path to content, as {@code check_journey} last called them valid. */
@@ -425,6 +444,8 @@ public final class TestAuthorTools {
                         + "journey and call check_journey again with the complete file.";
                 }
                 journeys.clear();
+                nothingCreates = null;
+                nothingCreatesPath = null;
                 journeyWaiver = waiver;
                 journeyWaiverPath = target;
                 log.info("check_journey {} for {}: recorded in place of a journey - {}",
@@ -433,6 +454,32 @@ public final class TestAuthorTools {
                     + "report_done: \"" + waiver + "\". It is kept with the story and shown to "
                     + "the project's owner. If a person CAN see or do something different, "
                     + "write the journey instead and call check_journey with it.";
+            }
+            // The story shows something no screen lets a person create (section 80, live run
+            // 102). The author's statement, in a field of its own: recorded, never a journey.
+            String uncreated = JourneyFile.nothingCreatesOf(content);
+            if (uncreated != null) {
+                if (journeyOnly) {
+                    log.info("check_journey {} for {}: '{}' not taken in a review", journeyChecks,
+                        target, JourneyFile.NOTHING_CREATES);
+                    return "NOT TAKEN in this review: the story is built. Call report_done with "
+                        + "JOURNEY_WRONG and say in the reason what the story shows that nothing "
+                        + "on screen lets a person create; it is passed on as you write it.";
+                }
+                journeys.clear();
+                journeyWaiver = null;
+                journeyWaiverPath = null;
+                nothingCreates = uncreated;
+                nothingCreatesPath = target;
+                log.info("check_journey {} for {}: recorded - the story shows what nothing on "
+                    + "screen creates: {}", journeyChecks, target, uncreated);
+                return "RECORDED in place of a journey, and handed in with your test by "
+                    + "report_done: nothing on screen lets a person create \"" + uncreated
+                    + "\". The run stops before anything is built and the project's owner is "
+                    + "asked to merge this story with, or order it after, the one that creates "
+                    + "it. If a screen of the application or a task of THIS story does let a "
+                    + "person create it, write the journey instead and call check_journey with "
+                    + "it.";
             }
             JourneyFile.Read read = JourneyFile.read(target, content);
             String objection = read.ok() ? journeyObjection.apply(target, content) : read.objection();
@@ -509,6 +556,8 @@ public final class TestAuthorTools {
             journeys.put(target, content);
             journeyWaiver = null;
             journeyWaiverPath = null;
+            nothingCreates = null;
+            nothingCreatesPath = null;
             log.info("check_journey {} for {}: valid, {} step(s)", journeyChecks, target,
                 read.journey().steps().size());
             return "VALID - kept, and handed in " + (journeyOnly ? "" : "with your test ")

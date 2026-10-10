@@ -246,13 +246,51 @@ public final class JourneyFile {
      * from prose; whether it is TAKEN is decided by the workflow, from the object graph.
      */
     public static String waiverOf(String yaml) {
+        return onlyKey(yaml, NO_VISIBLE_EFFECT);
+    }
+
+    /**
+     * The one key of the answer an author gives when the story cannot be proven on an empty
+     * application (live run 102, section 80).
+     */
+    public static final String NOTHING_CREATES = "nothingCreates";
+
+    /**
+     * What the story shows that no screen lets a person create, from an answer given IN PLACE
+     * of a journey: a YAML mapping with the single key {@code nothingCreates}. Null for
+     * anything else. A journey starts on an empty application and must create what it expects
+     * to see (section 69); a story that only displays a kind of thing, in an application with
+     * no way on screen to add one, has no such journey. Structured, so that it is recorded and
+     * never inferred from prose. It is never taken as a journey: the workflow stops the run on
+     * it before any worker starts.
+     */
+    public static String nothingCreatesOf(String yaml) {
+        return onlyKey(yaml, NOTHING_CREATES);
+    }
+
+    /** What an author is told about {@link #NOTHING_CREATES}. */
+    public static String nothingCreatesBrief(String writeDir, boolean withTools) {
+        return " WHEN THE STORY CANNOT BE PROVEN ON AN EMPTY APPLICATION: if a criterion can only "
+            + "be seen once something exists (a record, an entry), and neither the application "
+            + "as it stands nor any task of this story gives a person a way on screen to create "
+            + "it, no journey can be honest. Do not write one that expects a record nobody "
+            + "entered, and do not prove less than the criterion. Instead "
+            + (withTools ? "give check_journey " : "put in \"files\" an entry ") + writeDir
+            + "/none" + SUFFIX + " with the single line `" + NOTHING_CREATES
+            + ": <what the story shows that nothing on screen lets a person create>` as its "
+            + "content. The run stops there, before anything is built, and the project's owner "
+            + "is asked to merge this story with, or order it after, the one that creates it.";
+    }
+
+    /** The sentence under {@code key} when {@code yaml} is a mapping with that key alone. */
+    private static String onlyKey(String yaml, String key) {
         try {
             JsonNode root = yaml == null || yaml.isBlank() ? null : YAML.readTree(yaml);
             if (root == null || !root.isObject() || root.size() != 1
-                    || !root.path(NO_VISIBLE_EFFECT).isValueNode()) {
+                    || !root.path(key).isValueNode()) {
                 return null;
             }
-            String why = root.path(NO_VISIBLE_EFFECT).asText("").strip();
+            String why = root.path(key).asText("").strip();
             return why.isEmpty() ? null : why;
         } catch (Exception notYaml) {                                        // noqa
             return null;

@@ -7652,3 +7652,91 @@ line), `BudgetDecisionTest` (the question's text, the settings mapping, the old 
   run are not saved. One store write is queued per charge; a debounce was not needed at the
   rate of model calls.
 - *Tests.* `CloudGatePersistenceTest`, `BudgetAnswersTest`.
+
+## 80. A story that shows what nothing on screen creates (run 102, 2026-10-10)
+
+**What was found.** Run 102 built a story that keeps a list of records and shows it. The story
+that lets a person add a record was planned as a separate, later story. A journey starts on the
+entry page of an application with no data (section 63) and must create what it expects to see
+(sections 69 and 75). For this story there was no such journey: nothing on screen added a
+record, so the journey could not create one, and it could not honestly expect the list. The run
+stopped at FINAL_INTEGRATION with the journey failing, its author standing by it, and the screen
+correct. Neither side was wrong. The plan was.
+
+**The decision (coordinator, delegated by the owner).** The first story that shows a kind of
+thing to a person also contains a way, on screen, to create one. Every story the planner
+proposes must be provable by a person from the entry page of an empty application.
+
+**What facts exist, and where.** Established before anything was built:
+
+- *When stories are planned* the product holds, per story: the checks it claims, the stories it
+  comes after, and whether it is a delivery story or an enabler. A check is a sentence and a test
+  reference (`AcceptanceCriterion`). Nothing structured says which check shows a thing and which
+  creates one, and nothing says which story has a screen: that is read off the build and the
+  plan's write sets when a run starts (section 63). So no check at planning time can know this
+  without reading the wording of a check, which the repository's rules forbid.
+- *When the journey is written* `check_journey` knows the journey's steps, which expected texts
+  no step types and no code of the project holds (section 69), and what the start tree's entry
+  page already shows (section 75). A journey with no step that enters anything is not a sign: a
+  page of fixed content is proven that way. Whether the new screen will offer a way to create a
+  record is not in any tree yet, because the workers have not run.
+
+So the earliest sound point is the test author, which has the criteria, the design and every
+lookup, and it has to say it in a field, not in prose.
+
+**What changed.**
+
+1. *The planner is told* (`BacklogPlanning.proposalPrompt`, one paragraph): every story must be
+   provable in a browser starting from an empty application; a story that only displays things
+   which no earlier story and not the story itself lets a person create is put in one story with
+   the creating, or made to depend on it; across two requirements the display-only story takes
+   the creating one's checks it needs, or depends on it.
+2. *The author's answer* `nothingCreates: <what the story shows that nothing on screen lets a
+   person create>` (`JourneyFile.NOTHING_CREATES`, read by `JourneyFile.nothingCreatesOf`): a
+   file with that one key, given to `check_journey` in place of a journey, as
+   `noVisibleEffect` is (section 64). It is in the journey brief
+   (`JourneyFile.nothingCreatesBrief`) and in the question `check_journey` already asks about
+   an expected text nobody enters (`JourneyExpectations.question`), which is the one place
+   where the product itself sees the sign. `TestAuthorTools` records it and writes no file; a
+   journey kept afterwards makes it void; `TestAuthorClient.Authored.nothingCreates` carries
+   it; the author is not asked a second time for a journey. In a review of a failed journey it
+   is not taken.
+3. *The run stops when the tests are written* (`GreenfieldWorkflow.authorAcceptanceTests`,
+   `NothingCreatesIt`). The answer is taken only from a task that was asked for a journey and
+   handed in none, and it stands only when no task of the story claims a journey
+   (`NothingCreatesIt.standing`). The run parks at TEST_AUTHORING, before the red check and
+   before any worker, through `parkRun`, so the question reaches the Console and the supervisor
+   connection as every stopped build's does. Its first sentences are the finding: "This story
+   cannot be proven on an empty application: it shows X and nothing on screen lets a person
+   create that. Merge it with, or order it after, the story that creates it." Then, from the
+   backlog and with no model: the project's stories that are not delivered and not dropped, and
+   for each whether it comes after the stopped story today. Then what can be done: merge (drop
+   both stories and plan again), order (make this story come after the creating one), or
+   answer `retry` when the author is mistaken.
+4. *The planner can act on it.* The finding is kept on the story (`Story.nothingCreates`,
+   copied by `ArtifactStore.copyOf`) and cleared when a later build's author writes a journey.
+   `BacklogAuthoring.render`, which is the backlog the planner reads, prints it under the
+   story, also on a dropped story. Dropping a story hands its checks back to planning, as
+   before; the planner then reads why and has the rule of item 1.
+
+**What is not checked.**
+
+- Nothing checks a plan for this rule when stories are proposed. The planner is told; the first
+  check is the test author's answer during a build of the story.
+- The answer is the author's statement. The product does not verify that no screen creates the
+  thing, and it does not name the creating story: it lists the stories not delivered yet and
+  the person or supervisor chooses. An author that writes a journey expecting a record nobody
+  entered, and answers the question of section 69 by giving the same file again, still reaches
+  FINAL_INTEGRATION as run 102 did.
+- A review of a failed journey has no third verdict. `nothingCreates` given there is refused
+  with the instruction to say it in the reason of `JOURNEY_WRONG`.
+- No merge of two stories is done by the product. Merging is: drop both, plan again.
+- `Story.nothingCreates` is a new field of a stored class. It was not tried against a store
+  file written before it existed.
+- The stop in `GreenfieldWorkflow` was not run: no live run and no workflow test. The author's
+  answer is tested with a scripted model; the decision, the question and the planner's brief
+  are tested as functions.
+
+**Tests.** `AStoryThatShowsWhatNothingCreatesStopsEarlyTest`,
+`TheStoryPlannerPlansStoriesProvableOnAnEmptyApplicationTest`, two cases added to
+`TheTestAuthorWritesAJourneyForAScreenTest`.

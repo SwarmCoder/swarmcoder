@@ -1423,6 +1423,7 @@ public class ArtifactStore implements AutoCloseable {
         copy.setDiscoveredDependsOnStoryIds(new ArrayList<>(story.discoveredDependsOn()));
         copy.setDependencyRetries(story.dependencyRetries());
         copy.setWaitingReason(story.waitingReason());
+        copy.setNothingCreates(story.nothingCreates());
         copy.setWorkersPerTask(story.workersPerTask());
         copy.setAcceptedBy(story.acceptedBy());
         return copy;

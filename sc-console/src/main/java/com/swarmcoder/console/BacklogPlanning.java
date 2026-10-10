@@ -874,7 +874,7 @@ final class BacklogPlanning {
      *                whose R7 was a draft the instruction not to plan unagreed work was itself
      *                demonstrated with a working unagreed reference.
      */
-    private static String proposalPrompt(String example) {
+    static String proposalPrompt(String example) {
         return """
             You are a delivery planner. From the requirements, the existing backlog and any answers \
             given, propose STORIES. You are not writing them into the backlog — an operator reviews \
@@ -939,6 +939,17 @@ final class BacklogPlanning {
             searches it; a story that defines a record comes before every story that reads one. \
             Do NOT declare a dependency for things that merely sound related, and never make two \
             stories wait for each other — that is a circle and neither would ever start.
+
+            EVERY STORY MUST BE PROVABLE IN A BROWSER STARTING FROM AN EMPTY APPLICATION. Each \
+            delivered story is proven by a person's journey from the entry page, with no data, \
+            and the journey must create on screen whatever it expects to see. A story that only \
+            DISPLAYS things which no earlier story and not the story itself lets a person create \
+            cannot be proven. Put the displaying and the creating in ONE story; or, when they \
+            must stay apart, make the display-only story depend on the creating one. When the two \
+            are in separate requirements, the display-only story takes the creating one's checks \
+            it needs, or depends on it. A story in the backlog marked COULD NOT BE PROVEN ON AN \
+            EMPTY APPLICATION was stopped for exactly this: plan its checks together with the \
+            checks that create what it shows.
 
             PREFER FEW SUBSTANTIAL STORIES TO MANY TRIVIAL ONES. A story that delivers two or three \
             related criteria end to end is worth more than three stories delivering one clause \

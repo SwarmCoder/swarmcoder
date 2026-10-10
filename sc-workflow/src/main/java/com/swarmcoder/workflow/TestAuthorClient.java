@@ -85,11 +85,34 @@ public class TestAuthorClient {
                            SelfImplementedContract.Check selfImplemented,
                            AcceptanceTestReach.Check reach,
                            AcceptanceTestReflection.Check reflection,
-                           List<String> journeys, String journeyWaiver) {
+                           List<String> journeys, String journeyWaiver,
+                           String nothingCreates) {
 
         /** A result with no journey says so with an empty list, never null. */
         public Authored {
             journeys = journeys == null ? List.of() : journeys;
+        }
+
+        /** The shape from before an author could say nothing creates what it shows (section 80). */
+        public Authored(List<String> paths, List<Claim> claims, String failureReason,
+                        AcceptanceTestVocabulary.Check vocabulary,
+                        SelfImplementedContract.Check selfImplemented,
+                        AcceptanceTestReach.Check reach,
+                        AcceptanceTestReflection.Check reflection,
+                        List<String> journeys, String journeyWaiver) {
+            this(paths, claims, failureReason, vocabulary, selfImplemented, reach, reflection,
+                journeys, journeyWaiver, null);
+        }
+
+        /**
+         * The same result with the author's answer that the story cannot be proven on an empty
+         * application: what it shows that no screen lets a person create. Null when there is
+         * none.
+         */
+        public Authored withNothingCreates(String what) {
+            return new Authored(paths, claims, failureReason, vocabulary, selfImplemented, reach,
+                reflection, journeys, journeyWaiver,
+                what == null || what.isBlank() ? null : what.strip());
         }
 
         /** The shape from before an author could answer in place of a journey (section 64). */
@@ -109,7 +132,8 @@ public class TestAuthorClient {
          */
         public Authored withJourneyWaiver(String why) {
             return new Authored(paths, claims, failureReason, vocabulary, selfImplemented, reach,
-                reflection, journeys, why == null || why.isBlank() ? null : why.strip());
+                reflection, journeys, why == null || why.isBlank() ? null : why.strip(),
+                nothingCreates);
         }
 
         /** The shape from before a task could claim a journey (section 63). */
@@ -129,7 +153,7 @@ public class TestAuthorClient {
          */
         public Authored withJourneys(List<String> written) {
             return new Authored(paths, claims, failureReason, vocabulary, selfImplemented, reach,
-                reflection, written, journeyWaiver);
+                reflection, written, journeyWaiver, nothingCreates);
         }
 
         public Authored(List<String> paths, List<Claim> claims, String failureReason,
@@ -182,7 +206,7 @@ public class TestAuthorClient {
          */
         public Authored namingUndeliverableTypes(AcceptanceTestVocabulary.Check check) {
             return new Authored(paths, claims, failureReason, check, selfImplemented, reach,
-                reflection, journeys, journeyWaiver);
+                reflection, journeys, journeyWaiver, nothingCreates);
         }
 
         /**
@@ -192,7 +216,7 @@ public class TestAuthorClient {
          */
         public Authored implementingContractsItself(SelfImplementedContract.Check check) {
             return new Authored(paths, claims, failureReason, vocabulary, check, reach, reflection,
-                journeys, journeyWaiver);
+                journeys, journeyWaiver, nothingCreates);
         }
 
         /**
@@ -202,7 +226,7 @@ public class TestAuthorClient {
          */
         public Authored reachingBrowserOnlyCode(AcceptanceTestReach.Check check) {
             return new Authored(paths, claims, failureReason, vocabulary, selfImplemented, check,
-                reflection, journeys, journeyWaiver);
+                reflection, journeys, journeyWaiver, nothingCreates);
         }
 
         /**
@@ -213,7 +237,7 @@ public class TestAuthorClient {
          */
         public Authored reflectingOnProjectTypes(AcceptanceTestReflection.Check check) {
             return new Authored(paths, claims, failureReason, vocabulary, selfImplemented, reach,
-                check, journeys, journeyWaiver);
+                check, journeys, journeyWaiver, nothingCreates);
         }
 
         /** What the tests reflect on, for the park brief. */
@@ -510,7 +534,8 @@ public class TestAuthorClient {
         // once, in the conversation that wrote the test. The test draft stays as it is.
         if (call.journeyDue() && call.followUp() == null && tools != null && tools.journeyDue()
                 && tools.hasDraft() && tools.journeys().isEmpty()
-                && tools.journeyWaiver() == null && outcome.conversation() != null) {
+                && tools.journeyWaiver() == null && tools.nothingCreates() == null
+                && outcome.conversation() != null) {
             log.warn("Test author handed in no journey for task '{}', which changes a screen; "
                 + "asking for it in the same conversation", call.task().title());
             tools.handInAgain();
@@ -604,6 +629,14 @@ public class TestAuthorClient {
             entry.path = tools.journeyWaiverPath();
             entry.content = JourneyFile.NO_VISIBLE_EFFECT + ": \""
                 + tools.journeyWaiver().replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+            reply.files.add(entry);
+        }
+        // And the answer that nothing on screen creates what the story shows (section 80).
+        if (tools.nothingCreates() != null && tools.journeys().isEmpty()) {
+            LlmTestFile entry = new LlmTestFile();
+            entry.path = tools.nothingCreatesPath();
+            entry.content = JourneyFile.NOTHING_CREATES + ": \""
+                + tools.nothingCreates().replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
             reply.files.add(entry);
         }
         return reply;
@@ -1543,9 +1576,15 @@ public class TestAuthorClient {
             // The answer given in place of a journey travels in the same map under a key no
             // path can have; a journey written as well makes it void.
             String waiver = journeys.remove(JOURNEY_WAIVER);
+            String uncreated = journeys.remove(NOTHING_CREATES);
             Authored authored = Authored.of(List.copyOf(written), List.copyOf(claims))
                 .withJourneys(List.copyOf(journeys.keySet()))
-                .withJourneyWaiver(journeys.isEmpty() ? waiver : null);
+                .withJourneyWaiver(journeys.isEmpty() ? waiver : null)
+                .withNothingCreates(journeys.isEmpty() ? uncreated : null);
+            if (authored.nothingCreates() != null) {
+                log.info("Test author says task '{}' cannot be proven on an empty application; "
+                    + "nothing on screen creates: {}", task.title(), authored.nothingCreates());
+            }
             if (authored.journeyWaiver() != null) {
                 log.info("Test author answered in place of a journey for task '{}': {}",
                     task.title(), authored.journeyWaiver());
@@ -2524,6 +2563,9 @@ public class TestAuthorClient {
     /** The key under which {@code write} records an answer given in place of a journey. */
     private static final String JOURNEY_WAIVER = ":" + JourneyFile.NO_VISIBLE_EFFECT;
 
+    /** The key under which {@code write} records that nothing creates what the story shows. */
+    private static final String NOTHING_CREATES = ":" + JourneyFile.NOTHING_CREATES;
+
     private static List<String> write(Path repoRoot, String protectedDir, LlmTestFiles parsed,
                                       Map<String, String> journeys) throws IOException {
         List<String> written = new ArrayList<>();
@@ -2542,6 +2584,11 @@ public class TestAuthorClient {
                 String waiver = JourneyFile.waiverOf(file.content);
                 if (waiver != null) {
                     journeys.put(JOURNEY_WAIVER, waiver); // recorded, never a file of the project
+                    continue;
+                }
+                String uncreated = JourneyFile.nothingCreatesOf(file.content);
+                if (uncreated != null) {
+                    journeys.put(NOTHING_CREATES, uncreated); // recorded, never a file either
                     continue;
                 }
                 JourneyFile.Read read = JourneyFile.read(path, file.content);
@@ -2660,7 +2707,8 @@ public class TestAuthorClient {
             + (withTools ? "Give the file to check_journey; a journey it calls VALID is handed in "
                 + "with your test."
                 : "Put the journey in \"files\" as one more entry, its YAML as the content.")
-            + inPlace;
+            + inPlace
+            + JourneyFile.nothingCreatesBrief(writeDir, withTools);
     }
 
     /**

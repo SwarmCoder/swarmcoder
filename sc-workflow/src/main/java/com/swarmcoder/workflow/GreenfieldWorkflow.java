@@ -2562,6 +2562,9 @@ public class GreenfieldWorkflow {
         List<String> allWritten = new ArrayList<>();
         Map<String, Task> authoredBy = new HashMap<>();
         String parkFor = null;
+        // What an author said the story shows that nothing on screen creates (section 80).
+        String nothingCreates = null;
+        String nothingCreatesTask = null;
         int criteriaOffered = 0;
         // What the test author itself said went wrong, per task — quoted in the park message
         // below instead of a guess at "the endpoint" for a failure that may have had nothing to
@@ -2795,6 +2798,15 @@ public class GreenfieldWorkflow {
                         + "\"no visible effect\" in place of a journey; not taken, because "
                         + "browser code uses what the plan writes or no journey was asked.");
                 }
+                // The story shows what nothing on screen lets a person create (section 80,
+                // live run 102): the author's statement in its own field, taken only where a
+                // journey was asked of this task and none was handed in.
+                if (authored.nothingCreates() != null && authored.journeys().isEmpty() && asked
+                        && nothingCreates == null) {
+                    nothingCreates = authored.nothingCreates();
+                    nothingCreatesTask = task.title();
+                    log(NothingCreatesIt.logLine(task.title(), nothingCreates));
+                }
                 artifactStore.saveTask(task);
                 if (!authored.isEmpty()) {
                     log("TEST_AUTHORING: task '" + task.title() + "' claims " + authored.paths());
@@ -2829,6 +2841,26 @@ public class GreenfieldWorkflow {
             // Who owns each journey (section 70): a task that writes the screen, not whichever
             // task's author happened to write it.
             settleJourneyOwners(graph, browserOnly, "TEST_AUTHORING");
+            // A story that cannot be proven on an empty application stops here, before any
+            // worker, with what can be done about it (section 80). Another task of the same
+            // story may have written a journey; that journey is then the story's and it goes
+            // on, to be made in the browser as every journey is.
+            String standing = NothingCreatesIt.standing(nothingCreates, graph.tasks());
+            Story shown = run.storyId() == null ? null : artifactStore.getStory(run.storyId());
+            if (shown != null && !java.util.Objects.equals(shown.nothingCreates(), standing)) {
+                shown.setNothingCreates(standing);
+                artifactStore.saveStory(shown);
+            }
+            if (standing != null && parkFor == null) {
+                parkFor = NothingCreatesIt.brief(
+                    shown == null ? "Task '" + nothingCreatesTask + "'"
+                        : (shown.key() == null ? "" : shown.key() + " ") + "\""
+                            + (shown.title() == null ? "" : shown.title()) + "\"",
+                    standing,
+                    shown == null || shown.projectId() == null ? List.of()
+                        : NothingCreatesIt.candidates(shown,
+                            artifactStore.listStories(shown.projectId())));
+            }
             // THE BACKSTOP (section 63), with no model: a plan that changes a screen and whose
             // tasks claim no journey does not go on, whatever the author made of being asked.
             if (parkFor == null) {

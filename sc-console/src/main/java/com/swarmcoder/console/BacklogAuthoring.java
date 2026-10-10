@@ -108,6 +108,14 @@ final class BacklogAuthoring {
                 sb.append("  unblocks ").append(handles.isEmpty() ? "(nothing linked)" : String.join(",", handles));
             }
             sb.append('\n');
+            // What a build found (section 80): the planner reads it when the checks are
+            // planned again, also on a story that was dropped for it.
+            if (s.state() != StoryState.DONE && s.nothingCreates() != null
+                    && !s.nothingCreates().isBlank()) {
+                sb.append("    COULD NOT BE PROVEN ON AN EMPTY APPLICATION: it shows \"")
+                    .append(s.nothingCreates().strip().replaceAll("\\s+", " "))
+                    .append("\" and nothing on screen lets a person create that\n");
+            }
         }
     }
 

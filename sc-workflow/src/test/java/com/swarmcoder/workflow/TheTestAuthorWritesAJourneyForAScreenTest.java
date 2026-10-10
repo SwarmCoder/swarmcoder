@@ -223,6 +223,64 @@ class TheTestAuthorWritesAJourneyForAScreenTest {
         }
     }
 
+    /**
+     * Section 80 (live run 102): a story that shows a kind of thing, in an application with no
+     * way on screen to add one, has no honest journey. Its author says so in a field of its
+     * own; it is recorded, no file is written, and the author is not asked again for a journey.
+     */
+    @Test
+    void theAuthorMayPutOnRecordThatNothingOnScreenCreatesWhatTheStoryShows() throws Exception {
+        String none = DIR + "/accept/none.journey.yaml";
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(
+                conversation -> "{\"files\":[],\"wrote\":[]}",
+                (turn, conversation) -> switch (turn) {
+                    case 1 -> ScriptedAgentLlm.Turn.call("compile_test",
+                        Map.of("path", TEST_FILE, "content", TEST));
+                    case 2 -> ScriptedAgentLlm.Turn.call("check_journey", Map.of("path", none,
+                        "content", "nothingCreates: an order in the list of orders\n"));
+                    default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("wrote", CLAIM));
+                })) {
+            TestAuthorClient.Authored authored = author(llm).authorTests(app, task(), null,
+                task().criteria(), "", true, null, List.of(), BrowserOnlyCode.Survey.NONE,
+                List.of(), true);
+
+            assertThat(llm.sessionRequests.get(0))
+                .contains("WHEN THE STORY CANNOT BE PROVEN ON AN EMPTY APPLICATION")
+                .contains("nothingCreates: <");
+            assertThat(llm.sessionRequests.get(2)).contains("RECORDED in place of a journey")
+                .contains("an order in the list of orders");
+            assertThat(llm.sessionRequests).as("not asked again for a journey").hasSize(3);
+            assertThat(authored.paths()).containsExactly(TEST_FILE);
+            assertThat(authored.journeys()).isEmpty();
+            assertThat(authored.journeyWaiver()).isNull();
+            assertThat(authored.nothingCreates()).isEqualTo("an order in the list of orders");
+        }
+        assertThat(app.resolve(none)).as("an answer, not a file of the project").doesNotExist();
+    }
+
+    @Test
+    void aJourneyKeptAfterThatAnswerMakesItVoid() throws Exception {
+        try (ScriptedAgentLlm llm = new ScriptedAgentLlm(
+                conversation -> "{\"files\":[],\"wrote\":[]}",
+                (turn, conversation) -> switch (turn) {
+                    case 1 -> ScriptedAgentLlm.Turn.call("compile_test",
+                        Map.of("path", TEST_FILE, "content", TEST));
+                    case 2 -> ScriptedAgentLlm.Turn.call("check_journey", Map.of(
+                        "path", JOURNEY_FILE, "content", "nothingCreates: an order\n"));
+                    case 3 -> ScriptedAgentLlm.Turn.call("check_journey",
+                        Map.of("path", JOURNEY_FILE, "content", JOURNEY));
+                    default -> ScriptedAgentLlm.Turn.call("report_done", Map.of("wrote", CLAIM));
+                })) {
+            TestAuthorClient.Authored authored = author(llm).authorTests(app, task(), null,
+                task().criteria(), "", true, null, List.of(), BrowserOnlyCode.Survey.NONE,
+                List.of(), true);
+
+            assertThat(llm.sessionRequests.get(3)).contains("VALID - kept");
+            assertThat(authored.journeys()).containsExactly(JOURNEY_FILE);
+            assertThat(authored.nothingCreates()).isNull();
+        }
+    }
+
     @Test
     void aTaskThatChangesNoScreenIsOfferedNoJourneyToolAndToldNothingAboutOne() throws Exception {
         try (ScriptedAgentLlm llm = new ScriptedAgentLlm(
