@@ -20,6 +20,8 @@ package com.swarmcoder.app;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.swarmcoder.console.ConsoleContext;
+import com.swarmcoder.console.DecisionAnswers;
 import com.swarmcoder.console.api.ControlService;
 import com.swarmcoder.domain.CarriedWarning;
 import com.swarmcoder.domain.Decision;
@@ -191,47 +193,33 @@ final class CoordinatorAsk {
 
     // --- what the product offers for each decision --------------------------------------------
 
-    /** The answers the product can act on for a decision of this kind, {@code stop} always last. */
+    /**
+     * The answers the product can act on for a decision of this kind, {@code stop} always last.
+     *
+     * <p>The list is the product's own ({@code DecisionAnswers.optionsFor}); the harness adds only
+     * {@code stop}, which is its way of ending the walk and is nothing the product does.
+     */
     static List<Option> optionsFor(DecisionKind kind) {
         List<Option> options = new ArrayList<>();
-        if (kind == DecisionKind.GUIDELINE_REVIEW) {
-            options.add(new Option("keep", "the rule stands as written; the task is built again "
-                + "under it (text is ignored)", false));
-            options.add(new Option("reword", "the rule changes for the whole project. text = the "
-                + "new wording; empty text takes the suggestion printed in the question", true));
-            options.add(new Option("allow", "this task may do what the candidates did; the rule "
-                + "gains that exception (text is ignored)", false));
-        } else if (kind == DecisionKind.BLOCKED_TASK) {
-            options.add(new Option("retry", "record the text as the operator's answer (optional) "
-                + "and run the stage the run parked in again, exactly as the app does for a run "
-                + "left parked at start-up. Change something first (the files named under "
-                + "evidence) or expect the same park, or a different one if the model varies",
-                true));
-        }
         // APPROVAL and BUDGET_EXTENSION have nothing an unattended run can do about them: no
         // producer raises APPROVAL any more, and BUDGET_EXTENSION has no run (the harness uses a
         // free local model). Only stop is offered, so a coordinator is never invited to guess.
+        if (kind == DecisionKind.GUIDELINE_REVIEW || kind == DecisionKind.BLOCKED_TASK) {
+            for (DecisionAnswers.Option option : DecisionAnswers.optionsFor(kind)) {
+                options.add(new Option(option.token(), option.description(), option.acceptsText()));
+            }
+        }
         options.add(new Option(STOP, "give up: the chain link breaks exactly as it does without "
             + "askDir (text is ignored)", false));
         return options;
     }
 
     /**
-     * What is written on the decision for an answer — in the form the product's own code reads.
-     * A rule question is read by {@code RuleQuestions.parse}: it must START with keep, reword or
-     * allow, and "reword: &lt;wording&gt;" carries a new wording.
+     * What is written on the decision for an answer — in the form the product's own code reads,
+     * and worded by the product ({@code DecisionAnswers.responseFor}).
      */
     static String responseFor(DecisionKind kind, Answer answer) {
-        String token = answer.token();
-        String text = answer.freeText();
-        if (kind == DecisionKind.GUIDELINE_REVIEW) {
-            return switch (token) {
-                case "reword" -> text.isEmpty() ? "reword" : "reword: " + text;
-                case "allow" -> "allow";
-                default -> "keep";
-            };
-        }
-        return "Answered by the coordinator (" + token + ")" + (text.isEmpty() ? "" : ": " + text);
+        return DecisionAnswers.responseFor(kind, answer.token(), answer.freeText(), "coordinator");
     }
 
     // --- finding a park ---------------------------------------------------------------------------
@@ -331,9 +319,10 @@ final class CoordinatorAsk {
     }
 
     /**
-     * Applies an answer through the product: the decision is written the way the Console's answer
-     * box writes it ({@code ControlService.resolveDecision}), then the run is handed back to its
-     * engine the way {@code RunResumer} hands back a parked run at start-up.
+     * Applies an answer through the product, and through nothing else: {@code
+     * DecisionAnswers.answerAndResume} writes the decision the way the Console's answer box writes
+     * it and hands the run back to its engine. The harness used to do both steps itself; the only
+     * thing it still supplies is which engine a run of this walk belongs to.
      *
      * @return null on success, else why not
      */
@@ -342,10 +331,16 @@ final class CoordinatorAsk {
             return "the harness has not bound the product's control service yet";
         }
         try {
-            control.resolveDecision(park.decision().id().toString(),
-                responseFor(park.decision().kind(), answer));
-            resume.accept(park.run().id());
-            return null;
+            ConsoleContext.get().withRunResume(id -> {
+                resume.accept(id);
+                return "";
+            });
+            DecisionAnswers.Outcome outcome = DecisionAnswers.answerAndResume(
+                park.decision().id().toString(), answer.token(), answer.freeText(), "coordinator");
+            if (!outcome.ok()) {
+                return outcome.error();
+            }
+            return outcome.resumed() ? null : outcome.note();
         } catch (RuntimeException e) {
             return e.toString();
         }

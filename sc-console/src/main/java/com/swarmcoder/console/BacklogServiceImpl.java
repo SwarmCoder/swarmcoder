@@ -190,6 +190,15 @@ public class BacklogServiceImpl implements BacklogService {
     }
 
     /**
+     * Accepting a story on behalf of someone other than the person at the Console: the same
+     * acceptance, with who decided written on the story and in the journal.
+     */
+    String acceptStoryAs(String storyId, String acceptedBy) {
+        return mutate(storyId,
+            (store, projectId, story) -> accept(store, projectId, story, acceptedBy));
+    }
+
+    /**
      * The whole of accepting a story, for both the person who presses the button and the unattended
      * pilot that presses it for them overnight.
      *

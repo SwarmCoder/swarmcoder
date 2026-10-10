@@ -9,6 +9,16 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ## [Unreleased]
 
+### Breaking
+
+- **MCP tools that change something now need a secret.** `start_run`, `decide_run`,
+  `answer_decision` and every new tool that changes something are refused unless the call
+  carries `Authorization: Bearer <secret>`. The secret is made the first time the MCP server
+  starts and kept in the file `mcp-secret` in the SwarmCoder home folder; it is never logged
+  and no tool returns it. Tools that only read need nothing, as before. A client that used the
+  three older tools must add the header:
+  `claude mcp add --transport http swarmcoder <url> --header "Authorization: Bearer <secret>"`.
+
 ### Added
 
 - **Cloud token limits per run, per story and per project.** `budgets` takes
@@ -17,6 +27,32 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   all optional. Passing one parks the run and asks the operator, naming the project, story and
   run, how much input and output was used, and offering to extend by the same amount again or to
   stop. The run report shows the cloud tokens used and the limits in force.
+
+- **An outside model can run a whole build: the supervisor connection.** SwarmCoder's own MCP
+  server (`mcpApi.enabled`) gains the tools a supervising model needs to do what a person does
+  in the Console. `wait_for_attention` blocks until something needs it and returns one short
+  item (what is asked, the answers that will be acted on, the evidence, and the tool call that
+  answers it, about 1,500 characters at most); `next_attention` returns the same without
+  waiting. The rest wrap the Console's own services: `create_project`, `switch_project`,
+  `add_document`, `view_flow`, `start_flow`, `answer_flow_question`, `submit_answers`,
+  `apply_proposals`, `agree_requirements`, `list_backlog`, `promote_story`, `start_story`,
+  `accept_delivery`, `send_back`, `decision_text`. By the owner's decision the supervisor may
+  pass the two gates a person passes: agreeing requirements and accepting a delivery.
+
+- **Answering a stopped build restarts it.** `answer_question` records the answer and hands the
+  parked run back to its engine, which runs the stage it stopped in again. Until now only the
+  journey harness could do that; a parked run in the product was taken up again only when the
+  application started. The harness now uses the product's path. `answer_decision` still only
+  records.
+
+- **A decision log for the supervisor.** Every answer a supervisor gives is kept with what was
+  asked, what was answered and when, in the project's existing record of decisions taken for
+  the operator, marked with the actor "supervisor". `decision_log` reads it.
+
+- **Supervised running.** `overnight.supervised: true` makes the queue start each story in
+  turn, as unattended running does, while the application accepts nothing and answers nothing
+  itself: every delivery and every question waits for the supervisor. Off by default; with it
+  off nothing about the product changes.
 
 - **A check on what a push publishes.** `scripts/pre-push-check.sh` reads the files, the commit
   messages and every line added by the commits about to be pushed, and refuses machine paths,

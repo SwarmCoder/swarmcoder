@@ -236,13 +236,25 @@ public class ConfigLoader {
             # Turn this on and SwarmCoder opens a second door, for THIS MACHINE ONLY, that an
             # assistant such as Claude Code can knock on to ask what a build is doing and why it
             # stopped. It is off until you turn it on, because opening a door is your decision.
-            # Nothing outside this computer can reach it, and there is no password on it, so leave
-            # it off on a machine other people can use.
+            # Nothing outside this computer can reach it. Looking needs no password. Anything
+            # that changes something (answering a question, agreeing requirements, accepting a
+            # delivery, starting or restarting a build) needs the secret SwarmCoder writes to the
+            # file "mcp-secret" in this folder the first time it starts with this turned on.
+            # Treat that file like this one.
             #
             # Once it is on, restart SwarmCoder and run this once in a terminal:
             #   claude mcp add --transport http swarmcoder http://127.0.0.1:%d/mcp
+            # To let the assistant change things too, add the secret from the file:
+            #   --header "Authorization: Bearer <the contents of mcp-secret>"
             #
             # Add readOnly: true if you want the assistant to be able to look but not touch.
+            #
+            # An assistant connected this way can also run a whole build for you: it is asked
+            # every question you would be asked, and accepts or sends back each delivery. Add
+            #   overnight:
+            #     supervised: true
+            # and SwarmCoder starts each story in turn but accepts nothing and answers nothing
+            # itself. Everything the assistant decides is kept in the project's decision log.
             #
             # mcpApi:
             #   enabled: true

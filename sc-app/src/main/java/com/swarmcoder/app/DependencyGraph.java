@@ -65,6 +65,7 @@ import com.swarmcoder.console.ConsoleContext;
 import com.swarmcoder.console.api.ControlService;
 import com.swarmcoder.console.api.GraphService;
 import com.swarmcoder.console.api.ObserverService;
+import com.swarmcoder.server.mcp.McpSecret;
 import com.swarmcoder.server.mcp.SwarmMcpServer;
 import com.swarmcoder.console.UnattendedPilot;
 import com.zeroz4j.server.Zeroz4jServer;
@@ -1326,6 +1327,13 @@ public class DependencyGraph {
             // not need a restart.
             .withUnattended(() -> this.config.overnight() != null
                 && this.config.overnight().enabled())
+            // Supervised running: an outside supervising model, over the MCP server, answers what
+            // a person would. Read live for the same reason. Off unless the settings say so.
+            .withSupervised(() -> this.config.overnight() != null
+                && this.config.overnight().isSupervised())
+            // Answering a question a build stopped to ask hands the build back to the engine of
+            // the project it belongs to, the same hand-back a parked run gets at start-up.
+            .withRunResume(this::resumeParkedRun)
             .withSettings(this::readConfigYaml, this::writeConfigYaml)
             // How to build a folder of code SwarmCoder has never seen. Without a contract every
             // candidate comes back unverified, which is the swarm choosing between untested
@@ -1511,6 +1519,25 @@ public class DependencyGraph {
     }
 
     /**
+     * Hands one parked run back to its own project's engine, which retries the stage it parked in.
+     * The single-run form of what {@link #resumeUnfinishedRuns()} does for every run at start-up.
+     *
+     * @return "" or "error: ..."
+     */
+    private String resumeParkedRun(UUID runId) {
+        com.swarmcoder.domain.Run run = this.artifactStore.root().runs.get(runId);
+        if (run == null) {
+            return "error: that build is no longer in the store";
+        }
+        WorkflowEngine engine = workflowEngineFor(run.projectId());
+        if (engine == null) {
+            return "error: the project that build belongs to can no longer be opened";
+        }
+        engine.advanceAsync(run);
+        return "";
+    }
+
+    /**
      * Starts the MCP server when {@code mcpApi.enabled} is set, so an outside agent (Claude Code,
      * an IDE, CI) can ask what a run is doing. Returns its URL, or null when it is off — which is
      * the default, because opening a port changes what this product exposes and that is the
@@ -1526,11 +1553,26 @@ public class DependencyGraph {
             return null;
         }
         try {
+            // Every tool that changes something needs this secret. It is made on first start, kept
+            // beside the settings file, and never logged. If it cannot be read or made, the
+            // server still starts and every such tool is refused: reading stays possible, and
+            // nothing that changes anything is ever offered on an open port.
+            String writeSecret = null;
+            if (!mcp.isReadOnly()) {
+                try {
+                    writeSecret = McpSecret.loadOrCreate(
+                        ConfigLoader.configPath().resolveSibling(McpSecret.FILE_NAME));
+                } catch (Exception e) {
+                    log.warn("The MCP secret could not be read or created, so every MCP tool that "
+                        + "changes something will be refused: {}", e.toString());
+                }
+            }
             SwarmMcpServer server = new SwarmMcpServer(
                 CDI.current().select(ObserverService.class).get(),
                 CDI.current().select(GraphService.class).get(),
                 CDI.current().select(ControlService.class).get(),
-                mcp.portOrDefault(), "", mcp.isReadOnly());
+                mcp.portOrDefault(), "", mcp.isReadOnly(),
+                new com.swarmcoder.console.SupervisorDesk(), writeSecret);
             String url = server.start();
             this.mcpServer = server;
             Runtime.getRuntime().addShutdownHook(new Thread(this::stopMcpServer, "mcp-shutdown"));

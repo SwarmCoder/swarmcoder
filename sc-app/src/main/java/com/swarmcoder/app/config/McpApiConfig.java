@@ -28,9 +28,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * <p><b>Off unless the operator turns it on.</b> A port that opens itself changes what the product
  * exposes, and that is a decision, not a default. When it is on it binds the loopback interface and
- * nothing else — there is deliberately no host setting, because there is no authentication and the
- * Console's own security note (docs/OBSERVABILITY_DESIGN.md) keeps auth out of scope until the
- * observer leaves the workstation.
+ * nothing else — there is deliberately no host setting. Tools that only read need no credential.
+ * Every tool that changes something needs the secret kept in the file {@code mcp-secret} beside the
+ * settings file, sent as {@code Authorization: Bearer}; see {@code McpSecret}.
  *
  * @param enabled  turn the server on; absent or false means no port is opened
  * @param port     the loopback port; absent means {@value #DEFAULT_PORT}

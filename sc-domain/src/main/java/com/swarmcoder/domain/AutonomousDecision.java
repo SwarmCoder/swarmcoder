@@ -77,6 +77,17 @@ public class AutonomousDecision {
     /** The clarification this answers, when it answers one. */
     private UUID questionId;
 
+    /**
+     * Who decided. Null on every row written before this field existed, and on everything the
+     * application decides itself; {@link #SUPERVISOR} when an outside supervising model, connected
+     * over the MCP server, gave the answer. A supervisor's answer is not the machine inventing a
+     * requirement and not a person reading one either, so the record says which.
+     */
+    private String actor;
+
+    /** The {@link #actor} written on a decision an outside supervising model took. */
+    public static final String SUPERVISOR = "supervisor";
+
     public AutonomousDecision() {}
 
     public AutonomousDecision(UUID id, UUID projectId, UUID sessionId, Instant at,
@@ -134,6 +145,15 @@ public class AutonomousDecision {
     public UUID getQuestionId() { return questionId; }
     public void setQuestionId(UUID questionId) { this.questionId = questionId; }
 
+    public String actor() { return actor; }
+    public String getActor() { return actor; }
+    public void setActor(String actor) { this.actor = actor; }
+
+    /** True when an outside supervising model took this decision, not the application itself. */
+    public boolean bySupervisor() {
+        return SUPERVISOR.equals(actor);
+    }
+
     /**
      * The one-line heading the operator reads in the list, saying plainly which of the two things
      * this was.
@@ -142,6 +162,9 @@ public class AutonomousDecision {
      * word the same decision differently.
      */
     public String headline() {
+        if (bySupervisor()) {
+            return supervisorHeadline();
+        }
         if (kind == AutonomousDecisionKind.ANSWERED_QUESTION) {
             return grounded
                 ? "Answered from your documents"
@@ -162,6 +185,25 @@ public class AutonomousDecision {
         };
     }
 
+    /** The heading of a decision the supervisor took: never worded as the machine's own. */
+    private String supervisorHeadline() {
+        if (kind == null) {
+            return "The supervisor decided";
+        }
+        return switch (kind) {
+            case ANSWERED_QUESTION -> "The supervisor answered this question";
+            case AGREED_REQUIREMENTS -> "The supervisor agreed this as scope";
+            case ACCEPTED_PROPOSALS -> "The supervisor accepted what the reading proposed";
+            case ACCEPTED_STORIES -> "The supervisor accepted the planned slices of work";
+            case PROMOTED_STORY -> "The supervisor marked this ready to build";
+            case ACCEPTED_DELIVERY -> "The supervisor accepted this delivery";
+            case SENT_BACK_DELIVERY -> "The supervisor sent this back to be built again";
+            case ANSWERED_RUN_QUESTION -> "The supervisor answered a stopped build";
+            case STARTED_STORY -> "The supervisor started this build";
+            default -> "The supervisor decided";
+        };
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -173,12 +215,13 @@ public class AutonomousDecision {
             && kind == that.kind && Objects.equals(subject, that.subject)
             && Objects.equals(question, that.question) && Objects.equals(answer, that.answer)
             && Objects.equals(reasoning, that.reasoning) && Objects.equals(flowId, that.flowId)
-            && Objects.equals(questionId, that.questionId);
+            && Objects.equals(questionId, that.questionId)
+            && Objects.equals(actor, that.actor);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(id, projectId, sessionId, at, kind, subject, question, answer,
-            reasoning, grounded, flowId, questionId);
+            reasoning, grounded, flowId, questionId, actor);
     }
 }
