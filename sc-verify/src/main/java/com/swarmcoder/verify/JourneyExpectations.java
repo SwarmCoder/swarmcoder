@@ -168,7 +168,10 @@ public final class JourneyExpectations {
             + "stands holds it. If it is DATA (a record's name, a title, a value somebody must "
             + "have entered), the journey cannot pass on a correct implementation either: add "
             + "the steps that enter it through the screen first, or expect what a step of the "
-            + "journey types. If it is a text the NEW screen shows by itself (a heading, a "
+            + "journey types. If no screen - of the application as it stands or of this story - "
+            + "lets a person enter it, give check_journey the single line `"
+            + JourneyFile.NOTHING_CREATES + ": <what the story shows that nothing on screen "
+            + "lets a person create>` instead of a journey. If it is a text the NEW screen shows by itself (a heading, a "
             + "label, a message), the journey is right as it is.").toString();
     }
 

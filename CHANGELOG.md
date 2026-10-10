@@ -108,6 +108,16 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A story that shows things nobody can yet create no longer ends in a contradiction.** A story
+  is proven in a browser from the entry page of an empty application, so a story that only
+  displays a kind of thing, planned before the story that lets a person add one, could not be
+  proven; the build stopped at the end with the journey and the screen each called right. The
+  story planner is now told that every story must be provable from an empty application. A
+  test author who finds no honest journey says so in a field of its own
+  (`nothingCreates: <what>`), and the build stops when the tests are written, before anything
+  is built, with a question that names what the story shows, the stories not delivered yet,
+  and what to do: merge, reorder, or retry. The finding is kept on the story and shown to the
+  planner when its checks are planned again.
 - **`maxCloudTokensPerRun` counted the whole process, not a run.** The counter was never reset,
   and the question it raised named no run. It is now kept per run, and the question carries the run.
 - **Every journey starts on the application as the tree gives it.** A journey that failed and

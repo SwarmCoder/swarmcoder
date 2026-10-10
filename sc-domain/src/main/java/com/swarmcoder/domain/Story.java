@@ -102,6 +102,15 @@ public class Story {
      */
     private String waitingReason;
     /**
+     * What this story shows that no screen lets a person create, as its test author stated it in
+     * a field of its own (live run 102, section 80) - so the story could not be proven in a
+     * browser on an empty application, and its build stopped before any worker started. Kept on
+     * the story, also once it is dropped, because the story planner reads it when the checks
+     * are planned again. Null when nothing of the kind was found, or a later build's author
+     * wrote a journey.
+     */
+    private String nothingCreates;
+    /**
      * How many workers each of this story's tasks gets, or null to inherit.
      *
      * <p>The most specific of the three sizing layers — story, then project, then the global
@@ -268,6 +277,10 @@ public class Story {
     public String waitingReason() { return waitingReason; }
     public String getWaitingReason() { return waitingReason; }
     public void setWaitingReason(String waitingReason) { this.waitingReason = waitingReason; }
+    /** What it shows that no screen lets a person create; null when nothing was found. */
+    public String nothingCreates() { return nothingCreates; }
+    public String getNothingCreates() { return nothingCreates; }
+    public void setNothingCreates(String nothingCreates) { this.nothingCreates = nothingCreates; }
     /** How many workers each of this story's tasks gets, or null to inherit the project's number. */
     public Integer workersPerTask() { return workersPerTask; }
     public Integer getWorkersPerTask() { return workersPerTask; }
@@ -342,6 +355,7 @@ public class Story {
             && Objects.equals(this.discoveredDependsOn(), that.discoveredDependsOn())
             && this.dependencyRetries == that.dependencyRetries
             && Objects.equals(this.waitingReason, that.waitingReason)
+            && Objects.equals(this.nothingCreates, that.nothingCreates)
             && Objects.equals(this.workersPerTask, that.workersPerTask)
             && Objects.equals(this.maxToolTurns, that.maxToolTurns)
             && Objects.equals(this.acceptedBy, that.acceptedBy)
