@@ -312,7 +312,7 @@ public class JudgeClient {
                 .chatCompletionStream(messages, JudgeVerdict.class, 0.0)
                 .collect(Collectors.joining());
             if (cloudGate != null) {
-                cloudGate.charge(CloudGate.estimateTokens(json));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(json));
             }
             JudgeVerdict verdict = parseVerdict(json);
             double clamped = Math.max(0.0, Math.min(1.0, verdict.score));

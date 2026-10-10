@@ -1362,6 +1362,9 @@ class EndToEndLoopTest {
      * the restored project at the restored repository first, so it is found, not duplicated. The
      * fixture's rule FILES are imported once, and a restored project remembers that they were.
      */
+    /** The cloud gate of the walk being reported on, for the run report's cloud-token line. */
+    private CloudGate walkGate;
+
     private Wiring wire(ArtifactStore store, Path repo, Settings settings, Environment env,
                         DispatchSeam seam, HarnessWindow window) throws IOException {
         String baseUrl = settings.baseUrl();
@@ -1382,6 +1385,7 @@ class EndToEndLoopTest {
         Recorder analystClient = clientOf.apply(HarnessRoleServers.Role.ANALYST);
         Recorder plannerClient = clientOf.apply(HarnessRoleServers.Role.PLANNER);
         CloudGate cloudGate = new CloudGate(50_000_000, null);
+        this.walkGate = cloudGate;
         GitService git = new GitService(repo);
         // The fixture's checkout still carries rule FILES from before rules were store
         // objects; they are imported once, exactly as opening the project in the app does.
@@ -1764,7 +1768,9 @@ class EndToEndLoopTest {
                 ask == null ? null : ask.report(),
                 run == null ? com.swarmcoder.runtime.ExpertAnswerLog.allRuns()
                     : com.swarmcoder.runtime.ExpertAnswerLog.forRun(run.id()).entries(),
-                servers));
+                servers,
+                walkGate == null || run == null ? null : walkGate.spendLine(
+                    new CloudGate.Where(run.projectId(), run.storyId(), run.id()))));
 
             String reportAt = System.getProperty("swarmcoder.e2e.reportAt");
             String askLog = System.getProperty(CoordinatorAsk.LOG_PROPERTY);

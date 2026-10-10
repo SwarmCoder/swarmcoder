@@ -327,17 +327,12 @@ public class DependencyGraph {
         announceModelProfiles(profiles, this.config, discovered, declared);
 
         // Cloud budget gate (rule R6): breaching the cap parks a BUDGET_EXTENSION decision.
-        long maxCloudTokens = this.config.budgets() != null ? this.config.budgets().maxCloudTokensPerRun() : 0;
-        this.cloudGate = new CloudGate(maxCloudTokens, () ->
-            artifactStore.append(() -> {
-                UUID decisionId = UUID.randomUUID();
-                artifactStore.root().decisions.put(decisionId, new Decision(
-                    decisionId, null, DecisionKind.BUDGET_EXTENSION,
-                    "Cloud token budget (" + maxCloudTokens + ") exhausted. Raise "
-                        + "budgets.maxCloudTokensPerRun or abort the run.",
-                    DecisionState.PENDING, null, Instant.now()));
-                return null;
-            }));
+        // Limits per run, story and project, each for input, output or both (BudgetsConfig); the
+        // decision names the project, story and run, and the answer "extend" is
+        // cloudGate.extendForRun(decision.runId()).
+        CloudGate.Limits cloudLimits = this.config.budgets() != null
+            ? this.config.budgets().cloudLimits() : CloudGate.Limits.NONE;
+        this.cloudGate = new CloudGate(cloudLimits, breach -> BudgetDecision.raise(artifactStore, breach));
 
         // 6. Shared knowledge/blob services — process-wide, shared by every project.
         BlobStore blobStore = new BlobStore(

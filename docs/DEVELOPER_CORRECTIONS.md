@@ -7493,3 +7493,46 @@ the browser image are there). Run with it: `AJourneyFileIsReadAndJudgedWithNoMod
 - An application that keeps its data outside the container (a database server it reaches over
   a network). The container has no network, so there is none today.
 - Run 104 has not been made again with this change.
+
+## 79. Cloud token budgets per run, story and project (2026-10-10)
+
+**What was wrong.** The only limit was `budgets.maxCloudTokensPerRun`, and it was not per run.
+The cloud gate kept one counter for the whole process and never reset it, so after a few runs
+the "per run" limit meant "since the program started". When it was passed, the question it
+raised (a `BUDGET_EXTENSION` decision) named no run, story or project, so an operator could not
+tell what had stopped or answer in a way that could resume it. There was no limit per story or
+per project, and input and output tokens were one number.
+
+**What changed.**
+
+- The gate counts per run, and sums the same charges per story and per project. The thread that
+  drives a run (`GreenfieldWorkflow.advance`) enters the run's scope; every charge made on it, and
+  on the virtual threads it starts, belongs to that run. Charges made outside any run are counted
+  apart and limited by nothing.
+- Only the cloud roles charge the gate. Workers run on the local model server and never charge
+  it. The product has no other rule for "paid" versus "local" for roles (worker models carry a
+  cost of 0), so a cloud role pointed at a local endpoint still counts.
+- Three limits, each optional, each for input, output or both together, in `budgets`:
+  `maxCloudTokensPerRun` (existing, input plus output, unchanged), `maxCloudTokensPerStory`,
+  `maxCloudTokensPerProject`, and `maxCloudInputTokens` / `maxCloudOutputTokens`, each with
+  `perRun`, `perStory`, `perProject`. Saving budgets from the console form keeps the new ones.
+- Input and output are counted apart where the call site knows them (a prompt is input, the
+  answer is output). The agent sessions (expert, lookups) report one combined figure; it is
+  counted as input, because a session's cost is the conversation it resends every turn.
+- Passing a limit parks the run: the stage stays where it was, the run gets the usual park mark,
+  and a `BUDGET_EXTENSION` decision is raised with the run's id. Its text names the project, the
+  story and the run, which limit was passed, and the input and output used so far, and offers
+  "extend" (the same amount again) or "stop". A run driven again while its story or project is
+  still over a limit parks on a question of its own.
+- Answering "extend" is `CloudGate.extendForRun(runId)`; the run is then driven on again with
+  `WorkflowEngine.advance(run)` like any other parked run.
+- The harness run report gains a line: cloud tokens input / output for the run and the limits in
+  force.
+
+**Not changed, on purpose.** `AutonomousMode` still stops a night on the old process-wide total
+against `maxCloudTokensPerRun`; that is a different question (a night's spend) and was left for
+its own decision. Tallies are in memory: a restart starts every count at zero.
+
+**Tests.** `CloudGateLimitsTest` (counters per run, input and output apart, story and project
+sums, extending, a run driven again while over, work outside runs, child threads, the report
+line), `BudgetDecisionTest` (the question's text, the settings mapping, the old setting).

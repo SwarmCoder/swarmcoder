@@ -811,7 +811,7 @@ public class TestAuthorClient {
             cloudGate.refund(prompt);
             throw outage;
         }
-        cloudGate.charge(CloudGate.estimateTokens(response));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(response));
         return response;
     }
     /** The project's standing rules for a repair call; see {@link #setStandingRules}. */
@@ -1251,7 +1251,7 @@ public class TestAuthorClient {
                     cloudGate.refund(retryPrompt);
                     throw outage;
                 }
-                cloudGate.charge(CloudGate.estimateTokens(retryResponse));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(retryResponse));
                 try {
                     parsed = LlmJson.parse(mapper, retryResponse, LlmTestFiles.class);
                 } catch (IOException secondFailure) {
@@ -1292,7 +1292,7 @@ public class TestAuthorClient {
                     cloudGate.refund(askTokens);
                     throw outage;
                 }
-                cloudGate.charge(CloudGate.estimateTokens(second));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(second));
                 LlmTestFiles reasked = null;
                 try {
                     reasked = LlmJson.parse(mapper, second, LlmTestFiles.class);
@@ -1347,7 +1347,7 @@ public class TestAuthorClient {
                     cloudGate.refund(askTokens);
                     throw outage;
                 }
-                cloudGate.charge(CloudGate.estimateTokens(second));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(second));
                 LlmTestFiles corrected;
                 try {
                     corrected = LlmJson.parse(mapper, second, LlmTestFiles.class);
@@ -1403,7 +1403,7 @@ public class TestAuthorClient {
                     cloudGate.refund(askTokens);
                     throw outage;
                 }
-                cloudGate.charge(CloudGate.estimateTokens(second));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(second));
                 LlmTestFiles corrected;
                 try {
                     corrected = LlmJson.parse(mapper, second, LlmTestFiles.class);
@@ -1456,7 +1456,7 @@ public class TestAuthorClient {
                     cloudGate.refund(askTokens);
                     throw outage;
                 }
-                cloudGate.charge(CloudGate.estimateTokens(second));
+                cloudGate.chargeOutput(CloudGate.estimateTokens(second));
                 LlmTestFiles corrected;
                 try {
                     corrected = LlmJson.parse(mapper, second, LlmTestFiles.class);
@@ -2500,7 +2500,7 @@ public class TestAuthorClient {
             cloudGate.refund(askTokens);
             throw outage;
         }
-        cloudGate.charge(CloudGate.estimateTokens(second));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(second));
         return second;
     }
 

@@ -97,7 +97,7 @@ public class KnowledgeExtractor {
                     Map.of("role", "system", "content", system),
                     Map.of("role", "user", "content", transcript)),
                 LlmDocs.class, 0.2).collect(Collectors.joining());
-            cloudGate.charge(CloudGate.estimateTokens(response));
+            cloudGate.chargeOutput(CloudGate.estimateTokens(response));
 
             LlmDocs parsed = LlmJson.parse(mapper, response, LlmDocs.class);
             if (parsed.docs == null || parsed.docs.isEmpty()) {
