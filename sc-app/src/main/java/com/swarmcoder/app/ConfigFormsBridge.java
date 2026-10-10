@@ -98,9 +98,16 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
     @Override
     public String saveBudgets(BudgetsDto budgets) {
         try {
-            var updated = graph.config.withBudgets(new BudgetsConfig(
-                budgets.getMaxCloudTokensPerRun(), budgets.getMaxLocalTokensPerTask(),
-                budgets.getWallClockCeilingHours(), budgets.getMaxToolTurnsPerWorker()));
+            // The form carries only the four basic figures; the per story / per project / input /
+            // output cloud limits are kept as the file has them rather than blanked by a save.
+            BudgetsConfig before = graph.config.budgets();
+            var updated = graph.config.withBudgets(before == null
+                ? new BudgetsConfig(budgets.getMaxCloudTokensPerRun(),
+                    budgets.getMaxLocalTokensPerTask(), budgets.getWallClockCeilingHours(),
+                    budgets.getMaxToolTurnsPerWorker())
+                : before.withBasics(budgets.getMaxCloudTokensPerRun(),
+                    budgets.getMaxLocalTokensPerTask(), budgets.getWallClockCeilingHours(),
+                    budgets.getMaxToolTurnsPerWorker()));
             ConfigLoader.saveConfig(updated);
             graph.config = updated;
             return "";

@@ -129,7 +129,21 @@ final class HarnessRunReport {
                  List<CarriedWarning> warnings, List<Seen> stageLog, List<HarnessStage> harnessStages,
                  long startMillis, long endMillis, List<FileStat> delivered, String deliveredNote,
                  String restoredNote, String outcome, String coordinator,
-                 List<ExpertAnswerLog.Entry> expertAnswers, Servers servers) {
+                 List<ExpertAnswerLog.Entry> expertAnswers, Servers servers,
+                 String cloudSpend) {
+
+        /** A run whose cloud spend line was not kept. */
+        Input(List<RunMeter.Call> calls, List<RunMeter.Span> spans, List<Task> tasks,
+              List<List<UUID>> waves, List<CandidateSolution> candidates,
+              List<AgentSessionRecord> sessions, List<Decision> decisions,
+              List<CarriedWarning> warnings, List<Seen> stageLog, List<HarnessStage> harnessStages,
+              long startMillis, long endMillis, List<FileStat> delivered, String deliveredNote,
+              String restoredNote, String outcome, String coordinator,
+              List<ExpertAnswerLog.Entry> expertAnswers, Servers servers) {
+            this(calls, spans, tasks, waves, candidates, sessions, decisions, warnings, stageLog,
+                harnessStages, startMillis, endMillis, delivered, deliveredNote, restoredNote,
+                outcome, coordinator, expertAnswers, servers, null);
+        }
 
         /** A run whose roles all ran on the one local server. */
         Input(List<RunMeter.Call> calls, List<RunMeter.Span> spans, List<Task> tasks,
@@ -148,7 +162,7 @@ final class HarnessRunReport {
         Input withCalls(List<RunMeter.Call> other) {
             return new Input(other, spans, tasks, waves, candidates, sessions, decisions, warnings,
                 stageLog, harnessStages, startMillis, endMillis, delivered, deliveredNote,
-                restoredNote, outcome, coordinator, expertAnswers, servers);
+                restoredNote, outcome, coordinator, expertAnswers, servers, cloudSpend);
         }
 
         /** A run with no record of expert answers. */
@@ -217,6 +231,8 @@ final class HarnessRunReport {
         sb.append("# Run report\n\n");
         sb.append("Outcome: ").append(in.outcome() == null ? NOT_RECORDED : in.outcome()).append('\n');
         sb.append("Wall clock: ").append(fmt(wallMinutes)).append(" min\n");
+        sb.append(in.cloudSpend() == null ? "Cloud tokens: " + NOT_RECORDED : in.cloudSpend())
+            .append('\n');
         if (in.restoredNote() != null) {
             sb.append("RESUMED RUN: ").append(in.restoredNote()).append('\n');
         }

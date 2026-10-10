@@ -564,7 +564,7 @@ public class DesignReviewerClient {
             cloudGate.refund(prompt);
             throw outage;
         }
-        cloudGate.charge(CloudGate.estimateTokens(response));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(response));
         return response;
     }
 

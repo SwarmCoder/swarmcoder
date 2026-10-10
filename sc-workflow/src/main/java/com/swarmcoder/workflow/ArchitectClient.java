@@ -1663,7 +1663,7 @@ public class ArchitectClient {
         } catch (Exception e) {
             throw refundIfOutage(prompt, e);
         }
-        cloudGate.charge(CloudGate.estimateTokens(response));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(response));
         return response;
     }
 
@@ -2145,7 +2145,7 @@ public class ArchitectClient {
             }
             throw e;
         }
-        cloudGate.charge(CloudGate.estimateTokens(response));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(response));
         return response;
     }
 

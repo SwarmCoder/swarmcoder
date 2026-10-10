@@ -377,6 +377,34 @@ public class GreenfieldWorkflow {
      * concluded — see {@link OutagePause} for why each of those is the way it is.
      */
     public void advance(Run run) {
+        // Every cloud token charged while this run is driven (and by the threads it starts) is
+        // this run's, its story's and its project's: that is what the three token limits count.
+        CloudGate.Where whose = new CloudGate.Where(run.projectId(), run.storyId(), run.id());
+        try (CloudGate.Entered inRun = cloudGate == null ? () -> { } : CloudGate.enter(whose)) {
+            drive(run, whose);
+        }
+    }
+
+    /**
+     * Parks the run because a cloud token limit was passed: the same park every other mid-workflow
+     * stop uses (the mark on the run, the run kept at its stage), with the question already raised
+     * by the gate as a BUDGET_EXTENSION decision naming the project, story and run. The answer
+     * "extend" raises the limit ({@code CloudGate.extendForRun}) and drives the run again through
+     * {@link #advance(Run)}, which clears this mark like any other.
+     */
+    private void parkOnBudget(Run run, CloudGate.Breach breach, String why) {
+        String reason = breach == null ? why
+            : "The cloud token limit of the " + breach.level().name().toLowerCase() + " ("
+                + breach.direction().name().toLowerCase() + ", " + breach.limit()
+                + " tokens) was passed: " + breach.used().input() + " input and "
+                + breach.used().output() + " output tokens used. " + why;
+        warn("Run " + run.id() + " is parked: " + reason);
+        run.setParkedAt(Instant.now());
+        run.setParkReason(reason);
+        persister.save(run);
+    }
+
+    private void drive(Run run, CloudGate.Where whose) {
         log("GreenfieldWorkflow advancing run: " + run.id() + " in state: " + run.state());
         if (!buildBoxes.contained()) {
             // Said on the Console at every drive of a run, not only once at startup: this is the
@@ -412,6 +440,15 @@ public class GreenfieldWorkflow {
         int outageAttempts = 0;
         // Simple synchronous progression for the virtual thread
         while (run.state() != RunState.DELIVERED && run.state() != RunState.ABORTED) {
+            if (cloudGate != null) {
+                // Over a limit before the stage even starts (its story's or project's, passed
+                // through another run, or a stage whose model call swallowed the refusal): park.
+                CloudGate.Breach over = cloudGate.parkingBreach(whose).orElse(null);
+                if (over != null) {
+                    parkOnBudget(run, over, "Nothing further was started.");
+                    return;
+                }
+            }
             RunState before = run.state();
             Run entered = run;
             // For the stage's calls on this thread (2026-10-02): the expert's answers to a role's
@@ -429,6 +466,12 @@ public class GreenfieldWorkflow {
                     return; // shutting down — the run resumes from this state on next startup
                 }
                 continue;
+            } catch (CloudGate.BudgetExhaustedException spent) {
+                // A cloud role's call passed a limit. The gate has raised the BUDGET_EXTENSION
+                // decision; the stage stays where it is and is tried again when it is answered.
+                parkOnBudget(run, spent.breach(), "The stage " + run.state()
+                    + " will be tried again when the limit is raised.");
+                return;
             }
             if (run == null) {
                 listCarriedWarnings(entered);

@@ -172,7 +172,7 @@ public class GuidelineExtractor {
                     Map.of("role", "system", "content", system),
                     Map.of("role", "user", "content", transcript)),
                 LlmGuidelines.class, 0.2).collect(Collectors.joining());
-            cloudGate.charge(CloudGate.estimateTokens(response));
+            cloudGate.chargeOutput(CloudGate.estimateTokens(response));
 
             LlmGuidelines parsed = LlmJson.parse(mapper, response, LlmGuidelines.class);
             if (parsed.guidelines == null || parsed.guidelines.isEmpty()) {

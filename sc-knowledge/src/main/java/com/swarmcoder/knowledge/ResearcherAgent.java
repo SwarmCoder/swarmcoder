@@ -129,7 +129,7 @@ public class ResearcherAgent {
         long estimate = messages.stream().mapToLong(m -> CloudGate.estimateTokens(m.get("content"))).sum();
         cloudGate.charge(estimate);
         String reply = model.as("knowledge").chatCompletionStream(messages, null, 0.3).collect(Collectors.joining());
-        cloudGate.charge(CloudGate.estimateTokens(reply));
+        cloudGate.chargeOutput(CloudGate.estimateTokens(reply));
         return reply.strip();
     }
 

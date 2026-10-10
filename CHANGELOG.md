@@ -11,6 +11,13 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **Cloud token limits per run, per story and per project.** `budgets` takes
+  `maxCloudTokensPerStory`, `maxCloudTokensPerProject` and, for input and output separately,
+  `maxCloudInputTokens` / `maxCloudOutputTokens` (each with `perRun`, `perStory`, `perProject`);
+  all optional. Passing one parks the run and asks the operator, naming the project, story and
+  run, how much input and output was used, and offering to extend by the same amount again or to
+  stop. The run report shows the cloud tokens used and the limits in force.
+
 - **A check on what a push publishes.** `scripts/pre-push-check.sh` reads the files, the commit
   messages and every line added by the commits about to be pushed, and refuses machine paths,
   user folders, private network addresses, keys and tokens, mail addresses, tracked files that
@@ -44,6 +51,8 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **`maxCloudTokensPerRun` counted the whole process, not a run.** The counter was never reset,
+  and the question it raised named no run. It is now kept per run, and the question carries the run.
 - **Every journey starts on the application as the tree gives it.** A journey that failed and
   was corrected by its author was made again in the same container and the same tree, so an
   application that keeps its data on disk still showed what the first attempt had saved, and
