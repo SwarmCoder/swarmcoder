@@ -113,7 +113,14 @@ public final class StoreRoot {
      * the session closes.
      */
     private Map<UUID, PendingExec> pendingExecs = new HashMap<>();
-    public long schemaVersion = 12;
+    /**
+     * Cloud token counts per run, story and project (schema v13), keyed by the scope's own id, so
+     * budget limits hold across restarts. Pre-v13 stores load this as null.
+     */
+    private Map<UUID, com.swarmcoder.domain.CloudSpendRecord> cloudSpend = new HashMap<>();
+    /** The limit that parked each run waiting for a budget answer (schema v13), keyed by run id. */
+    private Map<UUID, com.swarmcoder.domain.CloudBreachRecord> cloudBreaches = new HashMap<>();
+    public long schemaVersion = 13;
 
     /**
      * Class-evolution guard: stores written before schema v2 load this field as null
@@ -266,6 +273,22 @@ public final class StoreRoot {
             pendingExecs = new HashMap<>();
         }
         return pendingExecs;
+    }
+
+    /** Cloud token counts by scope id (v13 null-guard). */
+    public synchronized Map<UUID, com.swarmcoder.domain.CloudSpendRecord> cloudSpend() {
+        if (cloudSpend == null) {
+            cloudSpend = new HashMap<>();
+        }
+        return cloudSpend;
+    }
+
+    /** Budget limits that parked a run, by run id (v13 null-guard). */
+    public synchronized Map<UUID, com.swarmcoder.domain.CloudBreachRecord> cloudBreaches() {
+        if (cloudBreaches == null) {
+            cloudBreaches = new HashMap<>();
+        }
+        return cloudBreaches;
     }
 
     /** The last project switched to, or null on a pre-v9 store or a first run. */

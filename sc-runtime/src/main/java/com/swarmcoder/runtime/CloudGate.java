@@ -17,6 +17,9 @@
  */
 package com.swarmcoder.runtime;
 
+import com.swarmcoder.domain.CloudBreachRecord;
+import com.swarmcoder.domain.CloudSpendRecord;
+import com.swarmcoder.store.ArtifactStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,7 +62,11 @@ import java.util.function.Consumer;
  * an {@code extend} reply; resuming the parked run is the workflow's own re-drive
  * ({@code WorkflowEngine.advance}).
  *
- * <p>Nothing here is persisted: a restart starts every tally at zero.
+ * <p><b>Persistence.</b> After {@link #persistTo(ArtifactStore)} every change to a run's, story's or
+ * project's count, every extension and the limit that parked each run is written to the store, and
+ * {@code persistTo} loads what was written, so a project limit holds across restarts and
+ * {@link #extendForRun(UUID)} works for a run parked before one. Without a store (tests) nothing is
+ * persisted. Charges outside any run are not persisted.
  */
 public final class CloudGate {
 
@@ -215,6 +222,7 @@ public final class CloudGate {
     private final Set<String> signalled = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Breach> lastBreach = new ConcurrentHashMap<>();
     private final AtomicBoolean unscopedSignalled = new AtomicBoolean();
+    private volatile ArtifactStore store;
 
     /**
      * @param limits   the three levels' limits; {@link Limits#NONE} enforces nothing
@@ -245,6 +253,81 @@ public final class CloudGate {
         this.onUnscopedBreach = onExhausted == null ? () -> { } : onExhausted;
         if (maxCloudTokens <= 0) {
             log.warn("Cloud budget cap disabled (budgets.maxCloudTokensPerRun <= 0)");
+        }
+    }
+
+    // --- persistence ----------------------------------------------------------------------------
+
+    /**
+     * Loads the counts, extensions and parking breaches written by an earlier process and writes
+     * every later change to {@code store}. Call once, at start, before any charge.
+     */
+    public void persistTo(ArtifactStore store) {
+        if (store == null) {
+            return;
+        }
+        for (CloudSpendRecord record : new java.util.ArrayList<>(store.root().cloudSpend().values())) {
+            Map<UUID, Tally> map = mapOf(record.level());
+            if (map != null && record.scopeId() != null) {
+                Tally tally = map.computeIfAbsent(record.scopeId(), k -> new Tally());
+                tally.input.set(record.input());
+                tally.output.set(record.output());
+                tally.extensions.set(record.extensions());
+            }
+        }
+        for (CloudBreachRecord record
+                : new java.util.ArrayList<>(store.root().cloudBreaches().values())) {
+            try {
+                Breach breach = new Breach(Level.valueOf(record.level()),
+                    Direction.valueOf(record.direction()), record.projectId(), record.storyId(),
+                    record.runId(), record.limit(), new Spend(record.usedInput(), record.usedOutput()));
+                lastBreach.put(record.runId(), breach);
+                // Its question already exists in the store; a restart must not raise it a second time.
+                Tally tally = tallyFor(breach.level(),
+                    new Where(breach.projectId(), breach.storyId(), breach.runId()), false);
+                signalled.add(signalKey(breach, tally == null ? 0 : tally.extensions.get()));
+            } catch (IllegalArgumentException | NullPointerException e) {
+                log.warn("Ignoring an unreadable stored budget breach for run {}", record.runId());
+            }
+        }
+        this.store = store;
+        log.info("Cloud token counts loaded: {} runs, {} stories, {} projects", runs.size(),
+            stories.size(), projects.size());
+    }
+
+    private Map<UUID, Tally> mapOf(String level) {
+        if (level == null) {
+            return null;
+        }
+        return switch (level) {
+            case "RUN" -> runs;
+            case "STORY" -> stories;
+            case "PROJECT" -> projects;
+            default -> null;
+        };
+    }
+
+    private void persist(Where where, Breach breach, UUID clearBreachOf) {
+        ArtifactStore target = store;
+        if (target == null || where == null) {
+            return;
+        }
+        java.util.List<CloudSpendRecord> records = new java.util.ArrayList<>();
+        for (Level level : Level.values()) {
+            Tally tally = tallyFor(level, where, false);
+            if (tally != null) {
+                records.add(new CloudSpendRecord(where.idOf(level), level.name(), tally.input.get(),
+                    tally.output.get(), tally.extensions.get()));
+            }
+        }
+        CloudBreachRecord note = breach == null || breach.runId() == null ? null
+            : new CloudBreachRecord(breach.runId(), breach.storyId(), breach.projectId(),
+                breach.level().name(), breach.direction().name(), breach.limit(),
+                breach.used().input(), breach.used().output());
+        try {
+            target.recordCloudSpend(records, note, clearBreachOf);
+        } catch (RuntimeException e) {
+            log.warn("Cloud token counts could not be saved: {}", e.toString());
         }
     }
 
@@ -320,6 +403,7 @@ public final class CloudGate {
             signal(breach);
             throw new BudgetExhaustedException(breach);
         }
+        persist(where, null, null);
     }
 
     /**
@@ -350,6 +434,7 @@ public final class CloudGate {
                     take(tally, tokens);
                 }
             }
+            persist(where, null, null);
         }
     }
 
@@ -400,14 +485,18 @@ public final class CloudGate {
         Tally tally = tallyFor(breach.level(),
             new Where(breach.projectId(), breach.storyId(), breach.runId()), false);
         int extensions = tally == null ? 0 : tally.extensions.get();
-        String key = breach.level() + ":" + breach.scopeId() + ":" + extensions + ":" + breach.runId();
-        if (signalled.add(key)) {
+        persist(new Where(breach.projectId(), breach.storyId(), breach.runId()), breach, null);
+        if (signalled.add(signalKey(breach, extensions))) {
             log.error("Cloud {} budget passed ({} limit {}; {} input and {} output tokens used) "
                 + "for run {} - parking BUDGET_EXTENSION decision", breach.level(),
                 breach.direction(), breach.limit(), breach.used().input(), breach.used().output(),
                 breach.runId());
             onBreach.accept(breach);
         }
+    }
+
+    private static String signalKey(Breach breach, int extensions) {
+        return breach.level() + ":" + breach.scopeId() + ":" + extensions + ":" + breach.runId();
     }
 
     // --- asking and extending -------------------------------------------------------------------
@@ -437,8 +526,8 @@ public final class CloudGate {
      * calls; the run is then driven on again by {@code WorkflowEngine.advance(run)} like any other
      * parked run.
      *
-     * @return what was raised, or empty when this run has no passed limit on record (the process
-     *         restarted since, which also zeroed every tally)
+     * @return what was raised, or empty when this run has no passed limit on record (it was never
+     *         stopped by one, or it was already extended)
      */
     public Optional<Extension> extendForRun(UUID runId) {
         Breach breach = runId == null ? null : lastBreach.remove(runId);
@@ -448,6 +537,7 @@ public final class CloudGate {
         Tally tally = tallyFor(breach.level(),
             new Where(breach.projectId(), breach.storyId(), breach.runId()), true);
         int times = tally.extensions.incrementAndGet() + 1;
+        persist(new Where(breach.projectId(), breach.storyId(), breach.runId()), null, runId);
         log.info("Cloud {} budget of {} raised by the same amount again (now {} times the "
             + "configured limit)", breach.level(), breach.scopeId(), times);
         Cap base = limits.of(breach.level());

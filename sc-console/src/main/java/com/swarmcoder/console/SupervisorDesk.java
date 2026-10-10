@@ -642,7 +642,7 @@ public final class SupervisorDesk implements SupervisorService {
         String wanted = nn(requirement).strip();
         BrdServiceImpl brdService = new BrdServiceImpl();
         if (wanted.isEmpty() || wanted.equalsIgnoreCase("all")) {
-            String result = brdService.promoteAllDrafts();
+            String result = brdService.promoteAllDraftsAs(ACTOR);
             if (!failed(result)) {
                 record(AutonomousDecisionKind.AGREED_REQUIREMENTS, "Every drafted requirement",
                     "Agree the drafted requirements as scope?", clip(result.isEmpty()
@@ -660,7 +660,7 @@ public final class SupervisorDesk implements SupervisorService {
         if (found == null) {
             return "error: this project has no requirement " + wanted;
         }
-        String result = brdService.promoteRequirement(found.id().toString());
+        String result = brdService.promoteRequirementAs(found.id().toString(), ACTOR);
         if (!failed(result)) {
             record(AutonomousDecisionKind.AGREED_REQUIREMENTS,
                 found.handle() + " " + nn(found.title()), "Agree this requirement as scope?",
@@ -684,7 +684,7 @@ public final class SupervisorDesk implements SupervisorService {
                 if (candidate.state() != StoryState.DRAFT) {
                     continue;
                 }
-                String result = backlog.promoteStory(candidate.id().toString());
+                String result = backlog.promoteStoryAs(candidate.id().toString(), ACTOR);
                 if (failed(result)) {
                     refused.add(result.substring("error:".length()).strip());
                 } else {
@@ -704,7 +704,7 @@ public final class SupervisorDesk implements SupervisorService {
         if (found == null) {
             return "error: this project has no story " + story;
         }
-        String result = backlog.promoteStory(found.id().toString());
+        String result = backlog.promoteStoryAs(found.id().toString(), ACTOR);
         if (!failed(result)) {
             record(AutonomousDecisionKind.PROMOTED_STORY, name(found),
                 "Mark this suggested story ready to build?", "Marked ready.", true, null, null);
@@ -756,7 +756,8 @@ public final class SupervisorDesk implements SupervisorService {
             return "error: say why it is being sent back; the note is what the next build is told";
         }
         String was = found.state() == null ? "" : found.state().label();
-        String result = new BacklogServiceImpl().retryStory(found.id().toString(), note.strip());
+        String result = new BacklogServiceImpl().retryStoryAs(found.id().toString(), note.strip(),
+            ACTOR);
         if (!failed(result)) {
             record(AutonomousDecisionKind.SENT_BACK_DELIVERY, name(found),
                 "It was " + was + ". Build it again?", "Sent back: " + note.strip(), true, null,

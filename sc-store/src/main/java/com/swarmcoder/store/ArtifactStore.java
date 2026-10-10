@@ -142,10 +142,32 @@ public class ArtifactStore implements AutoCloseable {
                 root.stories(), root.iterations(), root.tasks(), root.sourceDocuments(),
                 root.changeEvents(), root.criterionVerifications(),
                 root.guidedFlows(), root.flowQuestions(), root.flowProposals(),
-                root.flowDiscussions(), root.pendingExecs());
+                root.flowDiscussions(), root.pendingExecs(), root.cloudSpend(), root.cloudBreaches());
             storageManager.storeRoot(); // covers newly initialized fields after class evolution
             written();
             return result;
+        });
+    }
+
+    /**
+     * Writes the cloud gate's counts and, when given, the limit that parked a run (or, with
+     * {@code clearBreachOf}, forgets it). Queued, not awaited: the gate calls this on every charge.
+     * Each record is a fresh copy, so the store sees a new instance and writes it.
+     */
+    public void recordCloudSpend(List<com.swarmcoder.domain.CloudSpendRecord> spend,
+                                 com.swarmcoder.domain.CloudBreachRecord breach, UUID clearBreachOf) {
+        writerThread.submit(() -> {
+            for (var record : spend) {
+                root.cloudSpend().put(record.scopeId(), record);
+            }
+            if (breach != null) {
+                root.cloudBreaches().put(breach.runId(), breach);
+            }
+            if (clearBreachOf != null) {
+                root.cloudBreaches().remove(clearBreachOf);
+            }
+            storageManager.storeAll(root.cloudSpend(), root.cloudBreaches());
+            return null;
         });
     }
 

@@ -895,6 +895,30 @@ public final class ConsoleContext {
         return this;
     }
 
+    /**
+     * Raises the cloud token limit that stopped a run, by the same amount again. Returns a
+     * sentence saying what limit it is now, or "error: ..." saying why nothing was raised. Supplied
+     * by whoever owns the cloud gate (sc-app in the product).
+     */
+    private java.util.function.Function<UUID, String> budgetExtension;
+
+    public ConsoleContext withBudgetExtension(java.util.function.Function<UUID, String> extension) {
+        this.budgetExtension = extension;
+        return this;
+    }
+
+    public String extendBudget(UUID runId) {
+        if (budgetExtension == null) {
+            return "error: this process has no cloud spending limits to raise";
+        }
+        try {
+            String result = budgetExtension.apply(runId);
+            return result == null ? "error: nothing was raised" : result;
+        } catch (RuntimeException e) {
+            return "error: the limit could not be raised: " + e;
+        }
+    }
+
     public String resumeRun(UUID runId) {
         if (runResume == null) {
             return "error: this process has no way to hand a run back to its engine";

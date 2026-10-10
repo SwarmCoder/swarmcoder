@@ -53,6 +53,29 @@ final class BudgetDecision {
         });
     }
 
+    /** What an extension raised, as one sentence for whoever answered. */
+    static String describe(CloudGate.Extension extension) {
+        CloudGate.Cap cap = extension.limitNow();
+        StringBuilder sb = new StringBuilder("The ")
+            .append(extension.level().name().toLowerCase(Locale.ROOT)).append(" limit is now ");
+        String sep = "";
+        if (cap.total() > 0) {
+            sb.append(String.format(Locale.ROOT, "%,d", cap.total()))
+                .append(" input and output tokens together");
+            sep = ", ";
+        }
+        if (cap.input() > 0) {
+            sb.append(sep).append(String.format(Locale.ROOT, "%,d", cap.input()))
+                .append(" input tokens");
+            sep = ", ";
+        }
+        if (cap.output() > 0) {
+            sb.append(sep).append(String.format(Locale.ROOT, "%,d", cap.output()))
+                .append(" output tokens");
+        }
+        return sb.append('.').toString();
+    }
+
     /** The question, in words an operator can answer without looking anything up. */
     static String brief(CloudGate.Breach breach, String project, String story) {
         String which = switch (breach.level()) {

@@ -113,9 +113,11 @@ public final class DecisionAnswers {
                 + "stage the build stopped in again. Change something first or expect the same "
                 + "stop", true));
         } else if (kind == DecisionKind.BUDGET_EXTENSION) {
-            options.add(new Option("note", "record the text as the answer. A spending limit is "
-                + "changed in the settings, not by answering, so nothing restarts unless the "
-                + "question belongs to a stopped build", true));
+            options.add(new Option("extend", "raise the limit that stopped the build by the same "
+                + "amount again, then run the stage it stopped in again. Refused, and nothing "
+                + "recorded, when no limit is on record as having stopped it", true));
+            options.add(new Option("stop", "leave the build stopped and record the answer. The "
+                + "limit is unchanged", true));
         } else if (kind == DecisionKind.APPROVAL) {
             options.add(new Option("note", "record the text. A run waiting for approval is "
                 + "approved or rejected as a run, not by answering", true));
@@ -174,13 +176,72 @@ public final class DecisionAnswers {
             return failed("'" + token + "' is not an answer this question accepts; the answers are "
                 + options.stream().map(Option::token).toList());
         }
+        String raised = "";
+        if (decision.kind() == DecisionKind.BUDGET_EXTENSION && word.equals("extend")) {
+            if (decision.runId() == null) {
+                return failed("Not extended: this question names no build, so there is no limit "
+                    + "to raise.");
+            }
+            String result = context.extendBudget(decision.runId());
+            if (result.startsWith("error:")) {
+                return failed("Not extended: " + result.substring("error:".length()).strip());
+            }
+            raised = result + " ";
+        }
         try {
-            new ControlServiceImpl().resolveDecision(id.toString(),
+            new ControlServiceImpl().recordAnswer(id.toString(),
                 responseFor(decision.kind(), word, text, actor));
         } catch (RuntimeException e) {
             return failed("the answer could not be recorded: " + e.getMessage());
         }
+        if (decision.kind() == DecisionKind.BUDGET_EXTENSION && !word.equals("extend")) {
+            return new Outcome(null, false, "Recorded. The build stays stopped; its limit is "
+                + "unchanged.");
+        }
+        return withPrefix(resumeStopped(context, store, decision, actor), raised);
+    }
 
+    /**
+     * The Console's own answer: the person's free text. A spending-limit question whose text starts
+     * with extend or stop is answered as that option; any other text is recorded as written (the
+     * rule-question parser reads its own first word) and the stopped build, if there is one, is
+     * handed back, as it is for the same answer given over the supervisor connection.
+     */
+    public static Outcome answerFromConsole(String decisionId, String text) {
+        ConsoleContext context = ConsoleContext.get();
+        if (context == null) {
+            return failed("the console is not wired up yet");
+        }
+        UUID id = UUID.fromString(decisionId);
+        Decision decision = context.store().root().decisions.get(id);
+        if (decision == null) {
+            return new Outcome(null, false, "There is no such question.");
+        }
+        String said = text == null ? "" : text.strip();
+        String first = said.split("[\\s:.,;]+", 2)[0].toLowerCase(Locale.ROOT);
+        if (decision.kind() == DecisionKind.BUDGET_EXTENSION
+                && (first.equals("extend") || first.equals("stop"))) {
+            return answerAndResume(decisionId, first, said.substring(first.length()).strip(),
+                "operator");
+        }
+        new ControlServiceImpl().recordAnswer(decisionId, text);
+        if (decision.kind() == DecisionKind.BUDGET_EXTENSION) {
+            return new Outcome(null, false, "Recorded. The build stays stopped; answer extend to "
+                + "raise its limit.");
+        }
+        return resumeStopped(context, context.store(), decision, "operator");
+    }
+
+    private static Outcome withPrefix(Outcome outcome, String prefix) {
+        return prefix.isEmpty() ? outcome
+            : new Outcome(outcome.error(), outcome.resumed(), prefix + outcome.note());
+    }
+
+    /** Hands the decision's run back to its engine when it is parked and has not been already. */
+    private static Outcome resumeStopped(ConsoleContext context, ArtifactStore store,
+                                         Decision decision, String actor) {
+        UUID id = decision.id();
+        String word = "answered";
         Run run = decision.runId() == null ? null : store.root().runs.get(decision.runId());
         if (run == null) {
             return new Outcome(null, false, "Recorded. This question belongs to no build that "

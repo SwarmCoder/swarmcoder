@@ -334,6 +334,9 @@ public class DependencyGraph {
         CloudGate.Limits cloudLimits = this.config.budgets() != null
             ? this.config.budgets().cloudLimits() : CloudGate.Limits.NONE;
         this.cloudGate = new CloudGate(cloudLimits, breach -> BudgetDecision.raise(artifactStore, breach));
+        // Counts and extensions written by earlier runs of the program, so a project limit holds
+        // across a restart and an extension still works for a run that was stopped before one.
+        this.cloudGate.persistTo(artifactStore);
 
         // 6. Shared knowledge/blob services — process-wide, shared by every project.
         BlobStore blobStore = new BlobStore(
@@ -1334,6 +1337,8 @@ public class DependencyGraph {
             // Answering a question a build stopped to ask hands the build back to the engine of
             // the project it belongs to, the same hand-back a parked run gets at start-up.
             .withRunResume(this::resumeParkedRun)
+            // Answering "extend" on a spending-limit question raises the limit that stopped the run.
+            .withBudgetExtension(this::extendBudgetOf)
             .withSettings(this::readConfigYaml, this::writeConfigYaml)
             // How to build a folder of code SwarmCoder has never seen. Without a contract every
             // candidate comes back unverified, which is the swarm choosing between untested
@@ -1524,6 +1529,12 @@ public class DependencyGraph {
      *
      * @return "" or "error: ..."
      */
+    private String extendBudgetOf(UUID runId) {
+        return this.cloudGate.extendForRun(runId).map(BudgetDecision::describe).orElse(
+            "error: no spending limit is on record as having stopped that build, or it was "
+                + "already raised");
+    }
+
     private String resumeParkedRun(UUID runId) {
         com.swarmcoder.domain.Run run = this.artifactStore.root().runs.get(runId);
         if (run == null) {
