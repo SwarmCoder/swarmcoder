@@ -76,6 +76,11 @@ public class BacklogServiceImpl implements BacklogService {
 
     @Override
     public String promoteStory(String storyId) {
+        return promoteStoryAs(storyId, "human");
+    }
+
+    /** Marking a story ready on behalf of someone other than the person at the Console. */
+    String promoteStoryAs(String storyId, String actor) {
         return mutate(storyId, (store, projectId, story) -> {
             if (story.state() != StoryState.DRAFT) {
                 return "error: " + story.key() + " is already " + story.state().label();
@@ -86,7 +91,7 @@ public class BacklogServiceImpl implements BacklogService {
             }
             story.setState(StoryState.READY);
             store.saveStory(story);
-            store.recordChange(projectId, "human", ChangeEntityType.STORY, story.id(),
+            store.recordChange(projectId, actor, ChangeEntityType.STORY, story.id(),
                 ChangeKind.PROMOTED, "accepted " + story.key() + " as real work");
             return "";
         });
@@ -110,6 +115,11 @@ public class BacklogServiceImpl implements BacklogService {
 
     @Override
     public String retryStory(String storyId, String note) {
+        return retryStoryAs(storyId, note, "human");
+    }
+
+    /** Sending a story back on behalf of someone other than the person at the Console. */
+    String retryStoryAs(String storyId, String note, String actor) {
         return mutate(storyId, (store, projectId, story) -> {
             // RUNNING is accepted too, and it has to be. A story is moved out of RUNNING only when
             // the workflow reaches its delivery check, so a process that dies mid-run — a restart,
@@ -137,7 +147,7 @@ public class BacklogServiceImpl implements BacklogService {
             // more, on a story that has already moved back to "Ready to build".
             clearParkMarks(store, story);
             String why = note == null || note.isBlank() ? null : note.trim();
-            store.recordChange(projectId, "human", ChangeEntityType.STORY, story.id(),
+            store.recordChange(projectId, actor, ChangeEntityType.STORY, story.id(),
                 ChangeKind.STATE_CHANGED, "state", String.valueOf(was), "READY",
                 was == StoryState.BLOCKED
                     ? "unblocked " + story.key() + " for another run"

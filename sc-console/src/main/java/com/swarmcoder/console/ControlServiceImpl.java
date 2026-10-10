@@ -533,6 +533,20 @@ public class ControlServiceImpl implements ControlService {
     @Override
     public void resolveDecision(String decisionId, String response) {
         ConsoleContext.refuseIfWatching("answer a question");
+        // Through the same path the supervisor connection uses, so answering on screen also hands a
+        // stopped build back to its engine (and raises a spending limit when told to extend).
+        DecisionAnswers.Outcome outcome = DecisionAnswers.answerFromConsole(decisionId, response);
+        if (!outcome.ok()) {
+            throw new IllegalStateException(outcome.error());
+        }
+    }
+
+    /**
+     * Writes an answer on the decision row and nothing else: no restart, no limit raised. The part
+     * of answering that {@link DecisionAnswers} builds on.
+     */
+    void recordAnswer(String decisionId, String response) {
+        ConsoleContext.refuseIfWatching("answer a question");
         UUID id = UUID.fromString(decisionId);
         var store = ConsoleContext.get().store();
         try {

@@ -7575,13 +7575,22 @@ without and acceptance with the secret over a real socket, secret file). Run wit
 - `wait_for_attention` over the deprecated event-stream transport, and with several clients
   waiting at once.
 - The secret file's protection on Windows is the user folder's own; no access list is set.
-- The change journal (`ChangeEvent`) still says "human" for a requirement agreed, a story
-  marked ready and a story sent back through these tools; only acceptance records
-  "supervisor" there. The decision log is the complete record.
-- A budget question (`BUDGET_EXTENSION`) is only recorded with a note. Budgets are being
-  changed elsewhere and were left alone.
-- The Console does not show that supervised running is on, and its own answer box still only
-  records.
+- The Console does not show that supervised running is on.
+
+**Follow-up (2026-10-10, branch `fix/supervisor-budget`).** Three "not checked" notes above are
+now done:
+
+- The change journal (and the requirement revision author) says "supervisor" for a requirement
+  agreed, a story marked ready and a story sent back through the supervisor tools. The service
+  methods gained an actor (`promoteStoryAs`, `retryStoryAs`, `promoteRequirementAs`,
+  `promoteAllDraftsAs`, next to `acceptStoryAs`); the public ones pass "human". Tested for story
+  ready and send back (`BudgetAnswersTest`); requirement agreement has no test of its own.
+- A `BUDGET_EXTENSION` question takes `extend` and `stop` (see section 79).
+- The Console's answer goes through `DecisionAnswers.answerFromConsole`: `ControlServiceImpl.
+  resolveDecision` calls it, and the recording step it used to be is now `recordAnswer`. So an
+  answer on screen restarts a stopped build, and the old `answer_decision` MCP tool does too.
+  Free text is stored as written (the rule-question parser reads its first word); on a budget
+  question the text `extend` or `stop` as first word is answered as that option.
 
 
 ## 79. Cloud token budgets per run, story and project (2026-10-10)
@@ -7621,8 +7630,25 @@ per project, and input and output tokens were one number.
 
 **Not changed, on purpose.** `AutonomousMode` still stops a night on the old process-wide total
 against `maxCloudTokensPerRun`; that is a different question (a night's spend) and was left for
-its own decision. Tallies are in memory: a restart starts every count at zero.
+its own decision.
 
 **Tests.** `CloudGateLimitsTest` (counters per run, input and output apart, story and project
 sums, extending, a run driven again while over, work outside runs, child threads, the report
 line), `BudgetDecisionTest` (the question's text, the settings mapping, the old setting).
+
+**Follow-up (2026-10-10, branch `fix/supervisor-budget`).**
+
+- *Answering.* The question takes `extend` and `stop`. `extend` calls `CloudGate.extendForRun`
+  (reached from `DecisionAnswers` through `ConsoleContext.extendBudget`, bound in
+  `DependencyGraph`) and then hands the run back as any answered question does. If the gate has
+  no limit on record for that run the answer is refused with the reason and the question stays
+  open. `stop` records the answer and restarts nothing. Both land in the supervisor decision log.
+- *Persistence.* `CloudGate.persistTo(store)` loads, and then saves on every charge, refund,
+  breach and extension: `CloudSpendRecord` (per run, story or project id: input, output,
+  extensions) in `StoreRoot.cloudSpend`, and `CloudBreachRecord` (the limit that parked a run) in
+  `StoreRoot.cloudBreaches`, schema 13. Both are plain classes; both fields are null-guarded so a
+  store from before opens (not tested against a real old store file). On load a stored breach is
+  marked as already raised, so a restart does not ask the same question twice. Charges outside any
+  run are not saved. One store write is queued per charge; a debounce was not needed at the
+  rate of model calls.
+- *Tests.* `CloudGatePersistenceTest`, `BudgetAnswersTest`.

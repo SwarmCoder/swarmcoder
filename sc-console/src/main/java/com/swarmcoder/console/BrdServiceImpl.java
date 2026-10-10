@@ -368,6 +368,11 @@ public class BrdServiceImpl implements BrdService {
 
     @Override
     public String promoteRequirement(String requirementId) {
+        return promoteRequirementAs(requirementId, "human");
+    }
+
+    /** Agreeing a requirement on behalf of someone other than the person at the Console. */
+    String promoteRequirementAs(String requirementId, String actor) {
         try {
             ConsoleContext context = ConsoleContext.get();
             UUID projectId = context.currentProjectId();
@@ -394,7 +399,7 @@ public class BrdServiceImpl implements BrdService {
             }
             int accepted = promote(requirement);
             brd.setRequirements(new ArrayList<>(safe(brd.requirements())));
-            context.store().saveBrd(brd, "human", "agreed " + requirement.handle()
+            context.store().saveBrd(brd, actor, "agreed " + requirement.handle()
                 + " and accepted " + accepted + (accepted == 1 ? " check" : " checks"));
             BrdAuthoring.pushChanged(brd);
             return "";
@@ -405,6 +410,11 @@ public class BrdServiceImpl implements BrdService {
 
     @Override
     public String promoteAllDrafts() {
+        return promoteAllDraftsAs("human");
+    }
+
+    /** Agreeing every drafted requirement on behalf of someone other than the person at the Console. */
+    String promoteAllDraftsAs(String actor) {
         try {
             ConsoleContext context = ConsoleContext.get();
             UUID projectId = context.currentProjectId();
@@ -441,7 +451,7 @@ public class BrdServiceImpl implements BrdService {
                 return "error: none of these can be agreed yet. " + String.join(" ", held);
             }
             brd.setRequirements(new ArrayList<>(safe(brd.requirements())));
-            context.store().saveBrd(brd, "human", "agreed " + requirements
+            context.store().saveBrd(brd, actor, "agreed " + requirements
                 + " requirements and accepted " + criteria
                 + (criteria == 1 ? " check" : " checks"));
             BrdAuthoring.pushChanged(brd);

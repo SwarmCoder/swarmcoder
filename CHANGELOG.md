@@ -21,6 +21,27 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **Answering a stopped build's question on screen restarts the build.** The Console's answer box
+  now goes through the same path as the supervisor's, so the build is handed back to its engine
+  as it is for `answer_question`. `answer_decision` therefore restarts a stopped build too.
+
+- **A spending-limit question can be answered `extend` or `stop`.** Over the supervisor
+  connection (`answer_question`, and as `next_attention` and `decision_text` list them) and in
+  the Console. `extend` raises the limit that stopped the build by the same amount again and runs
+  the stage it stopped in again; it is refused, with the reason and nothing recorded, when no
+  limit is on record as having stopped that build. `stop` leaves the build stopped and records the
+  answer. Both are in the supervisor's decision log.
+
+- **Cloud token counts survive a restart.** The counts per run, story and project, the extensions
+  granted and the limit that stopped each waiting run are saved in the store, so a project limit
+  holds across restarts and `extend` works on a build stopped before one. A store written earlier
+  opens as before and starts with no counts.
+
+- **The change journal says who acted.** Agreeing a requirement, marking a story ready and
+  sending a story back through the supervisor tools are written as "supervisor", not "human". A
+  person's click still writes "human".
+
+
 - **Cloud token limits per run, per story and per project.** `budgets` takes
   `maxCloudTokensPerStory`, `maxCloudTokensPerProject` and, for input and output separately,
   `maxCloudInputTokens` / `maxCloudOutputTokens` (each with `perRun`, `perStory`, `perProject`);
