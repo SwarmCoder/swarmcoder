@@ -26,6 +26,33 @@ judged against that first.
   of the server and the model; it is measured, not assumed, and a change to candidate counts or
   wave sizes comes with the before and after figures.
 
+### What has been measured (do not measure it again without a reason)
+
+One DGX Spark, `deepseek-v4-flash`, 2026-10-10, a 16,000-token opening and 300 tokens written per
+conversation, one measurement per row:
+
+| conversations at once | same opening, tokens/s in total | different openings, each already read once |
+|---|---|---|
+| 1 | 21.5 | 21.5 |
+| 2 | 26.8 | 27.3 |
+| 4 | 40.4 | 39.3 |
+| 8 | 29.0 | not measured |
+
+- Four at once is the best point on this server: 1.9 times one conversation. Eight is worse than
+  four.
+- Different tasks side by side lose nothing once each conversation has been read once; the server
+  keeps at least four openings.
+- What a different opening costs is its first reading: about 16 seconds for 16,000 tokens, and
+  first readings are done one after another (four cold conversations took 113 s, the same as one
+  after the other). Workers on the same task share one first reading.
+- Earlier model, 2026-07: 18.1 tokens/s alone, 37.7 with ten at once on a shared 2,000-token
+  opening.
+- Live run of 2026-10-09: the server had no conversation for 28% of the run and 1.9 on average.
+  Empty places, not unchosen candidates, were the loss.
+
+So: tasks that are ready go first, since every result is used; the places left go to further
+candidates of the same task; and the ceiling for this server is four.
+
 ## 1. Agents learn a project from the syntax tree and object graph, not from raw files
 
 This is a main design criterion of the product, set by the owner from the start. SwarmCoder parses
