@@ -3,6 +3,29 @@
 Read `docs/DEVELOPER_CORRECTIONS.md` for history. This file holds the rules that must not be broken
 again.
 
+## 0. The prime directive: get the most out of one local model server
+
+This is why SwarmCoder exists (owner, restated 2026-10-10 after the coordinating session
+recommended against it). A local model server such as a DGX Spark writes more tokens per second in
+total when it serves several conversations at once than when it serves one. That extra output costs
+nothing. SwarmCoder is the attempt to turn it into delivered, verified code. Every design choice is
+judged against that first.
+
+- **The server's places are kept full.** An idle place is the waste, not a second candidate.
+  Different tasks that are ready run side by side; places still free go to further candidates for
+  the same task, which share the task's opening and so cost the server least to start.
+- **Never recommend fewer concurrent sessions to save local tokens.** Local output tokens are not
+  money. On the local server the measures are delivered, verified lines per hour and how full the
+  server was, both in every run report (its concurrency section). Section 2 is about paid cloud
+  models and does not apply to local workers.
+- **A candidate that is not chosen is not waste if its place would otherwise have been empty.** What
+  is waste: a place left empty while work is ready, a candidate that keeps running after its task
+  has a passing one, a candidate that repeats its sibling token for token, and model time spent
+  while every place waits on a build or a test.
+- **Measure before changing how places are used.** The gain from 1 to N conversations is a property
+  of the server and the model; it is measured, not assumed, and a change to candidate counts or
+  wave sizes comes with the before and after figures.
+
 ## 1. Agents learn a project from the syntax tree and object graph, not from raw files
 
 This is a main design criterion of the product, set by the owner from the start. SwarmCoder parses
@@ -69,7 +92,7 @@ query for a method body, a module's contents or a build file, and nobody measure
 actually used. It went unnoticed because the model was local and its tokens were free, and because
 the coordinating session (Claude) tracked run time and delivery instead of tokens and tool use.
 
-## 2. Tokens are money
+## 2. Tokens are money (paid cloud models)
 
 Planning roles may run on a paid cloud model. Report and judge runs by tokens per role, not by
 minutes. Do not cap what a role may ask or look up; cut what each call costs.
