@@ -21,6 +21,12 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **Supervisor tools for a project's reference folders.** `list_context_folders`,
+  `add_context_folder` and `remove_context_folder` let a supervising model give a project the
+  source of the libraries it builds on, as the Console's project settings do. The two that change
+  something need the MCP secret and are logged in the supervisor's decisions. A build already
+  running keeps the folders it started with.
+
 - **Answering a stopped build's question on screen restarts the build.** The Console's answer box
   now goes through the same path as the supervisor's, so the build is handed back to its engine
   as it is for `answer_question`. `answer_decision` therefore restarts a stopped build too.

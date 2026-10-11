@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.swarmcoder.console.api.AttentionItem;
 import com.swarmcoder.console.api.Backlog;
+import com.swarmcoder.console.api.ContextFolder;
 import com.swarmcoder.console.api.ControlService;
 import com.swarmcoder.console.api.FlowView;
 import com.swarmcoder.console.api.SupervisorService;
@@ -58,7 +59,8 @@ final class SupervisorMcpTools {
     static final Set<String> WRITE_TOOLS = Set.of(
         "create_project", "switch_project", "add_document", "start_flow", "answer_flow_question",
         "submit_answers", "apply_proposals", "agree_requirements", "promote_story", "start_story",
-        "accept_delivery", "send_back", "answer_question");
+        "accept_delivery", "send_back", "answer_question", "add_context_folder",
+        "remove_context_folder");
 
     private final SupervisorService supervisor;
     private final ControlService control;
@@ -123,6 +125,12 @@ final class SupervisorMcpTools {
             SwarmMcpTools.schema("""
                 {"limit": {"type":"integer","description":"How many, newest (default 30, max 200)."}}"""),
             args -> decisionLog(SwarmMcpTools.num(args, "limit", 30))));
+
+        tools.add(SwarmMcpTools.tool("list_context_folders",
+            "The selected project's read-only reference entries: the source checkouts of the "
+                + "libraries it builds on (and any documentation sites), each with the name roles "
+                + "know it by. No arguments.",
+            SwarmMcpTools.schema(), args -> contextFolders()));
         return tools;
     }
 
@@ -162,6 +170,25 @@ final class SupervisorMcpTools {
             args -> done(supervisor.addDocument(SwarmMcpTools.str(args, "title"),
                 SwarmMcpTools.str(args, "text"), bool(args, "technical")),
                 "Added. start_flow flow=analyst reads it.")));
+
+        tools.add(SwarmMcpTools.tool("add_context_folder",
+            "CHANGES SOMETHING. Gives the selected project a read-only reference folder: the "
+                + "source checkout of a library it builds on, so roles and checks can read it. "
+                + "The name must be the folder's own name (its last path segment).",
+            SwarmMcpTools.schema("""
+                {"name": {"type":"string","description":"The folder's own name."},
+                 "path": {"type":"string","description":"The folder on this machine."}}""",
+                "name", "path"),
+            args -> done(supervisor.addContextFolder(SwarmMcpTools.str(args, "name"),
+                SwarmMcpTools.str(args, "path")), "Added.")));
+
+        tools.add(SwarmMcpTools.tool("remove_context_folder",
+            "CHANGES SOMETHING. Takes a reference folder out of the selected project. The "
+                + "folder on disk is not touched.",
+            SwarmMcpTools.schema("""
+                {"name": {"type":"string","description":"From list_context_folders."}}""", "name"),
+            args -> done(supervisor.removeContextFolder(SwarmMcpTools.str(args, "name")),
+                "Removed.")));
 
         tools.add(SwarmMcpTools.tool("start_flow",
             "CHANGES SOMETHING. Starts the analyst (reads the documents into draft requirements) "
@@ -411,6 +438,19 @@ final class SupervisorMcpTools {
         return ReplyBudget.clampReply(root.toString(), "a smaller limit (from decision_log)");
     }
 
+    private String contextFolders() {
+        ObjectNode root = json.createObjectNode();
+        ArrayNode rows = root.putArray("folders");
+        for (ContextFolder folder : supervisor.contextFolders()) {
+            ObjectNode node = rows.addObject();
+            node.put("name", folder.name());
+            node.put("path", folder.path());
+            node.put("kind", folder.kind());
+            node.put("exists", folder.exists());
+        }
+        return ReplyBudget.clampReply(root.toString(), "fewer entries");
+    }
+
     private String createProject(String name, String path, String contextPaths) {
         if (name.isBlank() || path.isBlank()) {
             return problem("create_project needs a name and a path.");
@@ -423,7 +463,8 @@ final class SupervisorMcpTools {
         ObjectNode root = json.createObjectNode();
         root.put("done", true);
         root.put("projectId", nn(id));
-        root.put("note", "Created and selected. add_document loads what it should build.");
+        root.put("note", "Created and selected. add_document loads what it should build; add_context_folder gives it "
+            + "the source of a library it builds on.");
         return root.toString();
     }
 

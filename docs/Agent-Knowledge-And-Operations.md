@@ -1482,6 +1482,8 @@ over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a
 | `list_backlog` | no | Every story: key, title, state, what it builds on, why it waits. |
 | `decision_text` | no | The whole text of a question a build stopped to ask, and the answers it accepts. |
 | `decision_log` | no | What the supervisor decided: asked, answered, when. |
+| `list_context_folders` | no | The project's read-only reference entries (library source folders, documentation sites), each with the name roles know it by. |
+| `add_context_folder`, `remove_context_folder` | yes | The Console's project-settings save (`ControlService.saveProjectConfig`, roles and worker count passed back unchanged), which rebuilds the project's context. `name` must be the folder's own name. New builds and checks read the folder from then on; a build already running keeps the folders it started with. Logged as the supervisor's decisions. |
 | `create_project`, `switch_project` | yes | `ControlService.createProject` / `switchProject`. |
 | `add_document` | yes | Pasted text as a document of the analyst's flow; `technical` marks a document about how to build. |
 | `start_flow` | yes | Starts the analyst or the planner (reopening a finished or failed flow first). |

@@ -69,5 +69,13 @@ public enum AutonomousDecisionKind {
     ANSWERED_RUN_QUESTION,
 
     /** A story's build started by hand rather than by the queue. */
-    STARTED_STORY
+    STARTED_STORY,
+
+    // --- appended 2026-10-11 ---------------------------------------------------------------------
+
+    /** A read-only reference (context) folder added to the project's settings. */
+    ADDED_CONTEXT_FOLDER,
+
+    /** A read-only reference (context) folder taken out of the project's settings. */
+    REMOVED_CONTEXT_FOLDER
 }
