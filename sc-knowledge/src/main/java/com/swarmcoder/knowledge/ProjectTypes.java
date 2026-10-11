@@ -300,6 +300,32 @@ public final class ProjectTypes {
         return name.substring(name.lastIndexOf('.') + 1);
     }
 
+    /**
+     * Where the annotation type {@code fullName} may be written, from its own {@code @Target};
+     * empty when this tree does not declare such an annotation type or cannot tell. See
+     * {@link JavaSourceFacts#annotationTargetsOf}.
+     */
+    public java.util.Optional<Set<String>> annotationTargetsOf(String fullName) {
+        JavaSourceFacts facts = fullName == null || fullName.isBlank() ? null : factsOf(fullName);
+        return facts == null ? java.util.Optional.empty()
+            : facts.annotationTargetsOf(simpleOf(fullName));
+    }
+
+    /** The fully-qualified names of the top-level types with this simple name, in reading order. */
+    public List<String> fullNamesOf(String simpleName) {
+        List<String> found = new ArrayList<>();
+        if (simpleName == null || !hasSimpleName(simpleName)) {
+            return found;
+        }
+        String simple = simpleName.strip();
+        for (String full : byFullName.keySet()) {
+            if (full.equals(simple) || full.endsWith("." + simple)) {
+                found.add(full);
+            }
+        }
+        return found;
+    }
+
     /** The annotations on the declaration of the type {@code fullName}, as written. */
     public List<String> typeAnnotationsOf(String fullName) {
         Path file = fileOf(fullName);

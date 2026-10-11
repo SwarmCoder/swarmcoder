@@ -156,6 +156,8 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     private volatile DockerSandboxManager sandbox;
     private volatile java.util.Map<String, Path> referenceRoots = java.util.Map.of();
+    /** The types the reference folders declare; read on first need, see {@link #referenceTypes()}. */
+    private volatile com.swarmcoder.knowledge.LibraryTypes referenceTypes;
     private final com.swarmcoder.verify.BuildBoxes buildBoxes =
         new com.swarmcoder.verify.BuildBoxes(() -> this.sandbox, () -> this.referenceRoots);
 
@@ -439,6 +441,7 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     public void setReferenceRoots(java.util.Map<String, Path> roots) {
         this.referenceRoots = roots == null ? java.util.Map.of() : java.util.Map.copyOf(roots);
+        this.referenceTypes = null;
         this.dispatcher.setReferenceRoots(roots);
     }
 
@@ -3303,7 +3306,8 @@ public class SwarmEngineImpl implements SwarmEngine {
         // it did not break. Asked only of a candidate that otherwise survived: a candidate already
         // failing for a real reason must keep that reason.
         if (verdict.survived()) {
-            String shortfall = contractShortfall(task, result.workspace(), startFileOf(runId));
+            String shortfall = contractShortfall(task, result.workspace(), startFileOf(runId),
+                this::referenceTypes);
             if (shortfall != null) {
                 verdict = new Verdicts.Verdict(false, shortfall);
             }
@@ -3455,6 +3459,20 @@ public class SwarmEngineImpl implements SwarmEngine {
     }
 
     /**
+     * The types the project's reference folders declare, read once and only when a contract's
+     * annotation is not on the member it was written in front of: an annotation type's own
+     * declaration says whether it could be there at all (live build of 2026-10-11).
+     */
+    private com.swarmcoder.knowledge.LibraryTypes referenceTypes() {
+        com.swarmcoder.knowledge.LibraryTypes read = referenceTypes;
+        if (read == null) {
+            read = com.swarmcoder.knowledge.LibraryTypes.of(List.copyOf(referenceRoots.values()));
+            referenceTypes = read;
+        }
+        return read;
+    }
+
+    /**
      * As above, for a run that knows its start commit. {@code startFile} gives a repository-relative
      * path's text as committed at the run's start, or null when it was not there (null function:
      * unknown, nothing is excused).
@@ -3469,11 +3487,18 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     static String contractShortfall(Task task, Path workspace,
                                     java.util.function.Function<String, String> startFile) {
+        return contractShortfall(task, workspace, startFile, null);
+    }
+
+    /** As above, also knowing the libraries the project builds on (null: none). */
+    static String contractShortfall(Task task, Path workspace,
+                                    java.util.function.Function<String, String> startFile,
+                                    java.util.function.Supplier<com.swarmcoder.knowledge.LibraryTypes> library) {
         if (task == null || workspace == null || task.deliveredContracts().isEmpty()) {
             return null;
         }
         List<ContractDelivery.Shortfall> shortfalls =
-            ContractDelivery.shortfalls(workspace, task.deliveredContracts());
+            ContractDelivery.shortfalls(workspace, task.deliveredContracts(), library);
         if (startFile != null && !shortfalls.isEmpty()) {
             com.swarmcoder.knowledge.ProjectTypes tree =
                 com.swarmcoder.knowledge.ProjectTypes.of(workspace);

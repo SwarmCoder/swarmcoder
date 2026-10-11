@@ -108,6 +108,19 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A contract can no longer demand an annotation where it cannot be written.** A design wrote
+  an annotation that Java only allows on a type in front of a constructor
+  (`@DataModel Book()`). Four candidates put it on the class, which is correct, and all four
+  were failed because the constructor "does not carry the annotation"; the task was blocked.
+  Where an annotation may be written is now read from the annotation type's own `@Target` (in
+  the project's source, a reference checkout or the JDK). When a design is accepted, an
+  annotation that cannot be on the member it was written in front of and can be on a type is
+  moved to the type and the architect is told in a note; one that can be on neither is sent
+  back to the architect. Verification counts such an annotation as delivered when the type
+  carries it, and still fails a member that lacks an annotation it can carry. An annotation
+  whose declaration cannot be read is treated as before. A contract member written with its
+  own semicolon is no longer printed with two.
+
 - **A story that shows things nobody can yet create no longer ends in a contradiction.** A story
   is proven in a browser from the entry page of an empty application, so a story that only
   displays a kind of thing, planned before the story that lets a person add one, could not be

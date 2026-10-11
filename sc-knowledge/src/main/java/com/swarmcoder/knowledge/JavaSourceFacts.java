@@ -298,6 +298,21 @@ public final class JavaSourceFacts {
         return type == null ? List.of() : ContractMember.annotationsOf(type.header());
     }
 
+    /**
+     * Where the annotation type {@code simpleTypeName} says it may be written: the
+     * {@code java.lang.annotation.ElementType} names of its own {@code @Target}, or every
+     * declaration place when it declares none (which is what Java then allows). Empty when this
+     * file declares no annotation type of that name, or its {@code @Target} names something that
+     * is not an element type written out (a constant from elsewhere): not known, never guessed.
+     */
+    public java.util.Optional<Set<String>> annotationTargetsOf(String simpleTypeName) {
+        JavaOutline.Member type = typeNamed(simpleTypeName);
+        if (type == null || !"annotation".equals(kindOf(type))) {
+            return java.util.Optional.empty();
+        }
+        return AnnotationTargets.declaredIn(type.header());
+    }
+
     private static String kindOf(JavaOutline.Member type) {
         Matcher m = KIND.matcher(JavaOutline.stripAnnotations(JavaOutline.collapse(type.header())));
         if (!m.find()) {

@@ -160,7 +160,18 @@ public final class ContractDelivery {
      *                  skipped, and an empty list yields an empty result
      */
     public static List<Shortfall> shortfalls(Path tree, List<ApiContract> contracts) {
-        return shortfalls(tree, contracts, false);
+        return shortfalls(tree, contracts, false, null);
+    }
+
+    /**
+     * As {@link #shortfalls(Path, List)}, also knowing the libraries the project builds on, so
+     * that where an annotation may be written is read from a library annotation's own
+     * declaration ({@link AnnotationTargets}). Asked for only when a promised annotation is not
+     * on its member; null, or a supplier of null, reads as no library.
+     */
+    public static List<Shortfall> shortfalls(Path tree, List<ApiContract> contracts,
+                                             java.util.function.Supplier<LibraryTypes> library) {
+        return shortfalls(tree, contracts, false, library);
     }
 
     /**
@@ -171,11 +182,12 @@ public final class ContractDelivery {
      * is about to cure?" has to count them in, or a healthy red state reads as a broken test.
      */
     public static List<Shortfall> notYetThere(Path tree, List<ApiContract> contracts) {
-        return shortfalls(tree, contracts, true);
+        return shortfalls(tree, contracts, true, null);
     }
 
     private static List<Shortfall> shortfalls(Path tree, List<ApiContract> contracts,
-                                              boolean unestablishedCounts) {
+                                              boolean unestablishedCounts,
+                                              java.util.function.Supplier<LibraryTypes> library) {
         if (tree == null || contracts == null || contracts.isEmpty()) {
             return List.of();
         }
@@ -199,7 +211,7 @@ public final class ContractDelivery {
             }
             return read[0];
         };
-        return shortfalls(types, built, named, unestablishedCounts);
+        return shortfalls(types, built, named, unestablishedCounts, library);
     }
 
     /**
@@ -217,7 +229,7 @@ public final class ContractDelivery {
 
     /** The same check against an index somebody has already built. */
     public static List<Shortfall> shortfalls(ProjectTypes types, List<ApiContract> contracts) {
-        return shortfalls(types, () -> null, contracts, false);
+        return shortfalls(types, () -> null, contracts, false, null);
     }
 
     private static String normalized(String typeName) {
@@ -227,8 +239,23 @@ public final class ContractDelivery {
     private static List<Shortfall> shortfalls(ProjectTypes types,
                                               java.util.function.Supplier<BuiltTypes> builtTypes,
                                               List<ApiContract> contracts,
-                                              boolean unestablishedCounts) {
+                                              boolean unestablishedCounts,
+                                              java.util.function.Supplier<LibraryTypes> library) {
         List<Shortfall> shortfalls = new ArrayList<>();
+        AnnotationTargets[] asked = new AnnotationTargets[1];
+        java.util.function.Supplier<AnnotationTargets> targets = () -> {
+            if (asked[0] == null) {
+                LibraryTypes lib = null;
+                try {
+                    lib = library == null ? null : library.get();
+                } catch (RuntimeException unreadable) {
+                    log.warn("the reference sources could not be read ({}); where an annotation "
+                        + "may be written is decided without them", unreadable.toString());
+                }
+                asked[0] = AnnotationTargets.of(types, lib);
+            }
+            return asked[0];
+        };
         for (ApiContract contract : contracts) {
             if (contract == null || !contract.namesAType()) {
                 continue;
@@ -275,16 +302,8 @@ public final class ContractDelivery {
                 if (!onType.isEmpty()) {
                     // Harness run 77: "@DataModel LogbookSort;" is the TYPE's annotation, not a
                     // member; it is met when the type declaration (source or build) carries it.
-                    List<String> carried = new ArrayList<>(handWritten
-                        ? types.typeAnnotationsOf(fullName) : List.of());
-                    List<String> lacking = lackingOn(onType, carried);
-                    if (!lacking.isEmpty()) {
-                        BuiltTypes builtHere = builtTypes.get();
-                        if (builtHere != null) {
-                            carried.addAll(builtHere.typeAnnotationsOf(fullName));
-                            lacking = lackingOn(onType, carried);
-                        }
-                    }
+                    List<String> lacking = lackingOnTheType(onType, fullName, handWritten, types,
+                        builtTypes);
                     if (!lacking.isEmpty()) {
                         missing.add(member.strip());
                         unannotated.add(new Unannotated(member.strip(), lacking, true));
@@ -301,9 +320,43 @@ public final class ContractDelivery {
                 }
                 List<String> lacking = new ArrayList<>();
                 if (satisfied(parsed.get(), declared, lacking)) {
-                    if (!lacking.isEmpty()) {
+                    // An annotation the member cannot carry is not held against the member (live
+                    // build of 2026-10-11: "@DataModel Book()", an annotation for a type).
+                    List<String> typeOnly = new ArrayList<>();
+                    List<String> own = lacking.isEmpty() ? List.of()
+                        : ContractMember.ownAnnotations(member);
+                    for (String annotation : List.copyOf(lacking)) {
+                        if (!own.contains(annotation)) {
+                            continue; // a parameter's annotation: not judged here
+                        }
+                        AnnotationTargets.Place place =
+                            targets.get().placeOf(annotation, parsed.get(), simpleName);
+                        if (place == AnnotationTargets.Place.ON_THE_TYPE) {
+                            lacking.remove(annotation);
+                            typeOnly.add(annotation);
+                        } else if (place == AnnotationTargets.Place.NOWHERE) {
+                            lacking.remove(annotation);
+                            log.warn("contract {}: the member \"{}\" names @{}, which its own "
+                                + "declaration allows neither on that member nor on a type; no "
+                                + "candidate can deliver that, so it is not held against one",
+                                fullName, member.strip(), annotation);
+                        }
+                    }
+                    List<String> lackingOnType = typeOnly.isEmpty() ? List.of()
+                        : lackingOnTheType(typeOnly, fullName, handWritten, types, builtTypes);
+                    if (!typeOnly.isEmpty() && lackingOnType.isEmpty()) {
+                        log.info("contract {}: the member \"{}\" names {}, which can only be "
+                            + "written on a type; the type carries it, so it is delivered",
+                            fullName, member.strip(), typeOnly);
+                    }
+                    if (!lacking.isEmpty() || !lackingOnType.isEmpty()) {
                         missing.add(member.strip());
+                    }
+                    if (!lacking.isEmpty()) {
                         unannotated.add(new Unannotated(member.strip(), lacking));
+                    }
+                    if (!lackingOnType.isEmpty()) {
+                        unannotated.add(new Unannotated(member.strip(), lackingOnType, true));
                     }
                     continue;
                 }
@@ -324,6 +377,23 @@ public final class ContractDelivery {
             }
         }
         return List.copyOf(shortfalls);
+    }
+
+    /** Which of {@code wanted} the type's own declaration, in the source or as built, lacks. */
+    private static List<String> lackingOnTheType(List<String> wanted, String fullName,
+                                                 boolean handWritten, ProjectTypes types,
+                                                 java.util.function.Supplier<BuiltTypes> builtTypes) {
+        List<String> carried = new ArrayList<>(handWritten
+            ? types.typeAnnotationsOf(fullName) : List.of());
+        List<String> lacking = lackingOn(wanted, carried);
+        if (!lacking.isEmpty()) {
+            BuiltTypes builtHere = builtTypes.get();
+            if (builtHere != null) {
+                carried.addAll(builtHere.typeAnnotationsOf(fullName));
+                lacking = lackingOn(wanted, carried);
+            }
+        }
+        return lacking;
     }
 
     private static List<String> lackingOn(List<String> wanted, List<String> carried) {
