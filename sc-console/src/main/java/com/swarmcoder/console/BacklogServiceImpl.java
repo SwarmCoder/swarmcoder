@@ -37,6 +37,7 @@ import com.swarmcoder.domain.StoryGraph;
 import com.swarmcoder.domain.StoryKind;
 import com.swarmcoder.domain.StoryState;
 import com.swarmcoder.store.ArtifactStore;
+import com.swarmcoder.store.SupersededRuns;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -141,12 +142,14 @@ public class BacklogServiceImpl implements BacklogService {
             story.setDeliveredCommit(null);
             story.setIntegrationCommit(null);
             store.saveStory(story);
-            // A run left behind by this retry (nothing here resumes it — see the dialog's own
-            // words: "this cannot call an agent back") must not go on claiming to be parked. Left
-            // alone, its "stopped" mark and reason would describe a run nobody is looking at any
-            // more, on a story that has already moved back to "Ready to build".
-            clearParkMarks(store, story);
+            // The builds this retry leaves behind are over, for good. Each one still unfinished is
+            // ended, its "stopped" mark goes with it, and every question any of them still has
+            // open is closed with the reason written on it. They used to be left at the stage
+            // they stopped in with only the mark cleared, so the next process start drove them
+            // again beside the story's new build, and their failure was written onto the story.
             String why = note == null || note.isBlank() ? null : note.trim();
+            SupersededRuns.supersede(store, story, null, story.key()
+                + " was sent back to be built again" + (why == null ? "." : ": " + why));
             store.recordChange(projectId, actor, ChangeEntityType.STORY, story.id(),
                 ChangeKind.STATE_CHANGED, "state", String.valueOf(was), "READY",
                 was == StoryState.BLOCKED
@@ -157,41 +160,6 @@ public class BacklogServiceImpl implements BacklogService {
                 lastRunOf(story));
             return "";
         });
-    }
-
-    /**
-     * Clears the "parked" mark on any of this story's runs that still carries one, once the story
-     * itself has moved back to READY.
-     *
-     * <p>Field only — deliberately does NOT touch the {@code BLOCKED_TASK} decision the park raised.
-     * That decision is real history about the attempt being abandoned, and {@code
-     * ConsoleStoppedStoryQuestionsBrowserTest} pins the existing behaviour: a story's outstanding
-     * questions survive a retry, unanswered, and stay reachable on its card in the new column. Only
-     * the run's own "I am parked, and here is why" fact is stale the moment nothing is ever coming
-     * back to resume THIS run — a fresh attempt starts a new one instead — so only that gets cleared.
-     */
-    private static void clearParkMarks(ArtifactStore store, Story story) {
-        for (UUID runId : story.runIds()) {
-            Run run = store.root().runs.get(runId);
-            if (run == null || run.parkedAt() == null) {
-                continue;
-            }
-            run.setParkedAt(null);
-            run.setParkReason(null);
-            try {
-                // updateRun, not a put back into the runs map: this is the SAME instance the map
-                // already binds, so re-putting it changes no binding and EclipseStore's lazy storer
-                // skips it entirely. The mark was cleared in memory and came back on the next
-                // restart. updateRun stores the run object itself, which is the only write that
-                // reaches these two fields.
-                store.updateRun(run);
-            } catch (Exception e) {
-                // Cosmetic: a run nobody is coming back to keeping a stale "parked" mark is not a
-                // reason to fail the retry itself, which is already durable by this point.
-                log.warn("Could not clear the park mark on run {} while retrying {}: {}",
-                    runId, story.key(), e.toString());
-            }
-        }
     }
 
     @Override
@@ -452,6 +420,13 @@ public class BacklogServiceImpl implements BacklogService {
         store.recordChange(projectId, "human", ChangeEntityType.STORY, story.id(),
             ChangeKind.STATE_CHANGED, "state", "READY", "RUNNING",
             "started building " + story.key(), runId);
+        // One build per story: whatever earlier build is still unfinished (a story freed after a
+        // process stopped, or one put back to wait) ends here, with its open questions.
+        try {
+            SupersededRuns.supersede(store, story, runId, story.key() + " has a newer build.");
+        } catch (RuntimeException e) {
+            log.warn("Could not end the earlier builds of {}: {}", story.key(), e.toString());
+        }
         BacklogPublisher.publish(store, projectId);
         return runId.toString();
     }

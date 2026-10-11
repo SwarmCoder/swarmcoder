@@ -223,6 +223,7 @@ public final class SupervisorDesk implements SupervisorService {
                     && decision.runId() != null) {
                 Run run = store.root().runs.get(decision.runId());
                 if (run != null && run.parkedAt() != null
+                        && !PendingDecisions.fromAnEarlierBuild(store, decision)
                         && (projectId.equals(run.projectId()) || runsHere.contains(run.id()))) {
                     pending.add(decision);
                 }

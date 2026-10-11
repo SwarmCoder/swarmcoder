@@ -96,6 +96,14 @@ public final class RunResumer {
      */
     public List<Resumed> resumeAll() {
         abandonOrphans();
+        // Then the builds their own story has replaced (it was sent back, or started again). A
+        // store written before stories ended their earlier builds still holds them unfinished;
+        // they are ended here, with their open questions, and so are never resumed below.
+        int replaced = com.swarmcoder.store.SupersededRuns.sweep(store);
+        if (replaced > 0) {
+            log.info("Startup sweep: ended {} earlier build(s) of stories that were sent back or "
+                + "started again", replaced);
+        }
         List<Resumed> resumed = new ArrayList<>();
         for (UUID projectId : projectsWithUnfinishedRuns()) {
             WorkflowEngine engine;
@@ -115,6 +123,12 @@ public final class RunResumer {
                 continue;
             }
             for (Run run : engine.unfinishedRunsOf(projectId)) {
+                if (com.swarmcoder.store.SupersededRuns.isSuperseded(store, run)) {
+                    // Only a story's current build is resumed. The sweep above has ended these;
+                    // one that is still here could not be written, and is left rather than driven.
+                    log.warn("Run {} is an earlier build of its story — not resumed", run.id());
+                    continue;
+                }
                 log.info("Resuming run {} of project {} from state {}{} — repository {}, locked modules {}",
                     run.id(), projectId, run.state(),
                     run.pausedSince() == null ? "" : " (paused since " + run.pausedSince() + ")",

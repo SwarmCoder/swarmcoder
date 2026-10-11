@@ -114,6 +114,18 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A story has one build at a time.** Sending a story back, or starting it again, now ends
+  its earlier builds: an unfinished one is marked aborted, and every question it still had open
+  is closed with the reason written on it. Before, the earlier build kept its stage, was picked
+  up again at the next start beside the new build, and wrote its own failure onto the story.
+  At start only a story's current build is resumed, and a store from before is put right then.
+  A question is not raised a second time when a build is picked up again. The pending-question
+  counts, `next_attention` and `list_backlog`'s `questionsFromBuilds` show only open questions of
+  current builds (`questionsFromBuilds` used to count every question ever recorded). Answering
+  a question of an earlier build is refused with a sentence saying the story has a newer
+  build. Changed on purpose: a story's open questions no longer stay open after it is sent
+  back.
+
 - **A contract can no longer demand an annotation where it cannot be written.** A design wrote
   an annotation that Java only allows on a type in front of a constructor
   (`@DataModel Book()`). Four candidates put it on the class, which is correct, and all four

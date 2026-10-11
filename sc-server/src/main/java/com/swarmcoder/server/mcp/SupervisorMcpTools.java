@@ -397,8 +397,37 @@ final class SupervisorMcpTools {
                 node.put("acceptedBy", story.acceptedBy());
             }
         }
-        root.put("questionsFromBuilds", backlog.decisions().size());
+        root.put("questionsFromBuilds", openQuestions(backlog));
         return ReplyBudget.clampReply(root.toString(), "nothing (from list_backlog)");
+    }
+
+    /**
+     * How many questions from builds are open: unanswered, and asked by a build that is still its
+     * story's build. This used to be every question the project had ever recorded, answered,
+     * withdrawn or open, so it grew each time a build was picked up again and asked afresh.
+     */
+    static int openQuestions(Backlog backlog) {
+        int open = 0;
+        for (com.swarmcoder.domain.Decision decision : backlog.decisions()) {
+            if (decision == null
+                    || decision.state() != com.swarmcoder.domain.DecisionState.PENDING) {
+                continue;
+            }
+            boolean earlierBuild = false;
+            for (Story story : backlog.stories()) {
+                List<UUID> runs = story.runIds();
+                int at = runs == null || decision.runId() == null ? -1
+                    : runs.lastIndexOf(decision.runId());
+                if (at >= 0 && (at < runs.size() - 1
+                        || story.state() == com.swarmcoder.domain.StoryState.READY)) {
+                    earlierBuild = true;
+                }
+            }
+            if (!earlierBuild) {
+                open++;
+            }
+        }
+        return open;
     }
 
     String decisionText(String decisionId, int offset, int maxChars) {

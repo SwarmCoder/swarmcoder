@@ -424,11 +424,6 @@ public class GreenfieldWorkflow {
                 + "something is driving it again");
             run.setParkedAt(null);
             run.setParkReason(null);
-            // Withdrawn here too, not only on a later successful transition: the stage that parked
-            // is about to be tried again AT THE SAME STATE, and if it parks a second time, the same
-            // state raises a SECOND BLOCKED_TASK decision. Leaving the first one PENDING through
-            // that would show the card two questions where only the newest one is still true.
-            withdrawStaleDecisions(run);
             // A test corrected by hand while the run was parked is the test from here on (live
             // run 63: the operator's commit on the tests branch was ignored by the retry).
             String adopted = OperatorCorrectedTests.adopt(gitService, run);
@@ -437,9 +432,21 @@ public class GreenfieldWorkflow {
             }
             run = persister.save(run);
         }
+        // Withdrawn at every pick-up, parked or not, and not only on a later successful
+        // transition: the stage is about to be tried again AT THE SAME STATE, and if it stops
+        // again the same state raises a SECOND BLOCKED_TASK decision. Leaving the first one PENDING
+        // through that would show two questions where only the newest one is still true. It used
+        // to be done only for a run carrying the park mark, so a run whose mark was gone (the
+        // process died while one task had asked and others were still building) asked twice.
+        withdrawStaleDecisions(run);
         int outageAttempts = 0;
         // Simple synchronous progression for the virtual thread
         while (run.state() != RunState.DELIVERED && run.state() != RunState.ABORTED) {
+            if (replaced(run)) {
+                log("Run " + run.id() + " is an earlier build of a story that was sent back or "
+                    + "started again — nothing further is done in it.");
+                return;
+            }
             if (cloudGate != null) {
                 // Over a limit before the stage even starts (its story's or project's, passed
                 // through another run, or a stage whose model call swallowed the refusal): park.
@@ -1938,6 +1945,13 @@ public class GreenfieldWorkflow {
         if (run.storyId() == null) {
             return true; // an ad-hoc run with no work item to update
         }
+        if (replaced(run)) {
+            // The story was sent back or started again while this build was finishing. Its result
+            // belongs to no one: the story's state, commits and criteria are its current build's.
+            log("Run " + run.id() + " is an earlier build of its story — its result is not "
+                + "recorded on the story.");
+            return false;
+        }
         Story story = artifactStore.getStory(run.storyId());
         if (story == null) {
             return true;
@@ -2083,12 +2097,9 @@ public class GreenfieldWorkflow {
      * breath.
      */
     private void blockStoryOnIntegrationFailure(Run run, FinalIntegrator.Result integration) {
-        if (run.storyId() == null) {
-            return;
-        }
-        Story story = artifactStore.getStory(run.storyId());
+        Story story = storyToWrite(run);
         if (story == null) {
-            return;
+            return; // no story, or an earlier build of a story that has moved on
         }
         String reason = "Final integration failed: " + integration.failure();
         story.setState(StoryState.BLOCKED);
@@ -2849,7 +2860,7 @@ public class GreenfieldWorkflow {
             // story may have written a journey; that journey is then the story's and it goes
             // on, to be made in the browser as every journey is.
             String standing = NothingCreatesIt.standing(nothingCreates, graph.tasks());
-            Story shown = run.storyId() == null ? null : artifactStore.getStory(run.storyId());
+            Story shown = storyToWrite(run);
             if (shown != null && !java.util.Objects.equals(shown.nothingCreates(), standing)) {
                 shown.setNothingCreates(standing);
                 artifactStore.saveStory(shown);
@@ -6066,6 +6077,18 @@ public class GreenfieldWorkflow {
      * they were not.
      */
     private void queueDecision(Run run, String brief) {
+        if (replaced(run)) {
+            log("Run " + run.id() + " is an earlier build of its story — its question is not "
+                + "raised: " + brief);
+            return;
+        }
+        for (Decision open : new ArrayList<>(artifactStore.root().decisions.values())) {
+            if (open != null && open.state() == DecisionState.PENDING
+                    && open.kind() == DecisionKind.BLOCKED_TASK && run.id().equals(open.runId())
+                    && java.util.Objects.equals(brief, open.briefMarkdown())) {
+                return; // the same question of the same run is already open
+            }
+        }
         UUID decisionId = UUID.randomUUID();
         artifactStore.append(() -> {
             artifactStore.root().decisions.put(decisionId, new Decision(
@@ -6086,6 +6109,25 @@ public class GreenfieldWorkflow {
      * on its own — there is no mid-workflow park to mark, and marking one would say a resumable
      * stage is waiting here when none is.
      */
+    /**
+     * True when this run's story has been sent back or started again since: the run is an earlier
+     * build, and may neither ask anything nor write the story's state.
+     */
+    private boolean replaced(Run run) {
+        return com.swarmcoder.store.SupersededRuns.isSuperseded(artifactStore, run);
+    }
+
+    /**
+     * The story this run may write to: its own story while the run is that story's current build,
+     * null for a run with no story and for an earlier build of a story that has moved on.
+     */
+    private Story storyToWrite(Run run) {
+        if (run.storyId() == null || replaced(run)) {
+            return null;
+        }
+        return artifactStore.getStory(run.storyId());
+    }
+
     private void parkRun(Run run, String reason) {
         run.setParkedAt(Instant.now());
         run.setParkReason(reason);

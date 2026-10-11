@@ -3127,6 +3127,21 @@ public class SwarmEngineImpl implements SwarmEngine {
         brief.append("\nRe-decompose the task, fix the environment, or adjust the acceptance tests, "
             + "then re-run (spec §11.5).");
 
+        if (com.swarmcoder.store.SupersededRuns.isSuperseded(artifactStore, runId)) {
+            // The story was sent back or started again while this build was still working: an
+            // earlier build asks nothing.
+            log.info("Task '{}': run {} is an earlier build of its story — its question is not "
+                + "raised", task.title(), runId);
+            return;
+        }
+        String text = brief.toString();
+        for (Decision open : new ArrayList<>(artifactStore.root().decisions.values())) {
+            if (open != null && open.state() == DecisionState.PENDING
+                    && open.kind() == DecisionKind.BLOCKED_TASK && runId.equals(open.runId())
+                    && text.equals(open.briefMarkdown())) {
+                return; // the same question of the same run is already open
+            }
+        }
         UUID decisionId = UUID.randomUUID();
         artifactStore.append(() -> {
             artifactStore.root().decisions.put(decisionId, new Decision(decisionId, runId,

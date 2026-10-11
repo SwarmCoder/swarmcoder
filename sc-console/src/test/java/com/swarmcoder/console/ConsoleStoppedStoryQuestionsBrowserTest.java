@@ -242,37 +242,37 @@ class ConsoleStoppedStoryQuestionsBrowserTest {
                     .setPath(Path.of("target", "console-retry-behind-questions-dialog.png")));
                 page.click("text=\"Take it back\"");
 
-                // It moved. Nothing was answered to get it there, and the questions came with it —
-                // still asked, still answerable, on the card in its new column.
+                // It moved, and nothing was answered to get it there. The build it leaves behind
+                // is over, so the questions that build asked are closed with the reason written
+                // on them (they were once left open on the card, where answering one handed the
+                // old build back to its engine). The other stories' questions are untouched.
                 page.waitForSelector("[data-testid='pipeline-col-ready'] "
                         + ">> text=Store a book record",
                     new Page.WaitForSelectorOptions().setTimeout(15_000));
-                assertThat(store.getStory(stopped.id()).state())
+                Story sentBack = store.getStory(stopped.id());
+                assertThat(sentBack.state())
                     .describedAs("the retry ran without a single question being answered")
                     .isEqualTo(StoryState.READY);
                 for (Decision decision : store.root().decisions.values()) {
-                    assertThat(decision.state())
-                        .describedAs("and answered none of them on the way")
-                        .isEqualTo(DecisionState.PENDING);
+                    if (sentBack.runIds().contains(decision.runId())) {
+                        assertThat(decision.state()).isEqualTo(DecisionState.RESOLVED);
+                        assertThat(decision.humanResponse())
+                            .startsWith(com.swarmcoder.store.SupersededRuns.CLOSED_PREFIX)
+                            .contains("was sent back to be built again");
+                    } else {
+                        assertThat(decision.state())
+                            .describedAs("another story's question is not closed by this")
+                            .isEqualTo(DecisionState.PENDING);
+                    }
                 }
                 String ready = page.locator("[data-testid='pipeline-col-ready']").textContent();
                 assertThat(ready)
-                    .describedAs("a story agreed for a second try keeps both offers")
-                    .contains("Answer these 7 questions")
-                    .contains("Build this story");
-
-                // The questions were never made unreachable by any of this.
-                page.click("[data-testid='pipeline-col-ready'] >> text=Answer these 7 questions");
-                page.waitForSelector("[data-testid='story-questions']",
-                    new Page.WaitForSelectorOptions().setTimeout(10_000));
-                assertThat(page.locator("[data-testid='story-questions']").textContent())
-                    .contains("7 questions")
-                    .contains("the model server stopped answering");
-                // Let the modal finish arriving before the picture is taken: a shot of a dialog
-                // half way through fading in is evidence of nothing.
-                page.waitForTimeout(500);
+                    .describedAs("a story agreed for a second try offers the build, and no "
+                        + "question of the build it replaced")
+                    .contains("Build this story")
+                    .doesNotContain("Answer these");
                 page.screenshot(new Page.ScreenshotOptions()
-                    .setPath(Path.of("target", "console-questions-still-reachable.png")));
+                    .setPath(Path.of("target", "console-sent-back-questions-closed.png")));
 
                 assertThat(pageErrors).isEmpty();
             }

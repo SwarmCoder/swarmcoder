@@ -7830,3 +7830,99 @@ The stop that says a no-change repair round "looks like a false alarm in the che
 
 **Tests.** `AnAnnotationForATypeIsMetOnTheTypeTest` (sc-knowledge),
 `ContractAnnotationPlacesTest` (sc-workflow).
+
+## 82. A build its story had replaced was picked up again and wrote over the story (live build, 2026-10-11)
+
+**What was observed.** One story in a supervised build. Its first build failed final
+integration and stopped with a question. The supervisor sent the story back; a second build
+started and stopped in EXECUTING with a blocked-task question. The application was then
+restarted. Afterwards the story read "stopped" with the FIRST build's integration failure,
+`list_runs` showed the first build still in FINAL_INTEGRATION, `list_backlog` reported 5
+questions from builds where 2 had been asked, and `next_attention` returned the stopped story
+quoting the first build's failure instead of the second build's question.
+
+**Cause.**
+
+- *Sending a story back ended nothing.* `BacklogServiceImpl.retryStoryAs` moved the story to
+  READY and cleared the "stopped" mark on its runs (`clearParkMarks`). The run kept its stage
+  (`FINAL_INTEGRATION`, not a final state) and its question stayed open, on purpose: a browser
+  test pinned "the questions survive a retry". Starting the story again (`start`) appended a new
+  run and looked at no earlier one.
+- *Start-up resumed every unfinished run.* `RunResumer.resumeAll` hands each project's
+  `WorkflowEngine.unfinishedRunsOf` to the engine, oldest first; the only test is "not
+  DELIVERED, ABORTED or ABANDONED". The first build was resumed beside the second.
+- *A build wrote its story without asking whether it was still that story's build.*
+  The resumed first build failed integration again and `GreenfieldWorkflow.
+  blockStoryOnIntegrationFailure` set the story BLOCKED with its own failure text;
+  `recordDelivery` and the "nothing creates it" note write the story the same way.
+- *Questions multiplied in two ways.* (1) The earlier question is withdrawn when a run is
+  picked up again, but only inside `if (run.parkedAt() != null)` in `GreenfieldWorkflow.drive`,
+  and the send-back had cleared that mark; so the first build's old question stayed open and
+  its second failure raised another. (2) `list_backlog`'s `questionsFromBuilds` was
+  `backlog.decisions().size()`: every question the project had ever recorded, withdrawn and
+  answered ones included, so each pick-up that withdrew a question and asked it again added
+  one. The exact five were not reconstructed from the store; these two are what the code does.
+- *Answering was open too.* `DecisionAnswers.resumeStopped` hands a decision's run back to its
+  engine whenever the run is stopped and unfinished, whichever build of the story it is.
+
+**What changed.**
+
+1. *One definition* (`SupersededRuns`, sc-store). A run is an earlier build when its story
+   lists it and either lists a later run or is READY (sent back, no new build yet). A run the
+   story does not list yet is a build being started and is never one. No stored field was
+   added and no enum constant: an ended earlier build is `RunState.ABORTED`, the existing
+   "this attempt was rejected" state, and the reason is written on its questions and in the
+   story's change journal. A store from before reads the same way.
+2. *Ended when the story moves on.* `retryStoryAs` (every build of the story) and `start`
+   (every build but the new one) call `SupersededRuns.supersede`: an unfinished run becomes
+   ABORTED with its "stopped" mark cleared, and each question still open on any of the story's
+   earlier runs is RESOLVED with "Closed without an answer: (story) was sent back to be built
+   again: (note)" or "... has a newer build." `clearParkMarks` is gone.
+3. *Start-up.* `RunResumer.resumeAll` first runs `SupersededRuns.sweep` (ends what a store from
+   before left behind, questions included), then skips any run that is still an earlier build.
+   `WorkflowEngine.advanceSync` refuses to drive one whoever asks, and ends it.
+4. *A build that is replaced while a thread is on it.* `RunPersister.save` no longer writes a
+   run over a stored ABORTED or ABANDONED one at another state; the thread gets the ended run
+   back and its loop stops. `GreenfieldWorkflow.drive` checks between stages. `queueDecision`,
+   `SwarmEngineImpl.queueBlockedDecision`, `recordDelivery`, `blockStoryOnIntegrationFailure`
+   and the "nothing creates it" note do nothing for an earlier build.
+5. *No second copy.* `drive` withdraws a run's open BLOCKED_TASK questions at every pick-up, not
+   only when the park mark is set, and both places that raise one skip a question whose run,
+   kind and text are already open.
+6. *What is shown.* `PendingDecisions.all` / `forProject` and `SupervisorDesk.attention` leave
+   out a question of an earlier build. `list_backlog`'s `questionsFromBuilds` counts open
+   questions of current builds (`SupervisorMcpTools.openQuestions`).
+7. *Answering.* `DecisionAnswers.answerAndResume` and `answerFromConsole` refuse, before
+   anything is recorded: "Not recorded: this question came from an earlier build of (story).
+   The story was sent back or started again and has a newer build ...".
+
+**Changed on purpose.** A story's questions no longer survive a send-back. They are kept as
+history, closed, with the reason. `ConsoleStoppedStoryQuestionsBrowserTest` now says so.
+
+**Tests.** New: `OnlyAStorysCurrentBuildIsDrivenTest` (sc-workflow: start-up resumes only the
+current build and ends the others; a build replaced while working asks nothing and stays
+ended; an earlier build handed to the engine is not driven; a question is not asked twice),
+`AStoryHasOneBuildTest` (sc-console: send-back, start again, counts, the attention list, the
+refused answer by supervisor and on screen), `OpenQuestionsCountTest` (sc-server). Run with
+them: `ParkWithdrawnOnResumeTest`, `TwoProjectResumeTest`, `StrandedStoryRecoveryTest`,
+`WorkflowPersistenceTest`, `SupervisorDeskTest`, `UnattendedRunningTest`,
+`BacklogServiceTest`, `BudgetAnswersTest`, `ConsoleServicesTest`, `SupervisorMcpToolsTest`,
+`ConsoleStoppedStoryQuestionsBrowserTest`.
+
+**Not checked:**
+
+- Not run live, and not against the store of the build where this was seen. The tests build
+  the same shape (two runs of one story, the earlier one unfinished with its question open) in
+  a new store.
+- A build replaced while its workers are busy is not interrupted. Its stage runs to its end
+  (the swarm keeps its places until then); only then does the run stop, and nothing it does
+  after being replaced is recorded on the story or asked. Stopping the workers at once needs a
+  cancel the swarm does not have.
+- A cancelled story's unfinished run is still resumed at start; cancelling ends no run. Only
+  sending back and starting again were in question here.
+- A run with no story (an ad-hoc run from chat) has no "current build" and is resumed as
+  before.
+- `withdrawStaleDecisions` now also runs for a run picked up without the park mark; the case
+  tested is one question with the same text, not a blocked task's question next to a rule
+  question.
+- "driving: a live process" for a stopped run in `list_runs` was not looked into.
