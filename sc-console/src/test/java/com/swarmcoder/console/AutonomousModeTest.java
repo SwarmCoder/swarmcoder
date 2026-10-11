@@ -311,12 +311,12 @@ class AutonomousModeTest {
         // The retry, not a refusal - the two must not both fire for the same stop on the same tick.
         assertThat(decisionsOfKind(AutonomousDecisionKind.REFUSED)).isEmpty();
 
-        // Deliberately untouched (ConsoleStoppedStoryQuestionsBrowserTest pins this for the human
-        // path, and the automatic one must not diverge): the question itself is real history about
-        // the abandoned attempt, still there and still answerable, not silently erased.
+        // Kept as history, closed (ConsoleStoppedStoryQuestionsBrowserTest pins this for the human
+        // path, and the automatic one must not diverge): the question is about a build the story
+        // has replaced, so it is still there to read and no longer open to answer.
         assertThat(store.root().decisions.values().stream()
                 .filter(d -> runId.equals(d.runId())).findFirst().orElseThrow().state())
-            .isEqualTo(DecisionState.PENDING);
+            .isEqualTo(DecisionState.RESOLVED);
     }
 
     /**
