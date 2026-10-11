@@ -200,6 +200,8 @@ public class AutonomousDecision {
             case SENT_BACK_DELIVERY -> "The supervisor sent this back to be built again";
             case ANSWERED_RUN_QUESTION -> "The supervisor answered a stopped build";
             case STARTED_STORY -> "The supervisor started this build";
+            case ADDED_CONTEXT_FOLDER -> "The supervisor added a reference folder";
+            case REMOVED_CONTEXT_FOLDER -> "The supervisor removed a reference folder";
             default -> "The supervisor decided";
         };
     }

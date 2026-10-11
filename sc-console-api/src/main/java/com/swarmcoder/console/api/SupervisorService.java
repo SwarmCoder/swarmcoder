@@ -70,6 +70,19 @@ public interface SupervisorService {
     /** Stores pasted text as a document of the current project and adds it to the analyst's flow. */
     String addDocument(String title, String text, boolean technical);
 
+    /** The current project's read-only reference entries (folders and documentation sites). */
+    java.util.List<ContextFolder> contextFolders();
+
+    /**
+     * Adds a library's source folder to the current project's reference folders and rebuilds the
+     * project's context so it is read from then on. {@code name} must be the folder's own name.
+     * Returns a sentence saying what took effect, or "error: ...".
+     */
+    String addContextFolder(String name, String path);
+
+    /** Removes a reference entry by name (or full path). Returns a sentence, or "error: ...". */
+    String removeContextFolder(String name);
+
     /** The analyst's or planner's flow as it stands: state, open questions, proposals. */
     FlowView flow(String flow);
 

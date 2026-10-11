@@ -7592,6 +7592,20 @@ now done:
   Free text is stored as written (the rule-question parser reads its first word); on a budget
   question the text `extend` or `stop` as first word is answered as that option.
 
+- **Reference folders (2026-10-11, branch `feat/supervisor-context-folders`).** A supervisor that
+  created its project could not give it the source of the libraries it builds on; only the
+  Console's project settings could. `list_context_folders` (read) and `add_context_folder(name,
+  path)` / `remove_context_folder(name)` (write, secret required) wrap that settings save
+  (`ControlService.saveProjectConfig`; roles and worker count are read and passed back unchanged,
+  and the save rebuilds the project's context, so nothing else is needed for it to take effect).
+  A folder has no stored name: roles see it under its last path segment, so `name` must equal
+  that, and an add with another name is refused. Adding needs an existing folder; documentation
+  sites stay a Console act. The change reaches new builds and checks; a build already running
+  holds the context it started with, so it must be sent back or started again to see it. Both
+  acts go in the supervisor's decision log (`AutonomousDecisionKind` gained
+  `ADDED_CONTEXT_FOLDER`, `REMOVED_CONTEXT_FOLDER` on the end). `create_project`'s answer now
+  names `add_context_folder`. Tests: `SupervisorDeskTest`, `SupervisorMcpToolsTest`.
+
 
 ## 79. Cloud token budgets per run, story and project (2026-10-10)
 

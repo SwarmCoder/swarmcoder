@@ -185,6 +185,56 @@ class SupervisorMcpToolsTest {
     }
 
     @Test
+    void referenceFolderToolsListFreelyAndChangeOnlyWithTheSecret(@TempDir Path home)
+            throws Exception {
+        String secret = McpSecret.loadOrCreate(home.resolve(McpSecret.FILE_NAME));
+        List<String> calls = new ArrayList<>();
+        SupervisorService supervisor = Stubs.of(SupervisorService.class)
+            .answer("contextFolders", args -> List.of(
+                new com.swarmcoder.console.api.ContextFolder("zeroz4j", "/libs/zeroz4j", "folder",
+                    true)))
+            .answer("addContextFolder", args -> {
+                calls.add("add " + args[0] + " " + args[1]);
+                return "Added zeroz4j. New builds read it.";
+            })
+            .answer("removeContextFolder", args -> {
+                calls.add("remove " + args[0]);
+                return "Removed.";
+            })
+            .returning("standing", "nothing is waiting")
+            .build();
+        server = new SwarmMcpServer(Stubs.of(ObserverService.class).build(),
+            Stubs.of(GraphService.class).build(), Stubs.of(ControlService.class).build(), 0, "",
+            false, supervisor, secret);
+        String url = server.start();
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        rpc(client, url, INITIALIZE, null);
+        rpc(client, url, INITIALIZED, null);
+
+        String add = """
+            {"jsonrpc":"2.0","id":11,"method":"tools/call",
+             "params":{"name":"add_context_folder","arguments":{"name":"zeroz4j","path":"/libs/zeroz4j"}}}""";
+        String remove = """
+            {"jsonrpc":"2.0","id":12,"method":"tools/call",
+             "params":{"name":"remove_context_folder","arguments":{"name":"zeroz4j"}}}""";
+
+        assertThat(rpc(client, url, add, null).body()).contains("Refused");
+        assertThat(rpc(client, url, remove, null).body()).contains("Refused");
+        assertThat(rpc(client, url, add, "Bearer wrong").body()).contains("Refused");
+        assertThat(calls).describedAs("nothing changed without the secret").isEmpty();
+
+        String list = rpc(client, url, """
+            {"jsonrpc":"2.0","id":13,"method":"tools/call",
+             "params":{"name":"list_context_folders","arguments":{}}}""", null).body();
+        assertThat(list).contains("zeroz4j").contains("/libs/zeroz4j").doesNotContain("Refused");
+
+        assertThat(rpc(client, url, add, "Bearer " + secret).body())
+            .contains("done").contains("New builds read it");
+        assertThat(rpc(client, url, remove, "Bearer " + secret).body()).contains("done");
+        assertThat(calls).containsExactly("add zeroz4j /libs/zeroz4j", "remove zeroz4j");
+    }
+
+    @Test
     void withNoSecretEveryToolThatChangesSomethingIsRefused() throws Exception {
         server = new SwarmMcpServer(Stubs.of(ObserverService.class).build(),
             Stubs.of(GraphService.class).build(), Stubs.of(ControlService.class).build(), 0, "",

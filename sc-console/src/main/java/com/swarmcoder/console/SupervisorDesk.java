@@ -19,6 +19,7 @@ package com.swarmcoder.console;
 
 import com.swarmcoder.console.api.AttentionItem;
 import com.swarmcoder.console.api.Backlog;
+import com.swarmcoder.console.api.ContextFolder;
 import com.swarmcoder.console.api.FlowView;
 import com.swarmcoder.console.api.SupervisorService;
 import com.swarmcoder.domain.AutonomousDecision;
@@ -491,6 +492,147 @@ public final class SupervisorDesk implements SupervisorService {
             }
         }
         return "";
+    }
+
+    // --- the project's reference folders ---------------------------------------------------------
+
+    private static final String FOLDER_EFFECT =
+        "New builds and checks of this project read it from now on (the project's context was "
+        + "rebuilt). A build already running keeps the folders it started with; send it back or "
+        + "start it again to give it the change.";
+
+    @Override
+    public List<ContextFolder> contextFolders() {
+        Project project = currentProject();
+        List<ContextFolder> folders = new ArrayList<>();
+        if (project != null) {
+            for (String entry : storedPaths(project)) {
+                folders.add(describe(entry));
+            }
+        }
+        return folders;
+    }
+
+    @Override
+    public String addContextFolder(String name, String path) {
+        Project project = currentProject();
+        if (project == null) {
+            return "error: no project is selected";
+        }
+        if (name == null || name.isBlank() || path == null || path.isBlank()) {
+            return "error: a name and a folder are both needed";
+        }
+        String entry = path.strip();
+        java.nio.file.Path folder;
+        try {
+            folder = java.nio.file.Paths.get(entry);
+        } catch (RuntimeException e) {
+            return "error: not a usable folder path: " + entry;
+        }
+        if (!java.nio.file.Files.isDirectory(folder)) {
+            return "error: there is no folder at " + entry
+                + " (a documentation site is added in the Console)";
+        }
+        String own = lastSegment(entry);
+        if (!own.equalsIgnoreCase(name.strip())) {
+            return "error: roles see this folder as '" + own + "' (its own name), so the name "
+                + "must be '" + own + "', not '" + name.strip() + "'";
+        }
+        for (ContextFolder existing : contextFolders()) {
+            if (existing.name().equalsIgnoreCase(own)) {
+                return "error: the project already has a reference entry named '" + own + "' ("
+                    + existing.path() + "); remove_context_folder first to replace it";
+            }
+        }
+        List<String> paths = storedPaths(project);
+        paths.add(entry);
+        String failure = saveFolders(project, paths);
+        if (failure != null) {
+            return failure;
+        }
+        record(AutonomousDecisionKind.ADDED_CONTEXT_FOLDER, own,
+            "Give the project this reference folder?", "Added " + entry + ".", true, null, null);
+        return "Added " + own + ". " + FOLDER_EFFECT;
+    }
+
+    @Override
+    public String removeContextFolder(String name) {
+        Project project = currentProject();
+        if (project == null) {
+            return "error: no project is selected";
+        }
+        if (name == null || name.isBlank()) {
+            return "error: say which reference entry to remove (list_context_folders)";
+        }
+        String wanted = name.strip();
+        String found = null;
+        for (ContextFolder candidate : contextFolders()) {
+            if (candidate.name().equalsIgnoreCase(wanted) || candidate.path().equals(wanted)) {
+                found = candidate.path();
+                break;
+            }
+        }
+        if (found == null) {
+            return "error: this project has no reference entry named '" + wanted + "'";
+        }
+        List<String> paths = storedPaths(project);
+        paths.remove(found);
+        String failure = saveFolders(project, paths);
+        if (failure != null) {
+            return failure;
+        }
+        record(AutonomousDecisionKind.REMOVED_CONTEXT_FOLDER, lastSegment(found),
+            "Take this reference folder out of the project?", "Removed " + found + ".", true,
+            null, null);
+        return "Removed " + lastSegment(found) + ". " + FOLDER_EFFECT;
+    }
+
+    /** Saves through the call the Console's project settings make; roles and workers are kept. */
+    private static String saveFolders(Project project, List<String> paths) {
+        ControlServiceImpl control = new ControlServiceImpl();
+        String id = project.id().toString();
+        String result = control.saveProjectConfig(id, String.join(",", paths),
+            control.projectRoles(id), control.projectWorkersPerTask(id));
+        return failed(result) ? result : null;
+    }
+
+    private static Project currentProject() {
+        ConsoleContext context = ConsoleContext.get();
+        UUID projectId = context == null ? null : context.currentProjectId();
+        return projectId == null ? null : context.store().getProject(projectId);
+    }
+
+    private static List<String> storedPaths(Project project) {
+        List<String> paths = new ArrayList<>();
+        if (project.contextPaths() != null) {
+            project.contextPaths().stream().filter(p -> p != null && !p.isBlank())
+                .map(String::strip).forEach(paths::add);
+        }
+        return paths;
+    }
+
+    private static ContextFolder describe(String entry) {
+        String lower = entry.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return new ContextFolder(entry, entry, "site", true);
+        }
+        boolean exists;
+        try {
+            exists = java.nio.file.Files.isDirectory(java.nio.file.Paths.get(entry));
+        } catch (RuntimeException e) {
+            exists = false;
+        }
+        return new ContextFolder(lastSegment(entry), entry, "folder", exists);
+    }
+
+    /** The name roles see a folder under: its last path segment, as the Librarian labels it. */
+    private static String lastSegment(String entry) {
+        try {
+            java.nio.file.Path name = java.nio.file.Paths.get(entry).getFileName();
+            return name == null ? entry : name.toString();
+        } catch (RuntimeException e) {
+            return entry;
+        }
     }
 
     @Override

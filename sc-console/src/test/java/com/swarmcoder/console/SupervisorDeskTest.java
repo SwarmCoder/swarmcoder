@@ -18,11 +18,13 @@
 package com.swarmcoder.console;
 
 import com.swarmcoder.console.api.AttentionItem;
+import com.swarmcoder.console.api.ContextFolder;
 import com.swarmcoder.domain.AutonomousDecision;
 import com.swarmcoder.domain.AutonomousDecisionKind;
 import com.swarmcoder.domain.Decision;
 import com.swarmcoder.domain.DecisionKind;
 import com.swarmcoder.domain.DecisionState;
+import com.swarmcoder.domain.Project;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.RunReport;
 import com.swarmcoder.domain.RunState;
@@ -360,6 +362,72 @@ class SupervisorDeskTest {
     }
 
     // --- helpers ---------------------------------------------------------------------------------
+
+    @Test
+    void referenceFoldersAreAddedAndRemovedThroughTheProjectSettingsSave(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir.resolve("store"))) {
+            Path library = java.nio.file.Files.createDirectories(dir.resolve("zeroz-lib"));
+            store.saveProject(new Project(projectId, "bookshelf", dir.toString(),
+                new ArrayList<>(), Instant.now(), false));
+            List<String> saved = new ArrayList<>();
+            ConsoleContext context = context(store, false, false).withConfigForms(
+                new ConsoleContext.ConfigForms() {
+                    public List<com.swarmcoder.console.api.RoleEntryDto> globalRoles() {
+                        return List.of();
+                    }
+                    public String saveGlobalRoles(
+                            List<com.swarmcoder.console.api.RoleEntryDto> roles) {
+                        return "";
+                    }
+                    public com.swarmcoder.console.api.BudgetsDto budgets() { return null; }
+                    public String saveBudgets(com.swarmcoder.console.api.BudgetsDto b) {
+                        return "";
+                    }
+                    public List<com.swarmcoder.console.api.RoleEntryDto> projectRoles(String id) {
+                        return List.of();
+                    }
+                    public int projectWorkersPerTask(String id) { return 0; }
+                    public String saveProjectConfig(String id, String csv,
+                            List<com.swarmcoder.console.api.RoleEntryDto> roles, int workers) {
+                        saved.add(csv);
+                        Project project = store.getProject(projectId);
+                        project.setContextPaths(csv.isBlank() ? new ArrayList<>()
+                            : new ArrayList<>(List.of(csv.split(","))));
+                        store.saveProject(project);
+                        return "";
+                    }
+                });
+            ConsoleContext.set(context);
+
+            assertThat(desk.contextFolders()).isEmpty();
+            assertThat(desk.addContextFolder("wrong-name", library.toString()))
+                .startsWith("error:").contains("zeroz-lib");
+            assertThat(desk.addContextFolder("zeroz-lib", dir.resolve("missing").toString()))
+                .startsWith("error: there is no folder");
+            assertThat(saved).describedAs("a refused add saves nothing").isEmpty();
+
+            String added = desk.addContextFolder("zeroz-lib", library.toString());
+
+            assertThat(added).doesNotStartWith("error:").contains("running keeps the folders");
+            assertThat(saved).containsExactly(library.toString());
+            assertThat(desk.contextFolders()).singleElement().satisfies(folder -> {
+                assertThat(folder.name()).isEqualTo("zeroz-lib");
+                assertThat(folder.kind()).isEqualTo("folder");
+                assertThat(folder.exists()).isTrue();
+            });
+            assertThat(desk.addContextFolder("zeroz-lib", library.toString()))
+                .startsWith("error:").contains("already");
+
+            assertThat(desk.removeContextFolder("nothing")).startsWith("error:");
+            assertThat(desk.removeContextFolder("ZEROZ-LIB")).doesNotStartWith("error:");
+            assertThat(desk.contextFolders()).isEmpty();
+            assertThat(desk.decisionLog()).extracting(AutonomousDecision::kind)
+                .containsExactly(AutonomousDecisionKind.ADDED_CONTEXT_FOLDER,
+                    AutonomousDecisionKind.REMOVED_CONTEXT_FOLDER);
+            assertThat(desk.decisionLog().get(0).actor()).isEqualTo("supervisor");
+        }
+    }
 
     private void install(ArtifactStore store, boolean unattended, boolean supervised,
                          AtomicReference<UUID> resumed) {
