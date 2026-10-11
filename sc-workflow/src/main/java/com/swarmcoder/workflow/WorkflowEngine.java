@@ -246,6 +246,20 @@ public class WorkflowEngine {
         if (isTerminal(run.state())) {
             return;
         }
+        if (com.swarmcoder.store.SupersededRuns.isSuperseded(store, run)) {
+            // Whoever asked (process start, an answer to one of its questions): the story has
+            // been sent back or started again since, so this build is over. End it rather than
+            // run its stage again and let it write its result onto a story that has moved on.
+            log.warn("Run {} is an earlier build of a story that was sent back or started again "
+                + "— not driven; marked {}", run.id(), RunState.ABORTED);
+            Story story = store.getStory(run.storyId());
+            com.swarmcoder.store.SupersededRuns.supersede(store, story,
+                story.state() == StoryState.READY ? null
+                    : story.runIds().get(story.runIds().size() - 1),
+                story.key() + (story.state() == StoryState.READY
+                    ? " was sent back to be built again." : " has a newer build."));
+            return;
+        }
         // The initial state is durable before any stage executes.
         run = persister.save(run);
 

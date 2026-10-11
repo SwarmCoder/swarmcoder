@@ -28,6 +28,9 @@ import com.swarmcoder.store.ArtifactStore;
  */
 public final class RunPersister {
 
+    private static final org.slf4j.Logger log =
+        org.slf4j.LoggerFactory.getLogger(RunPersister.class);
+
     private final ArtifactStore store;
 
     public RunPersister(ArtifactStore store) {
@@ -51,6 +54,19 @@ public final class RunPersister {
      */
     public Run save(Run run) {
         refuseUnearnedDelivery(run);
+        // A run that was ended from outside its own thread (its story was sent back or started
+        // again, or a person rejected it) stays ended. The thread that was driving it still holds
+        // the run as it was and would write it back at its old stage here, which is how a
+        // replaced build came to be picked up again at the next start. It is handed the ended run
+        // instead, and its loop stops on that.
+        Run stored = store.root().runs.get(run.id());
+        if (stored != null && stored != run && run.state() != stored.state()
+                && (stored.state() == com.swarmcoder.domain.RunState.ABORTED
+                    || stored.state() == com.swarmcoder.domain.RunState.ABANDONED)) {
+            log.info("Run {} was ended ({}) while it was being driven; its state {} is not "
+                + "written over that", run.id(), stored.state(), run.state());
+            return stored;
+        }
         try {
             // Every persist is a heartbeat. This is the single funnel a live workflow goes through,
             // so stamping here means a run's freshness needs no separate discipline to maintain —

@@ -22,7 +22,9 @@ import com.swarmcoder.domain.DecisionKind;
 import com.swarmcoder.domain.DecisionState;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.RunState;
+import com.swarmcoder.domain.Story;
 import com.swarmcoder.store.ArtifactStore;
+import com.swarmcoder.store.SupersededRuns;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -167,6 +169,10 @@ public final class DecisionAnswers {
         if (decision == null) {
             return failed("there is no question with that id");
         }
+        String earlier = fromAnEarlierBuild(store, decision);
+        if (earlier != null) {
+            return failed(earlier);
+        }
         if (decision.state() == DecisionState.RESOLVED) {
             return failed("that question has already been answered");
         }
@@ -217,6 +223,10 @@ public final class DecisionAnswers {
         if (decision == null) {
             return new Outcome(null, false, "There is no such question.");
         }
+        String earlier = fromAnEarlierBuild(context.store(), decision);
+        if (earlier != null) {
+            return failed(earlier);
+        }
         String said = text == null ? "" : text.strip();
         String first = said.split("[\\s:.,;]+", 2)[0].toLowerCase(Locale.ROOT);
         if (decision.kind() == DecisionKind.BUDGET_EXTENSION
@@ -230,6 +240,25 @@ public final class DecisionAnswers {
                 + "raise its limit.");
         }
         return resumeStopped(context, context.store(), decision, "operator");
+    }
+
+    /**
+     * Why a question cannot be answered when the build that asked it has been replaced, or null
+     * when it can. Checked before anything is recorded: an answer to an earlier build would
+     * otherwise be written down and, worse, hand that build back to its engine.
+     */
+    private static String fromAnEarlierBuild(ArtifactStore store, Decision decision) {
+        Story story = decision.runId() == null ? null
+            : SupersededRuns.supersededStoryOf(store, decision.runId());
+        if (story == null) {
+            return null;
+        }
+        return "Not recorded: this question came from an earlier build of " + story.key()
+            + ". The story was sent back or started again and has a newer build"
+            + (story.state() == com.swarmcoder.domain.StoryState.READY
+                ? " waiting to start" : "")
+            + ", so there is nothing left for an answer to restart. Answer the newer build's "
+            + "own question instead, if it asks one.";
     }
 
     private static Outcome withPrefix(Outcome outcome, String prefix) {

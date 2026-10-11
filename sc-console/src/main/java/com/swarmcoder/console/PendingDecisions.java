@@ -23,6 +23,7 @@ import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.Story;
 
 import com.swarmcoder.store.ArtifactStore;
+import com.swarmcoder.store.SupersededRuns;
 
 import java.util.HashSet;
 import java.util.List;
@@ -85,11 +86,21 @@ final class PendingDecisions {
         }
         int pending = 0;
         for (Decision decision : store.root().decisions.values()) {
-            if (isPending(decision)) {
+            if (isPending(decision) && !fromAnEarlierBuild(store, decision)) {
                 pending++;
             }
         }
         return pending;
+    }
+
+    /**
+     * True for a question raised by a build its story has since replaced (the story was sent back
+     * or started again). Such a question is closed when that happens; this keeps one that somehow
+     * was not from being counted or shown as owed.
+     */
+    static boolean fromAnEarlierBuild(ArtifactStore store, Decision decision) {
+        return decision != null && decision.runId() != null
+            && SupersededRuns.isSuperseded(store, decision.runId());
     }
 
     /**
@@ -134,7 +145,7 @@ final class PendingDecisions {
         }
         int pending = 0;
         for (Decision decision : store.root().decisions.values()) {
-            if (!isPending(decision)) {
+            if (!isPending(decision) || fromAnEarlierBuild(store, decision)) {
                 continue;
             }
             UUID runId = decision.runId();
