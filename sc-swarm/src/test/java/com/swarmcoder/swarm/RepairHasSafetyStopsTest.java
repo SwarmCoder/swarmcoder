@@ -60,8 +60,9 @@ class RepairHasSafetyStopsTest {
         assertThat(StoppedWork.worthVerifying(KillReason.ROUND_TIME_UP, "")).isFalse();
         assertThat(KillReason.ROUND_TIME_UP.sentence()).contains("whatever it had changed");
         assertThat(KillReason.ROUND_TIME_UP.ordinal())
-            .as("appended last: the enum is stored by ordinal")
-            .isEqualTo(KillReason.values().length - 1);
+            .as("it keeps its number: the enum is stored by ordinal, and later reasons "
+                + "are appended after it")
+            .isEqualTo(16);
         assertThat(com.swarmcoder.inference.ContextDeath.of(KillReason.ROUND_TIME_UP, 9, 30, false))
             .as("it says nothing about room").isNull();
     }

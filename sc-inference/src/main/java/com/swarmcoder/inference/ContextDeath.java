@@ -102,7 +102,8 @@ public record ContextDeath(KillReason reason, int turns) {
             || reason == KillReason.WORKER_ERROR
             || reason == KillReason.SANDBOX_UNAVAILABLE
             || reason == KillReason.SUPERSEDED
-            || reason == KillReason.PLACE_NEEDED;
+            || reason == KillReason.PLACE_NEEDED
+            || reason == KillReason.PLAN_FAULT;
     }
 
     /** What happened, in the operator's words, for the line that names which kills triggered a change. */

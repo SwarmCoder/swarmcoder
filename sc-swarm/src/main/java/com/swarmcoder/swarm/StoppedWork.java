@@ -49,7 +49,7 @@ final class StoppedWork {
             return false;
         }
         return switch (reason) {
-            case SUPERSEDED, WRITESET_VIOLATION, COMPILE_FAIL_TWICE -> false;
+            case SUPERSEDED, WRITESET_VIOLATION, COMPILE_FAIL_TWICE, PLAN_FAULT -> false;
             default -> true;
         };
     }

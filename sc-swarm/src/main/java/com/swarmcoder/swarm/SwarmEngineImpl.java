@@ -906,7 +906,10 @@ public class SwarmEngineImpl implements SwarmEngine {
                     || opinionPolicy() == OpinionPolicy.WARN_AND_CARRY_ON;
                 VerificationBaseline.StartCompile compiled = null;
                 if (measureCompile && goingOn) {
-                    compiled = BaseTreeChecks.compile(target, spec.get(), logText);
+                    // With the files the tree holds: a file that was not there was not
+                    // compiled there, whatever the stage's result (section 83).
+                    compiled = BaseTreeChecks.compile(target, spec.get(), logText)
+                        .withFilesOf(worktree);
                     startCompileOfRun.put(run.id(), compiled);
                     log.info("Run {}: the compile stage on {}, the tree the next candidates are "
                         + "cut from: {}.", run.id(), shortSha(commit),
@@ -1304,6 +1307,8 @@ public class SwarmEngineImpl implements SwarmEngine {
         boolean passed;
         boolean closed;
         boolean verifyingSaid;
+        /** A verified candidate showed the task's own test needs a task not yet run. */
+        boolean planFault;
         RuntimeException failure;
     }
 
@@ -1362,12 +1367,19 @@ public class SwarmEngineImpl implements SwarmEngine {
                 } catch (RuntimeException e) {
                     failure = e;
                 }
+                // Its only compile failure is in the task's own protected test, on a type a
+                // task not yet run writes (section 83): no other candidate can do better, so
+                // none is waited for. See TestOfATaskNotYetRun.
+                boolean planFault = candidate != null
+                    && candidate.state() != CandidateState.SURVIVED
+                    && testNeedsATaskNotYetRun(task, runId, List.of(candidate)) != null;
                 synchronized (round) {
                     round.verifying--;
                     if (failure != null) {
                         round.failure = round.failure == null ? failure : round.failure;
                     } else {
                         round.verified.add(candidate);
+                        round.planFault = round.planFault || planFault;
                         if (candidate.state() == CandidateState.SURVIVED && !round.passed) {
                             round.passed = true;
                             if (board != null) {
@@ -1381,6 +1393,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             id -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(group);
 
         boolean stoppedForOthers = false;
+        boolean stoppedForThePlan = false;
         boolean withdrewWaiting = false;
         int failedSoFar = 0;
         // Looked at every tenth of a second rather than waited for on the monitor: this is a
@@ -1411,6 +1424,9 @@ public class SwarmEngineImpl implements SwarmEngine {
                     }
                     if (round.verifying == 0 && group.allEnded()) {
                         over = true; // everything that started has ended and been verified
+                    } else if (round.planFault && !round.passed && round.verifying == 0) {
+                        stoppedForThePlan = true;
+                        over = true; // the plan is at fault; what still runs cannot pass
                     } else if (round.passed && round.verifying == 0 && !group.handingIn()
                             && (board == null || !board.othersStillLooking(task.id()))) {
                         stoppedForOthers = true;
@@ -1434,7 +1450,14 @@ public class SwarmEngineImpl implements SwarmEngine {
             }
         }
         List<Integer> withdrawn = group.withdrawWaiting();
-        List<Integer> stopped = group.stopRunning(KillReason.SUPERSEDED);
+        List<Integer> stopped = group.stopRunning(
+            stoppedForThePlan ? KillReason.PLAN_FAULT : KillReason.SUPERSEDED);
+        if (stoppedForThePlan && (!withdrawn.isEmpty() || !stopped.isEmpty())) {
+            log.warn("Task '{}': a verified candidate failed only on the task's own protected "
+                + "acceptance test, which needs a type a task not yet run writes. No other "
+                + "candidate can pass it: worker(s) {} stop at their next turn, worker(s) {} "
+                + "are not started.", task.title(), stopped, withdrawn);
+        }
         if (stoppedForOthers && (!withdrawn.isEmpty() || !stopped.isEmpty())) {
             log.info("Task '{}' has a candidate that passed verification and no other task of this "
                 + "wave is still looking for one, so it goes on without its duplicates: worker(s) "
@@ -1548,6 +1571,25 @@ public class SwarmEngineImpl implements SwarmEngine {
                 // workers "fixing" code that was never exercised, chasing a cause they have no path
                 // to reach, because the test they cannot edit is what is broken. Bounded to one
                 // attempt per task by testRepairNeededFor itself.
+                // The task's own protected test needs a type a task not yet run writes
+                // (section 83): the plan gave the test to the wrong task. Not a candidate's
+                // fault and not the test author's, so neither a repair round nor a repair of
+                // the test is started. Asked first: such a test also reads as one "no candidate
+                // can make compile". See TestOfATaskNotYetRun.
+                TestOfATaskNotYetRun.Finding notYetRun =
+                    testNeedsATaskNotYetRun(task, runId, verified);
+                if (notYetRun != null) {
+                    log.warn("Task '{}': {} - the task's own protected acceptance test needs {}, "
+                        + "which task '{}' writes and which has not run yet. No repair round - "
+                        + "it could not succeed. BLOCKED: the plan is at fault, not the "
+                        + "candidates.", task.title(), notYetRun.where(), notYetRun.type(),
+                        notYetRun.writer());
+                    markTaskState(task, TaskState.BLOCKED);
+                    queueBlockedDecision(task, runId, archivePool,
+                        TestOfATaskNotYetRun.planBlame(task, notYetRun));
+                    archiveCandidates(archivePool, null);
+                    return null;
+                }
                 TestRepairNeeded testFault = testRepairNeededFor(task, verified);
                 if (testFault != null) {
                     task.setTestRepairAttempted(true);
@@ -2766,6 +2808,36 @@ public class SwarmEngineImpl implements SwarmEngine {
         return true;
     }
 
+    /**
+     * {@link TestOfATaskNotYetRun#find} for a run's task, with the run's plan and the tests as
+     * the run's tests commit holds them; null when there is no finding or either cannot be read.
+     */
+    private TestOfATaskNotYetRun.Finding testNeedsATaskNotYetRun(Task task, UUID runId,
+                                                                 List<CandidateSolution> verified) {
+        try {
+            if (runId == null || gitService == null || !gitService.isEnabled()) {
+                return null;
+            }
+            Run run = runsInFlight.get(runId);
+            if (run == null) {
+                run = artifactStore.root().runs.get(runId);
+            }
+            String tests = run == null ? null : run.acceptanceTestsCommit();
+            if (tests == null || tests.isBlank()) {
+                return null;
+            }
+            return TestOfATaskNotYetRun.find(task, verified, wavesOf(runId), path -> {
+                byte[] bytes = gitService.fileAt(tests, path);
+                return bytes == null ? null
+                    : new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            });
+        } catch (RuntimeException e) {
+            log.warn("Task '{}': whether its own test needs a task not yet run could not be "
+                + "established ({}); judged as before", task.title(), e.toString());
+            return null;
+        }
+    }
+
     /** The plan's waves for a run, or null when the plan cannot be read. */
     private List<List<Task>> wavesOf(UUID runId) {
         Run run = runsInFlight.get(runId);
@@ -3110,6 +3182,9 @@ public class SwarmEngineImpl implements SwarmEngine {
                                       String headline) {
         StringBuilder brief = new StringBuilder();
         brief.append(headline);
+        // The reason, once and before the list of workers (section 83): a reader shown only
+        // the first lines must still learn on what the task failed.
+        brief.append(BlockedReason.of(task, evidence, headline));
         for (CandidateSolution candidate : evidence) {
             brief.append("- worker ").append(candidate.workerIndex())
                 .append(" [").append(candidate.state())

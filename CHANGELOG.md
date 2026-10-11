@@ -114,6 +114,22 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A test owned by a task that could never compile it.** A plan gave an acceptance check to a
+  task whose test imported types a later task writes. Every candidate compiled, the task's
+  protected test did not, and four candidates and four repair workers failed before the build
+  stopped with a question that gave no reason. Now the red check asks, for each task, whether
+  that task or the tasks it waits for write every type its test needs. If another task does,
+  the test and its checks are given to the task that has all of them when it starts, and the
+  move is logged. If no task does, the test goes back to its author once with the fact, and
+  the run then stops before any worker starts. As a second line, a candidate whose only
+  compile failure is in its task's own protected test, on a type a task not yet run writes,
+  blocks the task at once as a fault of the plan: other candidates are stopped
+  (`KillReason.PLAN_FAULT`, appended) and no repair round starts. The verifier no longer says
+  a file "compiled on the tree this candidate started from" when the file was not on that
+  tree. A blocked task's question now says, before its list of workers, the first file and
+  line that did not compile with the compiler's message, or the first failing acceptance test.
+  See section 83 of `docs/DEVELOPER_CORRECTIONS.md`.
+
 - **A story has one build at a time.** Sending a story back, or starting it again, now ends
   its earlier builds: an unfinished one is marked aborted, and every question it still had open
   is closed with the reason written on it. Before, the earlier build kept its stage, was picked

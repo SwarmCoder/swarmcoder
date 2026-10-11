@@ -97,7 +97,14 @@ public enum KillReason {
      * verdict on the worker: whatever it had changed is verified. Appended last: this enum is
      * stored.
      */
-    ROUND_TIME_UP;
+    ROUND_TIME_UP,
+    /**
+     * Stopped because a candidate of the same task had shown the plan at fault: the task's own
+     * protected acceptance test needs a type that a task not yet run writes, so no candidate
+     * of this task can pass (section 83). Not a statement about this worker's code. Appended
+     * last: the enum is stored by ordinal.
+     */
+    PLAN_FAULT;
 
     /**
      * Why this worker stopped, in the operator's words rather than the constant's name.
@@ -143,6 +150,8 @@ public enum KillReason {
                 + "budgets.maxToolTurnsPerWorker or split the task";
             case ROUND_TIME_UP -> "its repair round reached the time it is allowed and it was "
                 + "still going, so it was stopped and whatever it had changed was verified";
+            case PLAN_FAULT -> "the plan gave its task a test that needs code a later task "
+                + "writes, so no attempt on this task could pass and this one was stopped";
             case PLACE_NEEDED -> "it was a spare attempt, and its place on the model server was "
                 + "needed for a task that had no attempt running, so it was stopped";
         };
