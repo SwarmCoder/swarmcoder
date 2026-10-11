@@ -163,6 +163,41 @@ public final class TypeDeliverability {
     }
 
     /**
+     * {@link #mayCreate} without its two guesses, for the question "which task writes this":
+     * an entry with no recognised source root says nothing, and neither does an entry that is a
+     * whole source root. Only a package directory that holds the name, or a file in the name's
+     * own package, counts. {@link #mayCreate} is right to say yes when it cannot tell - it
+     * decides whether a wave may start; {@link TestOwnership} names a task with this and must
+     * not name one on a guess (section 83).
+     */
+    static boolean writesInPackageOf(Task task, String fullName) {
+        if (task == null || task.writeSet() == null || fullName == null || fullName.isBlank()) {
+            return false;
+        }
+        int dot = fullName.lastIndexOf('.');
+        String typePackage = dot < 0 ? "" : fullName.substring(0, dot).replace('.', '/');
+        String wholeAsPackage = fullName.replace('.', '/');
+        for (String entry : task.writeSet()) {
+            if (entry == null || entry.isBlank()) {
+                continue;
+            }
+            String normalized = entry.replace('\\', '/').strip();
+            if (isBuildFile(normalized)) {
+                continue;
+            }
+            String tail = packageTailStrict(normalized);
+            if (tail == null || tail.isEmpty()) {
+                continue;
+            }
+            if (typePackage.equals(tail) || typePackage.startsWith(tail + "/")
+                    || wholeAsPackage.equals(tail) || wholeAsPackage.startsWith(tail + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether {@code task}'s write set can hold the source FILE of the existing top-level type
      * {@code topLevelType} — the question "could this task add a member to it", asked by
      * {@link AcceptanceCompileErrors} (brownfield harness run 43, 2026-09-26).

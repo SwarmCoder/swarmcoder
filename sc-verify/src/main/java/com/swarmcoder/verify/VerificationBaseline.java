@@ -52,14 +52,77 @@ public record VerificationBaseline(Set<String> failingExistingTests, StartCompil
      * @param mainCompiles main code compiled (true when everything did, or when only the test
      *                     compile failed)
      * @param errorFiles   the files the compiler reported an error in on the start tree
+     * @param files        the source files the start tree held, repo-relative; null when they
+     *                     were not listed. A file that is not among them was not there to be
+     *                     compiled (section 83)
      */
     public record StartCompile(boolean established, boolean compiles, boolean mainCompiles,
-                               Set<String> errorFiles) {
+                               Set<String> errorFiles, Set<String> files) {
 
         public static final StartCompile UNKNOWN = new StartCompile(false, false, false, Set.of());
 
         public StartCompile {
             errorFiles = errorFiles == null ? Set.of() : Set.copyOf(errorFiles);
+            files = files == null ? null : Set.copyOf(files);
+        }
+
+        /** A measurement whose tree was not listed: every file is taken to have been there. */
+        public StartCompile(boolean established, boolean compiles, boolean mainCompiles,
+                            Set<String> errorFiles) {
+            this(established, compiles, mainCompiles, errorFiles, null);
+        }
+
+        /** The same measurement with the source files the measured tree held. */
+        public StartCompile withFiles(Set<String> held) {
+            return new StartCompile(established, compiles, mainCompiles, errorFiles, held);
+        }
+
+        /**
+         * The same measurement with the source files found under {@code root}, the tree that
+         * was measured. Unchanged when the tree cannot be read: nothing is then known about
+         * which files it held.
+         */
+        public StartCompile withFilesOf(java.nio.file.Path root) {
+            if (root == null || !java.nio.file.Files.isDirectory(root)) {
+                return this;
+            }
+            Set<String> held = new LinkedHashSet<>();
+            try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(root)) {
+                for (java.nio.file.Path file : walk.filter(java.nio.file.Files::isRegularFile)
+                        .toList()) {
+                    String rel = root.relativize(file).toString().replace('\\', '/');
+                    if (!rel.startsWith(".git/") && !rel.contains("/target/")
+                            && !rel.startsWith("target/") && !rel.contains("/build/")
+                            && !rel.startsWith("build/") && !rel.contains("node_modules/")) {
+                        held.add(rel);
+                    }
+                }
+            } catch (java.io.IOException | RuntimeException unreadable) {
+                return this;
+            }
+            return withFiles(held);
+        }
+
+        /**
+         * False only when the start tree's files were listed and this one is not among them:
+         * the file was added afterwards - by the candidate, or put over its work for
+         * verification, as a task's acceptance test is.
+         */
+        public boolean existed(String file) {
+            if (files == null) {
+                return true;
+            }
+            if (file == null) {
+                return false;
+            }
+            String wanted = file.replace('\\', '/');
+            for (String known : files) {
+                if (known.equals(wanted) || known.endsWith("/" + wanted)
+                        || wanted.endsWith("/" + known)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /** Whether the start tree already had an error in this file. */
@@ -81,10 +144,14 @@ public record VerificationBaseline(Set<String> failingExistingTests, StartCompil
          * Whether an error now reported in {@code file} can only come from the change: the file
          * was compiled on the start tree and had no error there. A test file counts only when
          * the whole start tree compiled, and a main file only when main code did - a compiler
-         * that stopped earlier never looked at the rest.
+         * that stopped earlier never looked at the rest. A file the start tree did not hold was
+         * not compiled there, so nothing is known about it and it is never called clean
+         * (section 83: a task's acceptance test, put over a candidate for verification, was
+         * called "compiled on the tree this candidate started from" when it had never been on
+         * it).
          */
         public boolean wasCleanOnTheStartTree(String file, boolean testFile) {
-            if (!established || hadErrorIn(file)) {
+            if (!established || hadErrorIn(file) || !existed(file)) {
                 return false;
             }
             return compiles || (mainCompiles && !testFile);

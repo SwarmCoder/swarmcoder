@@ -89,6 +89,7 @@ import com.swarmcoder.runtime.TestRepairNeeded;
 import com.swarmcoder.swarm.SwarmEngineImpl;
 import com.swarmcoder.verify.BrokenAtStartup;
 import com.swarmcoder.verify.RedChecker;
+import com.swarmcoder.verify.TestOwnership;
 import com.swarmcoder.verify.TypeDeliverability;
 import com.swarmcoder.verify.VerifySpec;
 import com.swarmcoder.verify.VerifySpecLoader;
@@ -3837,8 +3838,8 @@ public class GreenfieldWorkflow {
         // "claiming" ones (an enabler task with no test of its own can still deliver a contract a
         // later task's test needs).
         nothingLeftToProve.remove(run.id());
-        String park =
-            redCheckTasks(run, scope, claiming, run.verificationPoint(), "0", null, graph.tasks());
+        String park = redCheckTasks(run, scope, claiming, run.verificationPoint(), "0", null,
+            graph.tasks(), graph.tasks());
         if (park != null) {
             return park;
         }
@@ -4037,7 +4038,7 @@ public class GreenfieldWorkflow {
         }
         String park = redCheckTasks(run, scope, claiming, waveBase,
             String.valueOf(Math.abs(String.join(",", wave.stream().map(t -> t.id().toString())
-                .toList()).hashCode())), waveBase, stillToRun);
+                .toList()).hashCode())), waveBase, stillToRun, wave);
         return park == null ? null : park + OperatorCorrectedTests.whereToCorrect(run);
     }
 
@@ -4262,11 +4263,18 @@ public class GreenfieldWorkflow {
      */
     private String redCheckTasks(Run run, StoryScope scope, List<Task> claiming, String startPoint,
                                  String label, String waveBase) {
-        return redCheckTasks(run, scope, claiming, startPoint, label, waveBase, List.of());
+        return redCheckTasks(run, scope, claiming, startPoint, label, waveBase, List.of(),
+            claiming);
     }
 
+    /**
+     * @param pool the tasks this call may check: the whole plan at TEST_AUTHORING, the wave at
+     *             wave time. A task of it that is given another task's tests here (section 83)
+     *             is checked with them in the same call
+     */
     private String redCheckTasks(Run run, StoryScope scope, List<Task> claiming, String startPoint,
-                                 String label, String waveBase, List<Task> stillToRun) {
+                                 String label, String waveBase, List<Task> stillToRun,
+                                 List<Task> pool) {
         if (claiming.isEmpty()) {
             return null;
         }
@@ -4279,7 +4287,15 @@ public class GreenfieldWorkflow {
         try {
             removeTree(worktree); // a leftover from a killed attempt, if any
             gitService.addOrResumeWorktree(branch, worktree, startPoint, run.id().toString());
-            for (Task task : claiming) {
+            typesOfTree.put(worktree, sourceTypesIn(worktree));
+            // A list that can grow: a task given another task's tests is checked with them.
+            List<Task> queue = new ArrayList<>(claiming);
+            Set<UUID> askedAboutItsOwner = new HashSet<>();
+            for (int at = 0; at < queue.size(); at++) {
+                Task task = queue.get(at);
+                if (task.authoredTestPaths().isEmpty()) {
+                    continue; // its tests were given to the task that can pass them
+                }
                 AcceptanceOverlay.Outcome placed = AcceptanceOverlay.reduceTo(gitService, worktree,
                     task.acceptanceTestDir(), run.acceptanceTestsCommit(), task.authoredTestPaths());
                 if (!placed.missing().isEmpty()) {
@@ -4287,8 +4303,53 @@ public class GreenfieldWorkflow {
                         + "does not hold: " + placed.missing() + ". This is a defect in "
                         + "SwarmCoder's own TEST_AUTHORING stage.";
                 }
-                RedGate gate = redCheckOne(buildTarget(worktree), spec.get(),
-                    scope, task, run, waveBase, stillToRun);
+                // WHOSE TEST IS IT (section 83)? Asked of the test's imports before anything is
+                // built, and of the compiler's missing types after (redCheckOne).
+                TestOwnership.Finding misowned =
+                    misownedTest(run, task, worktree, null, stillToRun, waveBase);
+                RedGate gate = misowned != null ? RedGate.misowned(misowned)
+                    : redCheckOne(buildTarget(worktree), spec.get(), scope, task, run, waveBase,
+                        stillToRun);
+                if (gate.misowned() != null) {
+                    misowned = gate.misowned();
+                    String stage = waveBase == null ? "TEST_AUTHORING" : "EXECUTING";
+                    if (misowned.target() != null) {
+                        Task target = misowned.target();
+                        List<String> moved = TestOwners.give(task, target);
+                        artifactStore.saveTask(task);
+                        artifactStore.saveTask(target);
+                        String note = TestOwners.movedNote(misowned, moved);
+                        log(stage + ": " + note);
+                        run.carryWarning(new CarriedWarning("which task owns an acceptance test",
+                            run.state().name(), note, Instant.now()));
+                        boolean ahead = false;
+                        for (int later = at + 1; later < queue.size(); later++) {
+                            ahead = ahead || queue.get(later).id().equals(target.id());
+                        }
+                        if (!ahead) {
+                            pool.stream().filter(other -> other.id().equals(target.id()))
+                                .findFirst().ifPresent(queue::add);
+                        }
+                        continue;
+                    }
+                    // No task has every type when it starts. Before any worker has run the
+                    // author is asked once; a wave under way, or a second miss, stops the run.
+                    if (waveBase != null || !askedAboutItsOwner.add(task.id())) {
+                        log(stage + " STOP: " + misowned.fact() + " " + misowned.whyNoMove());
+                        return TestOwners.park(misowned, askedAboutItsOwner.contains(task.id())
+                            ? "The test went back to its author once with this fact, and the "
+                                + "corrected test still needs them." : null);
+                    }
+                    log(stage + ": " + misowned.fact() + " " + misowned.whyNoMove()
+                        + " Sending the test back to its author once with that fact.");
+                    String stillMisowned = reauthorMisownedAcceptanceTest(run, task, misowned,
+                        worktree);
+                    if (stillMisowned != null) {
+                        return stillMisowned;
+                    }
+                    at--; // the correction is checked from the start, as any test is
+                    continue;
+                }
                 if (gate.unrunnable() != null) {
                     // Only ever set at TEST_AUTHORING (redCheckOne parks at wave time): the one
                     // bounded re-ask, exactly like a broken type below (harness run 37).
@@ -4351,8 +4412,149 @@ public class GreenfieldWorkflow {
             log("Red-check could not be run: " + e.getMessage());
             return null; // an absent instrument is not a verdict; the same rule as everywhere else
         } finally {
+            typesOfTree.remove(worktree);
             removeTree(worktree);
             gitService.deleteCandidateBranch(branch);
+        }
+    }
+
+    /** Per red-check tree: the source files it holds, without extension (section 83). */
+    private final Map<Path, Set<String>> typesOfTree =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Every source file under {@code tree}, repo-relative with '/' and without its extension. */
+    private static Set<String> sourceTypesIn(Path tree) {
+        Set<String> held = new HashSet<>();
+        if (tree == null || !Files.isDirectory(tree)) {
+            return held;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(tree)) {
+            for (Path file : walk.filter(Files::isRegularFile).toList()) {
+                String rel = tree.relativize(file).toString().replace('\\', '/');
+                int dot = rel.lastIndexOf('.');
+                if (dot > rel.lastIndexOf('/') + 1 && !rel.startsWith(".git/")) {
+                    String extension = rel.substring(dot + 1);
+                    if (extension.equals("java") || extension.equals("kt")
+                            || extension.equals("groovy") || extension.equals("scala")) {
+                        held.add(rel.substring(0, dot));
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException unreadable) {
+            // what could be read stands; a type not found counts as one still to be written
+        }
+        return held;
+    }
+
+    /**
+     * {@link TestOwnership#find} for one task of a run: whether the task will have, when it is
+     * built, the types its acceptance tests need (section 83). Null when it will, and whenever
+     * the plan, the tests or the tree cannot be read - an unsettled question moves nothing.
+     *
+     * @param tree            the red-check tree: what the task's candidates start from
+     * @param compilerMissing what the compiler reported missing; null before anything was built
+     * @param waveBase        null at TEST_AUTHORING, when every task may still be given a test;
+     *                        at wave time only a task of {@code stillToRun} may
+     */
+    private TestOwnership.Finding misownedTest(Run run, Task task, Path tree,
+                                               Collection<String> compilerMissing,
+                                               List<Task> stillToRun, String waveBase) {
+        try {
+            TaskGraph graph = run == null || run.taskGraphId() == null ? null
+                : artifactStore.root().taskGraphs.get(run.taskGraphId());
+            if (task == null || tree == null || graph == null || graph.tasks() == null
+                    || task.authoredTestPaths().isEmpty() || run.acceptanceTestsCommit() == null
+                    || !gitService.isEnabled()) {
+                return null;
+            }
+            List<Task> planOrder = new ArrayList<>();
+            SwarmEngineImpl.topologicalWaves(graph).forEach(planOrder::addAll);
+            List<String> sources = new ArrayList<>();
+            for (String path : task.authoredTestPaths()) {
+                byte[] bytes = gitService.fileAt(run.acceptanceTestsCommit(), path);
+                if (bytes != null) {
+                    sources.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+            Set<String> cached = typesOfTree.get(tree);
+            Set<String> held = cached != null ? cached : sourceTypesIn(tree);
+            java.util.function.Predicate<String> inTheTree = type -> {
+                String wanted = type.replace('.', '/');
+                for (String file : held) {
+                    if (file.equals(wanted) || file.endsWith("/" + wanted)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            java.util.function.Predicate<Task> mayReceive = waveBase == null ? null
+                : other -> stillToRun != null && stillToRun.stream()
+                    .anyMatch(left -> left.id().equals(other.id()));
+            return TestOwnership.find(task, planOrder, graph.dependencies(), sources,
+                compilerMissing, inTheTree, mayReceive);
+        } catch (RuntimeException e) {
+            log("Red-check: whether task '" + (task == null ? "?" : task.title()) + "' will have "
+                + "the types its acceptance test needs could not be established (" + e
+                + "); the test stays where the plan put it.");
+            return null;
+        }
+    }
+
+    /**
+     * Sends a task's acceptance test(s) back to their author, once, because the task will not
+     * have the types they need and no other task has all of them either (section 83; see
+     * {@link TestOwnership}). The correction is committed onto the run's tests ref; the caller
+     * then checks it from the start, as it checks any test, and stops the run when it still
+     * needs them.
+     *
+     * @return null when a correction was committed; otherwise the brief for a parked run
+     */
+    private String reauthorMisownedAcceptanceTest(Run run, Task task,
+                                                  TestOwnership.Finding finding,
+                                                  Path redcheckWorktree) {
+        if (roles.testAuthor() == null) {
+            return TestOwners.park(finding, null);
+        }
+        DesignDocument design = artifactStore.root().designs.get(run.designId());
+        String branch = testsBranch(run);
+        Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
+        try {
+            removeTree(worktree); // a leftover from a killed attempt, if any
+            gitService.addWorktreeAt(branch, worktree);
+            Map<String, String> existing = new LinkedHashMap<>();
+            for (String path : task.authoredTestPaths()) {
+                existing.put(path, Files.readString(worktree.resolve(path)));
+            }
+            TaskGraph planOf = run.taskGraphId() == null ? null
+                : artifactStore.root().taskGraphs.get(run.taskGraphId());
+            TestAuthorClient.Authored authored;
+            try (TestAuthorClient.Scope compiling = roles.testAuthor().compilingDraftsWith(
+                    draftRedCheck(run, planOf == null ? List.of(task) : planOf.tasks(),
+                        redcheckWorktree, false))) {
+                authored = roles.testAuthor().repairBrokenTest(worktree, task, design, existing,
+                    TestOwners.reask(finding));
+            }
+            if (authored.failureReason() != null) {
+                return TestOwners.park(finding, "The test went back to its author with this "
+                    + "fact, and the call did not produce a corrected file: "
+                    + authored.failureReason());
+            }
+            String ruleBreak = correctionBreaksARule(run, task, worktree, authored.paths());
+            if (ruleBreak != null) {
+                return ruleBreak;
+            }
+            gitService.commitAll(worktree, "Correct acceptance test for task '" + task.title()
+                + "' in run " + run.id() + ": it needed types its task will not have\n\n"
+                + String.join("\n", authored.paths()));
+            run.setAcceptanceTestsCommit(gitService.headSha(branch));
+            log("TEST_AUTHORING: the acceptance test(s) " + authored.paths() + " for task '"
+                + task.title() + "' were corrected by the test author and are checked again");
+            return null;
+        } catch (IOException e) {
+            return TestOwners.park(finding, "Reading or writing the test file failed: "
+                + e.getMessage());
+        } finally {
+            removeTree(worktree); // the branch stays; the correction is on it
         }
     }
 
@@ -4364,15 +4566,25 @@ public class GreenfieldWorkflow {
      */
     private record RedGate(String park, List<String> brokenTypes, String unrunnable,
                            String unrunnableFailure, AcceptanceCompileErrors.Reading miscompiled,
-                           BrokenAtStartup.Finding startup) {
-        static final RedGate OK = new RedGate(null, List.of(), null, null, null, null);
+                           BrokenAtStartup.Finding startup, TestOwnership.Finding misowned) {
+        static final RedGate OK = new RedGate(null, List.of(), null, null, null, null, null);
 
         static RedGate park(String message) {
-            return new RedGate(message, List.of(), null, null, null, null);
+            return new RedGate(message, List.of(), null, null, null, null, null);
         }
 
         static RedGate broken(List<String> types) {
-            return new RedGate(null, types, null, null, null, null);
+            return new RedGate(null, types, null, null, null, null, null);
+        }
+
+        /**
+         * The test does not compile for want of types the plan does deliver - but its own task
+         * neither writes them nor waits for a task that does (section 83; see
+         * {@link TestOwnership}). A healthy red for the plan, and one this task can never turn
+         * green.
+         */
+        static RedGate misowned(TestOwnership.Finding finding) {
+            return new RedGate(null, List.of(), null, null, null, null, finding);
         }
 
         /**
@@ -4382,7 +4594,7 @@ public class GreenfieldWorkflow {
          * finding is a {@link #park}.
          */
         static RedGate miscompiled(AcceptanceCompileErrors.Reading reading) {
-            return new RedGate(null, List.of(), null, null, reading, null);
+            return new RedGate(null, List.of(), null, null, reading, null, null);
         }
 
         /**
@@ -4393,7 +4605,7 @@ public class GreenfieldWorkflow {
          * @param failure the failure as the runner reported it, for the author's re-ask
          */
         static RedGate unrunnable(String reason, String failure) {
-            return new RedGate(null, List.of(), reason, failure, null, null);
+            return new RedGate(null, List.of(), reason, failure, null, null, null);
         }
 
         /**
@@ -4403,7 +4615,7 @@ public class GreenfieldWorkflow {
          * {@link #park}.
          */
         static RedGate startup(BrokenAtStartup.Finding finding) {
-            return new RedGate(null, List.of(), null, null, null, finding);
+            return new RedGate(null, List.of(), null, null, null, finding, null);
         }
     }
 
@@ -4919,6 +5131,11 @@ public class GreenfieldWorkflow {
                         + "author once before the wave is dispatched");
                     return RedGate.miscompiled(miscompiled);
                 }
+                TestOwnership.Finding misownedAtWave = misownedTest(run, task,
+                    target.localRoot().orElse(null), result.missingTypes(), stillToRun, waveBase);
+                if (misownedAtWave != null) {
+                    return RedGate.misowned(misownedAtWave);
+                }
                 log("Red-check passed for task '" + task.title() + "': " + result.note());
                 return RedGate.OK;
             }
@@ -4951,6 +5168,15 @@ public class GreenfieldWorkflow {
                         + "a reason no task in this plan can fix — " + miscompiled.headline()
                         + " — this is a broken test, not a healthy red state");
                     return RedGate.miscompiled(miscompiled);
+                }
+                // AND WHOSE TEST IT IS (section 83, live build of 2026-10-12). Every missing
+                // type is one the plan delivers - and "the plan" is not this task. A test whose
+                // task neither writes those types nor waits for a task that does can never be
+                // compiled for that task's candidates. See TestOwnership.
+                TestOwnership.Finding misowned = misownedTest(run, task,
+                    target.localRoot().orElse(null), result.missingTypes(), stillToRun, null);
+                if (misowned != null) {
+                    return RedGate.misowned(misowned);
                 }
             }
             log("Red-check passed" + (task == null ? "" : " for task '" + task.title() + "'")

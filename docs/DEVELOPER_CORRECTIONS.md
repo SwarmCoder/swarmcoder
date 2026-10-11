@@ -7926,3 +7926,102 @@ them: `ParkWithdrawnOnResumeTest`, `TwoProjectResumeTest`, `StrandedStoryRecover
   tested is one question with the same text, not a blocked task's question next to a rule
   question.
 - "driving: a live process" for a stopped run in `list_runs` was not looked into.
+
+## 83. A test owned by a task that could never compile it (live supervised build, 2026-10-12)
+
+**What was observed.** A story's plan had four tasks. Task 1, which waits for nothing, writes
+three types of the shared module and owned an acceptance check whose test file imports three
+types of the server module. Task 2, which runs after task 1, writes those. The plan's order was
+right; the owner of the test was wrong. Every candidate of task 1 wrote code that compiled.
+Verification puts the task's protected test over the candidate, and that test cannot compile
+until task 2 has run. All 4 candidates and all 4 repair workers failed "compiles=false", about
+30 minutes and 8 worker sessions on the local model server, and the build stopped with a
+question that listed eight workers and gave no reason.
+
+**Causes.**
+
+- *The red check asked the plan, not the owner.* `TypeDeliverability.undeliverable` (called
+  from `RedChecker.check` and `GreenfieldWorkflow.redCheckOne`) accepts a test that does not
+  compile when ANY task of the plan can supply the missing type. That is the right question
+  for "is the test broken" and says nothing about whether the test's own task can pass it.
+- *The type-order check never reads a test.* `TypeDependencyOrder` orders tasks by the
+  contracts they deliver and the files they write. A test's imports are not among them.
+- *The second look only covers later waves.* `redCheckFailure` checks a task again at the
+  start of its wave only when the task is not in the first wave. Task 1 was.
+- *The verifier said something false.* `VerificationBaseline.StartCompile.
+  wasCleanOnTheStartTree` called any file "clean on the start tree" when the start tree's
+  compile passed, including a file that was not on it. The candidates were told "this
+  candidate's change broke a file it did not change ... That file compiled on the tree this
+  candidate started from" about a test file that had never been on that tree.
+- *The question had no reason in it.* `SwarmEngineImpl.queueBlockedDecision` wrote the
+  headline and, per worker, its state, `compiles=` and pass counts.
+
+**What changed.**
+
+1. *Whose test is it* (`TestOwnership`, sc-verify; `TestOwners`, sc-workflow). Every type a
+   task's test needs, and the tree does not hold, must be written by that task or by a task it
+   waits for, directly or through others. Asked in `redCheckTasks` twice for each task: of the
+   test's imports before anything is built, and of the compiler's missing types after
+   (`redCheckOne`), at TEST_AUTHORING and at the start of every later wave. A task is known to
+   write a type when it names it - a contract it delivers, or a file of its write set or
+   computed reservation - and, only for a name the compiler reported missing and no task
+   names, when a package directory of its write set holds it.
+   - When another task writes the missing types, the task's tests and checks are given to the
+     task that is last to write one of them, provided that task has every needed type when it
+     starts (it writes it, or waits for the task that does). Only the claim moves, as for a
+     journey (section 70); the move is on the log and among the run's carried warnings. The
+     task that receives the tests is red-checked with them in the same pass.
+   - When no task has every type, or at wave time the task has already been built, nothing is
+     moved. At TEST_AUTHORING the test goes back to its author once with the fact
+     (`reauthorMisownedAcceptanceTest`) and is then checked from the start; a second miss, or
+     any miss at wave time, stops the run with the fact before a worker is started.
+2. *The second line* (`TestOfATaskNotYetRun`, sc-swarm). When a verified candidate's only
+   compile failure is in its task's own protected test, the test imports a type whose every
+   writer is a task not yet run, and the compiler's message names that type or its package,
+   the plan is at fault. The first round stops on the first such candidate: candidates still
+   running are stopped with the new `KillReason.PLAN_FAULT` (appended last), waiting ones are
+   not started, no repair round and no repair of the test is started, and the task is BLOCKED
+   with "Task BLOCKED by its plan, not by its candidates", the file and line, the type and the
+   task that writes it. This is for a plan saved before change 1 and for a need the red check
+   could not read.
+3. *The baseline.* `StartCompile` carries the source files the measured tree held
+   (`withFilesOf`, filled where the engine measures the start tree). A file that is not among
+   them is not clean on the start tree, so an error in it is no longer `CAUSED_BY_CHANGE`.
+4. *The question* (`BlockedReason`, sc-swarm). After the headline and before the list of
+   workers: "Why: it does not compile - (file):(line) (the compiler's message)", with one more
+   line when the file is the task's own protected test; or, when everything compiled, the
+   first failing acceptance test and its message. Messages are cut at 300 characters. Left out
+   when the headline already names the place.
+
+**Not stored differently.** No field was added to a stored class. `KillReason.PLAN_FAULT` is
+appended after `ROUND_TIME_UP`, so a store written before opens as it did. `StartCompile` is
+held in memory only.
+
+**Tests.** New: `ATestBelongsToATaskThatHasItsTypesTest` (sc-verify: the build's plan with other
+names, the task that keeps its test, a type already in the tree, no task with every type, a task
+already built, a package only the compiler names, a write set that cannot be read, a contract;
+the start tree's files), `ATestIsGivenToTheTaskThatCanPassItTest` (sc-workflow: what moves, the
+note, the author's re-ask, the stop), `NoRepairRoundWhenTheTasksOwnTestNeedsATaskNotYetRunTest`
+(sc-swarm: the finding from one candidate, what is left to the ordinary round, the question's
+reason, the appended stop reason). Run with them: `TypeDeliverabilityTest`,
+`RedCheckerClassifiesBrokenTestsTest`, `AChangeThatBreaksAnUntouchedFileIsTheCandidatesFaultTest`,
+`RepairHasSafetyStopsTest` (its ordinal assertion now names the number), `NoChangeRepairSaysSoTest`,
+`ATaskWaitsWhileADependencyIsBlockedTest`, `ACheckTheCodeAlreadySatisfiesIsRecordedNotParkedOnTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model, a container or a live build. The loop in
+  `redCheckTasks` that gives a test away and checks the receiving task,
+  `reauthorMisownedAcceptanceTest`, and the early stop inside `SwarmEngineImpl.firstRound` are
+  exercised by no test; their parts are.
+- All of a task's tests and checks move together. A task with two test files of which one is
+  rightly its own loses both, and is then built with no acceptance test.
+- A type used by its full name without an import, or from the test's own package, is seen only
+  when the compiler reports it missing. A type that exists and to which a later task adds a
+  member the test calls is not seen at all: the tree holds the type.
+- A plan saved before this change whose first wave is resumed at EXECUTING is not put right
+  before its workers start; change 2 stops it on the first verified candidate.
+- `StartCompile.existed` matches paths by their ending, as `hadErrorIn` does. Two modules
+  with the same path below the module folder are not told apart, and a measurement whose tree
+  was not listed keeps the old reading.
+- Nothing adds a dependency between tasks or reorders the plan.
