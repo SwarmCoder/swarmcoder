@@ -259,6 +259,63 @@ public record ContractMember(List<String> annotations, boolean method, String na
         return names;
     }
 
+    /**
+     * The annotations a promised member writes in front of itself, as written: those of the
+     * declaration, never those of a method's parameters.
+     */
+    public static List<String> ownAnnotations(String promised) {
+        return annotationsOf(declarationPart(promised));
+    }
+
+    /**
+     * The promised member's text without its own annotation {@code annotation} (the name as
+     * written, with any arguments); everything else is kept as it was written. The same text when
+     * the member does not write that annotation in front of itself.
+     */
+    public static String withoutAnnotation(String promised, String annotation) {
+        if (promised == null || annotation == null || annotation.isBlank()) {
+            return promised;
+        }
+        String text = promised;
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '(' || c == '<') {
+                depth++;
+            } else if (c == ')' || c == '>') {
+                depth--;
+            } else if (c == '=' && depth == 0) {
+                break;
+            } else if (c == '@' && depth == 0) {
+                int end = i + 1;
+                while (end < text.length() && (Character.isJavaIdentifierPart(text.charAt(end))
+                        || text.charAt(end) == '.')) {
+                    end++;
+                }
+                if (!text.substring(i + 1, end).equals(annotation.strip())) {
+                    i = end - 1;
+                    continue;
+                }
+                int after = end;
+                while (after < text.length() && Character.isWhitespace(text.charAt(after))) {
+                    after++;
+                }
+                if (after < text.length() && text.charAt(after) == '(') {
+                    int close = matchingParen(text, after);
+                    if (close < 0) {
+                        return promised;
+                    }
+                    after = close + 1;
+                    while (after < text.length() && Character.isWhitespace(text.charAt(after))) {
+                        after++;
+                    }
+                }
+                return (text.substring(0, i) + text.substring(after)).strip();
+            }
+        }
+        return promised;
+    }
+
     /** The last dot-separated segment of an annotation or type name, lower-cased for comparing. */
     public static String simpleName(String name) {
         String text = name.strip();

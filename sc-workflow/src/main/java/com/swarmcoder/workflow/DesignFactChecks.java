@@ -41,7 +41,9 @@ final class DesignFactChecks {
     /**
      * The objections to send back to the architect, most fundamental first: a second type of a
      * name the project already has, a contract in a package no task can write, a member naming a
-     * type that does not exist, a contract with no package, a member that is not a declaration.
+     * type that does not exist, a contract with no package, a member that is not a declaration,
+     * an annotation written where its own declaration says it cannot be
+     * ({@link ContractAnnotationPlaces}, 2026-10-11).
      * An annotation a contract states on a type the project already has, which the real
      * declaration lacks, comes first ({@link ContractsMatchExistingTypes}, harness run 78).
      *
@@ -91,6 +93,13 @@ final class DesignFactChecks {
             log.accept("DESIGN_REVIEW: " + prose.size() + " contract member(s) are not written as "
                 + "declarations: " + prose);
             objections.addAll(prose);
+        }
+        List<String> misplaced = ContractAnnotationPlaces.check(design,
+            com.swarmcoder.knowledge.AnnotationTargets.of(checkout, lib)).objections();
+        if (!misplaced.isEmpty()) {
+            log.accept("DESIGN_REVIEW: " + misplaced.size() + " contract annotation(s) are "
+                + "written where they cannot be, and cannot be on the type either: " + misplaced);
+            objections.addAll(misplaced);
         }
         return objections;
     }

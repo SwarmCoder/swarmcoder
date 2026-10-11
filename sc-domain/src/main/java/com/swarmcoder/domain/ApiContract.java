@@ -131,7 +131,15 @@ public class ApiContract {
         StringBuilder sb = new StringBuilder(typeName.strip()).append('{');
         for (String member : members()) {
             if (member != null && !member.isBlank()) {
-                sb.append(member.strip()).append("; ");
+                // A member written with its own semicolon is printed with one, not two
+                // (2026-10-11: "public String title;; " read as a loosely written contract).
+                String text = member.strip();
+                while (text.endsWith(";")) {
+                    text = text.substring(0, text.length() - 1).strip();
+                }
+                if (!text.isEmpty()) {
+                    sb.append(text).append("; ");
+                }
             }
         }
         return sb.append('}').toString();

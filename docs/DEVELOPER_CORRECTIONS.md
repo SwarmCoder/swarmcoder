@@ -7740,3 +7740,79 @@ lookup, and it has to say it in a field, not in prose.
 **Tests.** `AStoryThatShowsWhatNothingCreatesStopsEarlyTest`,
 `TheStoryPlannerPlansStoriesProvableOnAnEmptyApplicationTest`, two cases added to
 `TheTestAuthorWritesAJourneyForAScreenTest`.
+
+## 81. Four correct candidates failed for an annotation a constructor cannot carry (live build, 2026-10-11)
+
+**What was found.** A supervised build of a small three-module demo on the local model stopped
+on the task that delivers the shared types. All four candidates compiled and passed the
+acceptance test, and all four repair workers found nothing to change. Verification had failed
+each one with: the member `@DataModel Book()` "is declared but does not carry the annotation".
+The design had written the annotation in front of the no-argument constructor. The library
+declares that annotation with `@Target(ElementType.TYPE)`: it can only be written on a type.
+The workers had put it on the class, which is right, and the check asked for it on the
+constructor, where it does not compile.
+
+**Cause.**
+
+- `ContractDelivery.satisfied` compares a promised member's annotations with the annotations of
+  the declared member and nothing else. It never asked whether the annotation could be there.
+- Harness run 77 had already met the same annotation written as `@DataModel LogbookSort;`
+  (`ContractMember.typeAnnotations`). That reading needs the entry to be the type's bare name.
+  With parentheses the entry is a constructor, and correctly so: only the annotation's own
+  declaration says it does not belong there.
+- Nothing at DESIGN_REVIEW looked at where a contract puts an annotation
+  (`DesignFactChecks`), so the contract reached the task word for word.
+- The doubled `;;` in the stop's sentence was not in the contract. Members are a list; a member
+  written `public String title;` has been read without its semicolon since run 44
+  (`ContractMember.parse`, `ContractDelivery.asDeclared`). `ApiContract.describe` printed each
+  member followed by `; ` and so printed two.
+
+**What changed.**
+
+1. *A fact, with a lookup* (`AnnotationTargets`, sc-knowledge): the element types an annotation
+   may be written on, from its own `@Target`. Read from the project's source and the reference
+   checkouts (`JavaSourceFacts.annotationTargetsOf`, `ProjectTypes.annotationTargetsOf`,
+   `LibraryTypes.annotationTargetsOf`) and from the JDK by reflection. No `@Target` means every
+   declaration place, as in Java. A simple name is answered only when every annotation type of
+   that name gives the same answer. `placeOf(annotation, member, type)` answers one of: on the
+   member, on the type, nowhere, not known. A promised field counts as able to carry what a
+   field, an accessor, a record component or a parameter can carry, because the delivery check
+   accepts the annotation on any of those.
+2. *When the design is accepted* (`ContractAnnotationPlaces`, called from
+   `GreenfieldWorkflow.withAnnotationsWhereTheyCanBe` at DESIGN_REVIEW, after each revision,
+   on the stored design before PLAN, and on a `check_design` draft): an annotation that cannot
+   be on its member and can be on a type is taken off the member and written as the type's
+   annotation, `@Annotation TypeName`, the form of run 77. This is a note in the manner of
+   section 76 (`ArchitectClient.DraftChecks.designNotes`, shown under NOTES by `check_design`,
+   and a line on the run's log), not an objection. An annotation that can be on neither is an
+   objection of `DesignFactChecks` and goes back to the architect with the places it may be
+   written on.
+3. *At verification* (`ContractDelivery.shortfalls(tree, contracts, library)`, given the
+   reference folders by `SwarmEngineImpl.referenceTypes`, read only when an annotation is
+   missing from its member): a promised annotation that can only be on the type is met when the
+   type carries it, and reported as "the type does not carry" when it does not. One that can be
+   on neither is logged and not held against a candidate. An annotation that can be on its
+   member is demanded there exactly as before, and so is one whose declaration cannot be read.
+4. `ApiContract.describe` prints a member written with its semicolon with one semicolon.
+
+The stop that says a no-change repair round "looks like a false alarm in the check"
+(`NoChangeRepair`) is as it was. Nothing passes on its own.
+
+**What is not checked.**
+
+- An annotation that exists only in a library jar, with no reference checkout: its `@Target`
+  is not read (the language server is asked for member names only), so such a contract is
+  treated as before and can still stop a task the same way.
+- The reference checkout may be another version than the one the project builds against.
+- A `@Target` written with a constant from elsewhere, and an annotation that allows `TYPE_USE`,
+  are "not known".
+- An annotation in front of a method's parameter is not judged, at acceptance or at
+  verification.
+- A contract's free-text sketch (`signatureSketch`) is not corrected; only its members are.
+- Tasks of a plan made before this change keep the contract as it was written: item 2 does not
+  rewrite a stored plan. Item 3 is what such a task is verified with after an upgrade.
+- Not run live. `GreenfieldWorkflow`'s four call sites and `SwarmEngineImpl.referenceTypes`
+  are covered by no test; the parts they call are.
+
+**Tests.** `AnAnnotationForATypeIsMetOnTheTypeTest` (sc-knowledge),
+`ContractAnnotationPlacesTest` (sc-workflow).

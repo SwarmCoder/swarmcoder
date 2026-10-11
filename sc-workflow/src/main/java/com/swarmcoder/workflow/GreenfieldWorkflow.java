@@ -737,7 +737,8 @@ public class GreenfieldWorkflow {
                         // 2026-10-02: four contracts in the library's own packages reached PLAN,
                         // where no task can ever create them); see ContractsAreDeliverable.
                         StoryScope ruleScope = scopeFor(run);
-                        design = withoutContractsForExistingLibraryTypes(design);
+                        design = withAnnotationsWhereTheyCanBe(
+                            withoutContractsForExistingLibraryTypes(design));
                         List<String> typeObjections = contractTypeObjections(design);
                         // An objection to where a type that already exists lives is carried at
                         // once and never sent to the architect (live run 74: two revisions, 21
@@ -773,7 +774,8 @@ public class GreenfieldWorkflow {
                                     + "; keeping the original design (attempt " + revisionAttempt
                                     + " of " + MAX_DESIGN_RULE_REVISIONS + " still counts)");
                             }
-                            design = withoutContractsForExistingLibraryTypes(attempt.design());
+                            design = withAnnotationsWhereTheyCanBe(
+                                withoutContractsForExistingLibraryTypes(attempt.design()));
                             typeObjections = contractTypeObjections(design);
                             ruleObjections = answerableByTheDesign(run,
                                 reviewDesignAgainstRules(design, ruleScope), onTheStartTree,
@@ -862,7 +864,8 @@ public class GreenfieldWorkflow {
                     // run comes back here at most once with nothing left to object to.
                     if (design != null) {
                         DesignDocument asStored = design;
-                        design = withoutContractsForExistingLibraryTypes(design);
+                        design = withAnnotationsWhereTheyCanBe(
+                            withoutContractsForExistingLibraryTypes(design));
                         List<String> undeliverable = new ArrayList<>(
                             ContractsAreDeliverable.check(design, ProjectTypes.of(repoPath),
                                 librarian == null ? LibraryTypes.NONE : librarian.libraryTypes())
@@ -5818,7 +5821,8 @@ public class GreenfieldWorkflow {
             public List<String> design(DesignDocument draft) {
                 StoryScope scope = scopeFor(run);
                 Consumer<String> silent = line -> { };
-                DesignDocument design = withoutContractsForExistingLibraryTypes(draft, silent);
+                DesignDocument design = withAnnotationsWhereTheyCanBe(
+                    withoutContractsForExistingLibraryTypes(draft, silent), silent);
                 List<String> objections = new ArrayList<>();
                 if (!scope.isEmpty() && hasNoTypedContract(design)) {
                     objections.add(missingContractsSentence(scope) + CONTRACT_SHAPE_ASK);
@@ -5830,6 +5834,12 @@ public class GreenfieldWorkflow {
                         ForbiddenTechGuard.check(rules, List.of(designAsRuleCheckTask(design))));
                 }
                 return objections;
+            }
+
+            @Override
+            public List<String> designNotes(DesignDocument draft) {
+                return contractAnnotationPlaces(
+                    withoutContractsForExistingLibraryTypes(draft, line -> { })).notes();
             }
 
             @Override
@@ -5891,6 +5901,36 @@ public class GreenfieldWorkflow {
      */
     private DesignDocument withoutContractsForExistingLibraryTypes(DesignDocument design) {
         return withoutContractsForExistingLibraryTypes(design, this::log);
+    }
+
+    /**
+     * {@code design} with every contract annotation where it can be written (live build of
+     * 2026-10-11: {@code @DataModel Book()}, an annotation for a type written in front of a
+     * constructor, failed four correct candidates). Decided from the annotation type's own
+     * {@code @Target}; see {@link ContractAnnotationPlaces}. What cannot be decided is left as
+     * written; what only the architect can put right is an objection of
+     * {@link DesignFactChecks}. The same design when there is nothing to put right. Free: source
+     * text and the JDK, no model call.
+     */
+    private DesignDocument withAnnotationsWhereTheyCanBe(DesignDocument design) {
+        return withAnnotationsWhereTheyCanBe(design, this::log);
+    }
+
+    private DesignDocument withAnnotationsWhereTheyCanBe(DesignDocument design,
+                                                         Consumer<String> say) {
+        ContractAnnotationPlaces.Outcome outcome = contractAnnotationPlaces(design);
+        if (!outcome.changed()) {
+            return design;
+        }
+        say.accept("Design: " + outcome.notes().size() + " contract annotation(s) were written "
+            + "in front of a member they cannot be on; put on the type: " + outcome.notes());
+        return outcome.applyTo(design);
+    }
+
+    private ContractAnnotationPlaces.Outcome contractAnnotationPlaces(DesignDocument design) {
+        return ContractAnnotationPlaces.check(design, com.swarmcoder.knowledge.AnnotationTargets.of(
+            ProjectTypes.of(repoPath),
+            librarian == null ? LibraryTypes.NONE : librarian.libraryTypes()));
     }
 
     private DesignDocument withoutContractsForExistingLibraryTypes(DesignDocument design,

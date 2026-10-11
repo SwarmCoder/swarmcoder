@@ -327,6 +327,26 @@ public final class LibraryTypes {
     }
 
     /**
+     * Where the annotation type {@code fullName} may be written, read from its own {@code @Target}
+     * in a reference checkout; empty when no checkout declares it or none can tell. The checkout
+     * may be another version than the one the project builds against (see the class comment).
+     */
+    public java.util.Optional<java.util.Set<String>> annotationTargetsOf(String fullName) {
+        if (fullName == null || fullName.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String name = fullName.replace('$', '.').strip();
+        for (Indexed root : roots) {
+            java.util.Optional<java.util.Set<String>> targets =
+                root.types().annotationTargetsOf(name);
+            if (targets.isPresent()) {
+                return targets;
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
      * The fully-qualified names of reference types with this simple name, at most {@code max} -
      * how an offending source line that says {@code Type.method(..)} finds its type.
      */

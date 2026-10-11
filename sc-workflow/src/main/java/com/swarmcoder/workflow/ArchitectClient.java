@@ -1760,6 +1760,15 @@ public class ArchitectClient {
         List<String> design(DesignDocument draft);
 
         /**
+         * What the checks put right in a draft design from facts alone (2026-10-11: a contract
+         * annotation moved to the type it can only be written on). Told to the architect, never
+         * an objection.
+         */
+        default List<String> designNotes(DesignDocument draft) {
+            return List.of();
+        }
+
+        /**
          * The objections to a draft plan; empty when there are none.
          *
          * @param design the design the plan decomposes, as the planner was given it
@@ -1912,10 +1921,12 @@ public class ArchitectClient {
             if (own != null) {
                 objections.add(own);
             }
+            List<String> notes = List.of();
             if (checks != null) {
                 objections.addAll(checks.design(draft));
+                notes = checks.designNotes(draft);
             }
-            return new DraftTools.Checked(true, objections);
+            return new DraftTools.Checked(true, objections, notes);
         });
     }
 
