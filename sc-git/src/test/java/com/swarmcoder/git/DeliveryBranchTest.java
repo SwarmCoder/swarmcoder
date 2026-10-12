@@ -92,9 +92,71 @@ class DeliveryBranchTest {
         Files.writeString(repo.resolve("Hello.java"), "class Hello { /* mid-edit */ }");
 
         String refused = git.fastForwardBranchTo(branch, finished);
-        assertThat(refused).contains("not committed");
+        assertThat(refused).contains("not committed").contains("Hello.java");
         assertThat(git.resolveCommit(branch)).isEqualTo(before);
         assertThat(Files.readString(repo.resolve("Hello.java"))).contains("mid-edit");
+    }
+
+    /**
+     * The application writes the project's settings and its verification contract into the
+     * repository itself and reads both from this checkout, committed or not. Neither is a
+     * person's unsaved work, and neither may stop a delivery.
+     */
+    @Test
+    void theApplicationsOwnSettingsAndContractDoNotStopIt() throws Exception {
+        String branch = git.currentBranch();
+        String finished = finishedWork("swarm/integration/five", git.resolveCommit(branch));
+
+        Files.createDirectories(repo.resolve(".swarmcoder"));
+        for (String own : GitService.APPLICATION_FILES) {
+            Files.writeString(repo.resolve(own), "name: demo\n");
+        }
+
+        assertThat(git.uncommittedWork()).isEmpty();
+        assertThat(git.fastForwardBranchTo(branch, finished)).isNull();
+        assertThat(git.resolveCommit(branch)).isEqualTo(finished);
+        assertThat(repo.resolve("Book.java")).exists();
+        assertThat(Files.readString(repo.resolve(".swarmcoder/project.yaml"))).contains("demo");
+    }
+
+    /** Only the two files: something a person put beside them is still their work. */
+    @Test
+    void aPersonsFileBesideTheApplicationsOwnStillStopsIt() throws Exception {
+        String branch = git.currentBranch();
+        String before = git.resolveCommit(branch);
+        String finished = finishedWork("swarm/integration/six", before);
+
+        Files.createDirectories(repo.resolve(".swarmcoder"));
+        Files.writeString(repo.resolve(".swarmcoder/project.yaml"), "name: demo\n");
+        Files.writeString(repo.resolve(".swarmcoder/notes.txt"), "mine");
+
+        String refused = git.fastForwardBranchTo(branch, finished);
+        assertThat(refused).contains("not committed").contains(".swarmcoder/notes.txt")
+            .doesNotContain("project.yaml");
+        assertThat(git.resolveCommit(branch)).isEqualTo(before);
+    }
+
+    @Test
+    void theRefusalNamesFiveFilesAndCountsTheRest() throws Exception {
+        String branch = git.currentBranch();
+        String finished = finishedWork("swarm/integration/seven", git.resolveCommit(branch));
+        for (int i = 1; i <= 7; i++) {
+            Files.writeString(repo.resolve("Draft" + i + ".java"), "class Draft" + i + " {}");
+        }
+
+        String refused = git.fastForwardBranchTo(branch, finished);
+        assertThat(refused).contains("Draft1.java, Draft2.java, Draft3.java, Draft4.java, "
+            + "Draft5.java and 2 more").doesNotContain("Draft6.java");
+    }
+
+    private String finishedWork(String integrationBranch, String from) throws Exception {
+        Path worktree = repo.resolveSibling("wt-" + System.nanoTime());
+        git.addWorktree(integrationBranch, worktree, from);
+        Files.writeString(worktree.resolve("Book.java"), "class Book {}");
+        git.commitAll(worktree, "add the book record");
+        String finished = git.headSha(integrationBranch);
+        git.removeWorktree(worktree);
+        return finished;
     }
 
     @Test

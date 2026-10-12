@@ -460,6 +460,21 @@ public class GitService {
         }
     }
 
+    /**
+     * The files the application itself writes into a project's repository: the project's settings
+     * and its verification contract. Both are read from the operator's own checkout and never
+     * from a commit ({@code ProjectConfigLoader.load}, {@code VerifySpecLoader.loadTrusted}), so
+     * neither has to be committed to take effect, and the settings file holds folder paths of
+     * this PC that do not belong in the project's history. They are therefore not counted as a
+     * person's uncommitted work. Exactly these paths, not the whole folder: a person's own file
+     * beside them still counts.
+     */
+    public static final List<String> APPLICATION_FILES =
+        List.of(".swarmcoder/project.yaml", ".swarmcoder/verify.yaml");
+
+    /** How many file names a refusal lists. */
+    private static final int NAMED_FILES = 5;
+
     /** True when the working tree and index have no changes of their own. */
     public boolean isWorkingTreeClean() {
         if (repoDir == null) {
@@ -471,6 +486,56 @@ public class GitService {
             log.warn("Could not read the working tree status: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * The paths in the operator's checkout that differ from its last commit and are not one of
+     * {@link #APPLICATION_FILES}: changed, staged, deleted, conflicting and untracked files, in
+     * path order. Empty when nothing of a person's is uncommitted. Null when the status could
+     * not be read, which a caller must treat as "not known to be clean".
+     */
+    public List<String> uncommittedWork() {
+        if (repoDir == null) {
+            return null;
+        }
+        try (Git git = Git.open(requireRepo().toFile())) {
+            org.eclipse.jgit.api.Status status = git.status().call();
+            java.util.TreeSet<String> paths = new java.util.TreeSet<>();
+            paths.addAll(status.getUncommittedChanges());
+            paths.addAll(status.getUntracked());
+            paths.addAll(status.getConflicting());
+            paths.removeAll(APPLICATION_FILES);
+            return List.copyOf(paths);
+        } catch (Exception e) {
+            log.warn("Could not read the working tree status: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Why nothing can be put on the operator's checkout as it stands, or null when it can: a
+     * person's uncommitted work, with up to five file names. The application's own files do not
+     * count ({@link #APPLICATION_FILES}).
+     */
+    public String uncommittedWorkRefusal() {
+        List<String> paths = uncommittedWork();
+        if (paths == null) {
+            return "the project's repository could not be read to see whether it has changes that "
+                + "are not committed — nothing was changed.";
+        }
+        if (paths.isEmpty()) {
+            return null;
+        }
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < paths.size() && i < NAMED_FILES; i++) {
+            names.append(i == 0 ? "" : ", ").append(paths.get(i));
+        }
+        if (paths.size() > NAMED_FILES) {
+            names.append(" and ").append(paths.size() - NAMED_FILES).append(" more");
+        }
+        return "the project's repository has changes that are not committed (" + names
+            + "). Commit them or put them aside, then accept again — nothing was changed, so "
+            + "nothing of yours was touched.";
     }
 
     /** True when {@code maybeAncestor} is already contained in {@code descendant}'s history. */
@@ -530,12 +595,13 @@ public class GitService {
             return "the project's repository is on " + on + ", not " + branch + ". Switch it to "
                 + branch + " and accept again — nothing was changed.";
         }
-        if (!isWorkingTreeClean()) {
-            return "the project's repository has changes that are not committed. Commit them or put "
-                + "them aside, then accept again — nothing was changed, so nothing of yours was "
-                + "touched.";
+        String uncommitted = uncommittedWorkRefusal();
+        if (uncommitted != null) {
+            return uncommitted;
         }
         try {
+            // git itself still refuses when the commit holds a file that is untracked or changed
+            // here, which covers the application's own files that the check above lets through.
             runGitCli(requireRepo(), "merge", "--ff-only", commit);
             log.info("Delivery branch {} moved to {}", branch, commit);
             return null;
