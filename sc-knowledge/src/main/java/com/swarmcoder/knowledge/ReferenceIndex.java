@@ -105,7 +105,7 @@ final class ReferenceIndex {
      * indexed or HOW it is analysed builds a new index instead of searching an old one under new
      * rules, which returns nothing at all and says nothing about why.
      */
-    private static final String INDEX_FORMAT = "v1-fielded-bm25";
+    private static final String INDEX_FORMAT = "v2-fielded-bm25-compounds";
 
     /**
      * Field boosts, documentation.
@@ -456,7 +456,29 @@ final class ReferenceIndex {
                 }
             }
         }
+        terms.addAll(compounds(query == null ? "" : query));
         return List.copyOf(terms);
+    }
+
+    /**
+     * Names written with hyphens or underscores, joined into one term: "inventory-crud-server"
+     * gives "inventorycrudserver". The parts alone cannot tell a module from its sibling (the
+     * client and the server of one example share every part but the last, and that last part is
+     * the commonest word in the folder), while the joined name is a folder's name and matches only
+     * that folder. The same joining runs at index time on every path segment.
+     */
+    static List<String> compounds(String text) {
+        Set<String> joined = new LinkedHashSet<>();
+        for (String raw : text.split("[^A-Za-z0-9_-]+")) {
+            if (raw.indexOf('-') < 0 && raw.indexOf('_') < 0) {
+                continue;
+            }
+            String name = raw.replaceAll("[-_]", "").toLowerCase(Locale.ROOT);
+            if (name.length() >= 3 && !STOP.contains(name)) {
+                joined.add(name);
+            }
+        }
+        return List.copyOf(joined);
     }
 
     /** A token and its camel-case humps, all lower case: "DataRoot" -> data, root, dataroot. */
@@ -487,6 +509,14 @@ final class ReferenceIndex {
         for (String raw : text.split("[^A-Za-z0-9]+")) {
             for (String part : expand(raw)) {
                 sb.append(part).append(' ');
+            }
+        }
+        // Each folder or file name written with hyphens or underscores, joined, the way a
+        // question writing it is joined (see compounds).
+        for (String segment : text.split("[/\\\\]")) {
+            int dot = segment.lastIndexOf('.');
+            for (String joined : compounds(dot > 0 ? segment.substring(0, dot) : segment)) {
+                sb.append(joined).append(' ');
             }
         }
         return sb.toString();
