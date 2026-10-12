@@ -158,7 +158,7 @@ public final class BrokenAtStartup {
     }
 
     /** Not an assertion, and no frame of the stack is in a package of the project's own. */
-    private static boolean startupFailure(TestFailure failure, Set<String> project) {
+    static boolean startupFailure(TestFailure failure, Set<String> project) {
         String trace = failure.truncatedTrace() == null ? "" : failure.truncatedTrace();
         if (AcceptanceFailureAttribution.isAssertionType(
                 AcceptanceFailureAttribution.exceptionFullType(trace))) {

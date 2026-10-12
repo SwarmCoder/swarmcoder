@@ -8288,3 +8288,157 @@ process start to the first answer of the entry page, memory ten seconds after it
   JAX-RS implementation is built against 4.0.0. The one resource SwarmCoder has works with it.
 - Neither container compresses the 5.6 MB script bundle or sends a cache header for it. That was
   so before and is not changed here.
+
+## 86. A corrected test that errored in its own set-up was taken as red, repaired by workers who may not change it, and could not be sent back (live supervised build, 2026-10-12)
+
+**What was observed.** Every first candidate of a task compiled and failed the same acceptance
+test with the same assertion, so the test went back to its author before the repair round
+(harness run 79, `SameFailureForEveryCandidate`). The author rightly answered that the test
+was wrong - four tests shared one seeded store - and corrected it. The correction also took
+away what started the test's container and built the container by hand, so from then on every
+test ERRORED in its own set-up before any candidate's code ran. The correction was taken. The
+four candidates were verified again and each read "compiles=true acceptance 0p/0f". A repair
+round of four workers followed, none of whom may change the test (about 96,000 tokens, all
+killed), and the build stopped with a question that showed "0p/0f" for every worker, gave no
+reason, and offered `retry` and `repair`. Neither can change a test.
+
+**Causes.**
+
+- *A correction was red if it failed, however it failed.* `GreenfieldWorkflow.
+  repairFaultyAcceptanceTest` red-checks a correction on the tree before any candidate and
+  asked only whether it compiled and was not green. `BrokenAtStartup`, which a first-written
+  test is put through (`redCheckOne`, `draftVerdict`), was not asked.
+- *Nothing was asked when the candidates were verified again.* `SwarmEngineImpl.
+  resumeAfterTestReview` went from "no survivor" straight to the repair round.
+  `resumeAfterTestRepair` asks whether the correction held, but only for a compile error, a
+  trace that never leaves the test class, and browser-only code.
+- *A second broken test gets the repair round.* `testRepairNeededFor` returns nothing once
+  `Task.testRepairAttempted` is set, so a task built against a test that errors for everybody
+  was given the round "futile as that usually is".
+- *Errored tests were not shown.* `queueBlockedDecision` printed passed and failed.
+- *No answer reached the test.* `DecisionAnswers` had `retry` and `repair`; a corrected test
+  could only be committed by hand on the run's tests branch (`OperatorCorrectedTests`).
+
+**What changed.**
+
+1. *One reading of "errors for every candidate"* (`ErroredForEveryCandidate`, sc-verify). Over
+   the acceptance results of a task's verified candidates: every one compiled, passed nothing
+   and failed nothing, at least one test errored, every error is one no project code took part
+   in (`BrokenAtStartup.startupFailure`: not an assertion, no frame in a package of the
+   project or of the plan, no project type named), and the first error is the same test with
+   the same exception type in each. Messages are not compared. Wider than `BrokenAtStartup.
+   find` in that an error thrown from the test's own lines counts: with the candidates' code
+   in the tree that is no longer what a test written before its code looks like.
+2. *A correction is held to the standard of a first-written test.*
+   - Before it is taken: the red check of a correction is put through
+     `RedChecker.brokenAtStartup`. A finding sends the correction back to its author once
+     more (`sendBrokenCorrectionBack`) with the error, with the fact that the earlier version
+     did start when that is on record (a suspect test ran to its assertions), and with which
+     tests pass. The second correction goes through every check again (`checkCorrection`: the
+     rules, vocabulary, self-implementation, reach, reflection, and the red check with the
+     same three "not red" readings). Still broken, refused, or no file: the run stops with
+     `SentBackTest.stop` and no repair round, also not one on the test as first written.
+   - When the candidates are verified again: `resumeAfterTestReview` and the shared
+     `reverifyAgainstCorrectedTest` ask `brokenForEveryCandidate` when nothing survives and
+     return `TestRepairOutcome.stillFaulty` with the error (`brokenTestFailure`) instead of
+     starting a repair round. The workflow (`recorrectOrStop`) sends the test back once more
+     unless it already went back for this, verifies again, and stops the run if it is still
+     broken.
+   - When a task is built: in `executeTaskOnce`, where no candidate survived and no other
+     test fault was found, the same reading starts no repair round. A test that has not been
+     to its author goes there (`TestRepairNeeded`); one that has stops the task with "Task
+     BLOCKED by its own acceptance test, not by its candidates".
+   - Which tests pass is given as names to look up, not as files (`SentBackTest.setupLookups`,
+     CLAUDE.md section 1): this task's own tests that passed for a candidate, as a fact about
+     the version before the last change, and the classes of the build's tasks that have a
+     chosen candidate and of earlier stories, with `body_of <Class>` named as the lookup. At
+     most six of each. The author's prompt (`TestAuthorClient.correctSentBackTest`) says
+     nothing about how a test should start.
+3. *Errored tests are counted and shown.* `BlockedReason.counts` gives `Np/Nf/Ne` in a blocked
+   task's question. `BlockedReason.of`, when no test failed and some errored, names the first
+   errored test with its exception class and message, and adds that the test, not the
+   candidates, is the likely cause when every verified candidate shows that same error and
+   passed nothing (`ErroredForEveryCandidate.sameError`).
+4. *The answer `retest`* (`InstructedRetest`, sc-domain). `DecisionAnswers.retestTasks`: the
+   question is a stopped build's, the build is at EXECUTING, the task carries the engine's
+   mark for the question - the one that offers `repair`, which is not set for a fault of the
+   plan, or `Task.retestOfferedBy`, set where a stop is about the task's own test and no
+   worker round is offered - and the task has an acceptance test file of its own. Text is
+   required. The answer writes `Task.retestInstruction`, records "Answered by the (actor)
+   (retest): (text)" and hands the run back; `next_attention`, `decision_text` and the
+   Console's answer box (first word `retest`) take it as they take `repair`, and the
+   supervisor's answer is in its decision log as any answer is.
+   `GreenfieldWorkflow.giveInstructedRetests` runs at the start of EXECUTING, before any
+   instructed repair round: the author is given the instruction, what verification last
+   recorded for the task's candidates (`SwarmEngineImpl.testEvidence`) and which tests pass;
+   the correction goes through `checkCorrection`, with the one further ask for a correction
+   broken at start-up; it is committed on the run's tests branch; `resumeAfterRetest` verifies
+   the candidates the task has. A survivor is finished and chosen. When none survives for a
+   reason of its own the task is left as it is and the stage, run next, builds it again
+   against the corrected test. A test that cannot be put right stops the run with a new
+   question. Counted on the task when the turn starts (`Task.instructedRetests`), capped by
+   `-Dswarmcoder.retest.instructedRounds` (default 1, at most 4), like section 84's cap.
+
+**Journeys are left out.** A failed final integration that names a journey does not take
+`retest`. The journey's send-back in `GreenfieldWorkflow` (sections 69 and 75) is counted in
+reviews per journey, decides between the author and the workers from the task's marks, and
+judges a correction on the tree the run started from and on the merged tree in a browser. An
+instruction would have to enter that as one more review with its own place in those marks;
+done beside it, it would let a journey be changed without the two browser runs that make a
+correction sound. The ways on there are unchanged: `repair` for the task, or a correction by
+hand.
+
+**Stored differently.** Fields were added to `Task`, no constant to any enum:
+`retestOfferedBy`, `retestInstruction` (null on a task stored before) and `instructedRetests`
+(0). `SwarmEngineImpl.TestRepairOutcome` is held in memory only.
+
+**Tests.** New: `ATestThatErrorsForEveryCandidateIsBrokenTest` (sc-verify: the finding, an
+error from the test's own lines, what is not a broken test, the same error told apart),
+`ABrokenCorrectedTestGetsNoRepairRoundTest` (sc-swarm, real engine with scripted workers and a
+stand-in test stage: a correction that errors for every candidate starts no repair round and
+calls no model; a retest that nothing passes leaves the task unblocked; one that the
+candidates pass chooses one; a task built against a broken test that has been to its author
+stops at once with a question marked for retest; the question's reason and counts),
+`ATestSentBackIsToldWhatWasMeasuredTest` (sc-workflow: the texts, the bounded names, the cap),
+`ACorrectedTestThatErrorsInItsSetUpGoesBackToItsAuthorTest` (sc-workflow, the whole workflow
+with the real engine: a correction that dies in what it starts goes back before it is taken
+and the second one is committed; one that errors only once candidates exist is found at
+re-verification, sent back once, and stops the run with no repair worker and a question
+marked for retest; the instruction then reaches the author and a candidate the task already
+had is chosen), `AStoppedBuildCanBeAnsweredRetestTest` (sc-console: offered and listed, text
+required, the instruction on the task, the recorded answer and log entry, not offered for a
+plan fault, a task with no test or a failed final integration, the cap, the same answer on
+screen). Run with them: `TestRepairNeededTest`, `SameFailureForEveryCandidateTest`,
+`NoRepairRoundWhenTheTasksOwnTestNeedsATaskNotYetRunTest`,
+`ATaskGetsOneMoreRepairRoundOnAnInstructionTest`,
+`ASuspectAcceptanceTestGoesBackToItsAuthorBeforeAnyRepairRoundTest`,
+`ASuspectTestIsReviewedInTheAuthorsSessionTest`, `AStoppedBuildCanBeAnsweredRepairTest`,
+`SupervisorDeskTest`, `SupervisorMcpToolsTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model, a container or a live build. The test author in the
+  tests answers in one reply; the path through a lookup session with `compile_test`, where
+  the names of passing tests are meant to be looked up, was not run.
+- What the live build's corrected test actually threw was not read. If its error carried a
+  frame in a package of the project, or its message named a project type, it is not read as a
+  broken test here and the task gets the repair round as before. The question would still
+  count the errored tests and name the first.
+- On the tree before any candidate, an error thrown from the test's own lines is still a
+  healthy red (a stub returned null), for a correction as for a first-written test. Such a
+  correction is committed and found only when the candidates are verified again; if it is
+  then not put right, the broken correction stays on the tests branch as the run's test.
+- A stopped build that is taken up again when the application starts is run again from its
+  stage: its blocked task is built again before anybody can answer. With a broken test on the
+  tests branch that costs one first round of workers; no repair round follows.
+- `retest` verifies every candidate of the task that has a branch, including repair
+  candidates that were stopped. Whether those branches still exist was not tested.
+- A turn interrupted by the process ending is given again when the run is next taken up and
+  is counted twice; one interrupted by an unreachable model is not counted.
+- The author handing in the file unchanged was not tested.
+- The cap is a `-D` setting, not a line of the settings file, and the Console does not show
+  it. The Console's question card was not opened to see the new option or the reason line.
+- "passed / failed" in the delivery texts of the merged tree (`FinalIntegrator`,
+  `StoryDelivery`) is unchanged: it is not a candidate's count.
+- Opening a store written before the new fields. EclipseStore maps added fields on its own
+  and `Task` has gained fields this way before; no old store was opened in a test.

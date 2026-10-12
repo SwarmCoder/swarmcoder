@@ -34,8 +34,10 @@ import com.swarmcoder.store.ArtifactStore;
 import com.swarmcoder.verify.AcceptanceCompileErrors;
 import com.swarmcoder.verify.BaseTreeChecks;
 import com.swarmcoder.verify.BlobSink;
+import com.swarmcoder.verify.BrokenAtStartup;
 import com.swarmcoder.verify.BrowserOnlyCode;
 import com.swarmcoder.verify.CommandPipelineVerifier;
+import com.swarmcoder.verify.ErroredForEveryCandidate;
 import com.swarmcoder.verify.GuidelineCheckRunner;
 import com.swarmcoder.verify.LocalProcessExecTarget;
 import com.swarmcoder.verify.UnifiedDiffPaths;
@@ -1591,6 +1593,33 @@ public class SwarmEngineImpl implements SwarmEngine {
                     return null;
                 }
                 TestRepairNeeded testFault = testRepairNeededFor(task, verified);
+                // The task's test errors for every candidate before any candidate's code runs
+                // (section 86): a broken test, whatever class threw. No repair round - its
+                // workers may not change the test. It goes to its author when it has not been
+                // yet; when it has, the task stops here and its question says so.
+                ErroredForEveryCandidate.Finding brokenTest = testFault != null ? null
+                    : brokenForEveryCandidate(runId, verified);
+                if (brokenTest != null && !task.testRepairAttempted()) {
+                    String id = brokenTest.testId();
+                    int hash = id.indexOf('#');
+                    testFault = new TestRepairNeeded(task.id(),
+                        hash >= 0 ? id.substring(0, hash) : id,
+                        hash >= 0 ? id.substring(hash + 1) : null, brokenTest.message(),
+                        brokenTest.failureText());
+                } else if (brokenTest != null) {
+                    log.warn("Task '{}': {} - the task's own acceptance test is broken, and it "
+                        + "has already gone back to its author once. No repair round - it "
+                        + "could not succeed. BLOCKED on the test, not on the candidates.",
+                        task.title(), brokenTest.reason());
+                    markTaskState(task, TaskState.BLOCKED);
+                    queueBlockedDecision(task, runId, archivePool,
+                        "Task BLOCKED by its own acceptance test, not by its candidates: '"
+                            + task.title() + "'\n\nNo repair round was started: no worker may "
+                            + "change an acceptance test, and the test has already gone back to "
+                            + "its author once in this build.\n\n", false, true);
+                    archiveCandidates(archivePool, null);
+                    return null;
+                }
                 if (testFault != null) {
                     task.setTestRepairAttempted(true);
                     try {
@@ -1943,7 +1972,7 @@ public class SwarmEngineImpl implements SwarmEngine {
     }
 
     /** {@code src/test/java/swarm/accept/DocumentTest.java} → {@code swarm.accept.DocumentTest}. */
-    static String testClassOfPath(String path) {
+    public static String testClassOfPath(String path) {
         String p = path == null ? "" : path.replace('\\', '/');
         for (String root : List.of("src/test/java/", "src/test/kotlin/", "src/test/")) {
             int at = p.indexOf(root);
@@ -2069,6 +2098,26 @@ public class SwarmEngineImpl implements SwarmEngine {
      *         {@link TestRepairOutcome#stillFaulty()}, which the caller turns into a run park
      */
     public TestRepairOutcome resumeAfterTestRepair(Task task, UUID runId) {
+        return reverifyAgainstCorrectedTest(task, runId, true);
+    }
+
+    /**
+     * The same re-verification for a test corrected on the instruction of whoever answered the
+     * stopped build's question {@code retest} (section 86, {@code InstructedRetest}). A survivor
+     * is finished and chosen as usual. When none survives and the corrected test is not itself
+     * at fault, the task is left as it is - not BLOCKED again, no question raised - so that the
+     * stage, run next, builds it again from the start against the corrected test.
+     */
+    public TestRepairOutcome resumeAfterRetest(Task task, UUID runId) {
+        return reverifyAgainstCorrectedTest(task, runId, false);
+    }
+
+    /**
+     * @param blockWhenNoneSurvive true to record the task BLOCKED and raise its question when
+     *                             no candidate passes the corrected test for a reason of its own
+     */
+    private TestRepairOutcome reverifyAgainstCorrectedTest(Task task, UUID runId,
+                                                           boolean blockWhenNoneSurvive) {
         List<CandidateSolution> previous = new ArrayList<>();
         for (Lazy<Object> lazy : artifactStore.root().candidateArchives.values()) {
             if (Lazy.get(lazy) instanceof CandidateSolution candidate
@@ -2099,6 +2148,10 @@ public class SwarmEngineImpl implements SwarmEngine {
             // true, set right before the ORIGINAL throw — which is exactly right for deciding
             // whether to try the test author a second time (never), but not for deciding whether
             // THIS correction held. allInsideTestItself asks the one question that matters here.
+            ErroredForEveryCandidate.Finding broken = brokenForEveryCandidate(runId, reverified);
+            if (broken != null) {
+                return brokenOutcome(task, broken);
+            }
             if (allMiscompiled(task, reverified)) {
                 CompileFailure failure = reverified.get(0).verification().compileFailure();
                 String message = "acceptance test " + testClassOfPath(failure.file())
@@ -2122,6 +2175,11 @@ public class SwarmEngineImpl implements SwarmEngine {
             }
             // The candidates now fail for a real reason of their own — the fix held, it simply
             // found nothing good enough. That is the ordinary BLOCKED path, not a still-faulty test.
+            if (!blockWhenNoneSurvive) {
+                log.warn("Task '{}': zero survivors against the corrected test; the task is "
+                    + "built again from the start against it", task.title());
+                return new TestRepairOutcome(null, false, null);
+            }
             log.warn("Task '{}': zero survivors against the corrected test — BLOCKED", task.title());
             markTaskState(task, TaskState.BLOCKED);
             queueBlockedDecision(task, runId, reverified);
@@ -2222,6 +2280,60 @@ public class SwarmEngineImpl implements SwarmEngine {
                 }
             }
         }
+    }
+
+    /** The candidates archived for a task that have a verification report, in the store's order. */
+    private List<CandidateSolution> verifiedCandidatesOf(Task task) {
+        List<CandidateSolution> candidates = new ArrayList<>();
+        for (Lazy<Object> lazy : artifactStore.root().candidateArchives.values()) {
+            if (Lazy.get(lazy) instanceof CandidateSolution candidate
+                    && task.id().equals(candidate.taskId()) && candidate.verification() != null) {
+                candidates.add(candidate);
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * What verification last recorded for a task's candidates, for the author of the task's
+     * acceptance test when the test is sent back on an instruction (section 86): the reason a
+     * stopped task's question gives ({@link BlockedReason}), each candidate's counts, and the
+     * first failure in full. "" when the task has no verified candidate.
+     */
+    public String testEvidence(Task task) {
+        List<CandidateSolution> candidates = verifiedCandidatesOf(task);
+        if (candidates.isEmpty()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder(BlockedReason.of(task, candidates, ""));
+        String full = null;
+        for (CandidateSolution candidate : candidates) {
+            VerificationReport report = candidate.verification();
+            text.append("- worker ").append(candidate.workerIndex())
+                .append(" compiles=").append(report.compiles())
+                .append(" acceptance ").append(BlockedReason.counts(report.acceptance()))
+                .append('\n');
+            if (full == null) {
+                Verdicts.FailureSummary summary =
+                    Verdicts.summarizeTestFailures("acceptance", report.acceptance());
+                full = summary == null ? null : summary.fullText();
+            }
+        }
+        if (full != null) {
+            text.append("\nThe first failure in full:\n").append(full).append('\n');
+        }
+        return text.toString();
+    }
+
+    /** Ids of the acceptance tests that passed for at least one verified candidate of a task. */
+    public List<String> passedAcceptanceIds(Task task) {
+        Set<String> ids = new java.util.LinkedHashSet<>();
+        for (CandidateSolution candidate : verifiedCandidatesOf(task)) {
+            if (candidate.verification().acceptance() != null) {
+                ids.addAll(candidate.verification().acceptance().passedIds());
+            }
+        }
+        return new ArrayList<>(ids);
     }
 
     /** The instruction a task's repair round was started on, and which instructed round it is. */
@@ -2396,6 +2508,14 @@ public class SwarmEngineImpl implements SwarmEngine {
                     reverified.size());
                 archiveCandidates(reverified, null);
                 current = reverified;
+                // A correction that errors for every candidate before any of their code runs
+                // is a broken test, not a red one (section 86): no repair round, whose
+                // workers could not change it. The workflow sends it back or stops the run.
+                ErroredForEveryCandidate.Finding broken = survivors.isEmpty()
+                    ? brokenForEveryCandidate(runId, reverified) : null;
+                if (broken != null) {
+                    return brokenOutcome(task, broken);
+                }
             }
             archivePool.addAll(current);
             if (survivors.isEmpty()) {
@@ -2517,8 +2637,58 @@ public class SwarmEngineImpl implements SwarmEngine {
      *                    rather than recording an ordinary BLOCKED task
      * @param faultMessage the still-faulty test's own error, quoted in the park message; null unless
      *                     {@code stillFaulty}
+     * @param brokenTestFailure non-null when the corrected test errored for every candidate before
+     *                     any candidate's code ran (section 86): the first error as the runner
+     *                     reported it, for the test's author
      */
-    public record TestRepairOutcome(CandidateSolution winner, boolean stillFaulty, String faultMessage) {}
+    public record TestRepairOutcome(CandidateSolution winner, boolean stillFaulty, String faultMessage,
+                                    String brokenTestFailure) {
+
+        public TestRepairOutcome(CandidateSolution winner, boolean stillFaulty, String faultMessage) {
+            this(winner, stillFaulty, faultMessage, null);
+        }
+    }
+
+    /**
+     * The corrected test errors for every re-verified candidate before any candidate's code
+     * runs (section 86, {@link ErroredForEveryCandidate}): a broken test. Null when that is not
+     * what the reports show, or when it cannot be established.
+     */
+    private ErroredForEveryCandidate.Finding brokenForEveryCandidate(UUID runId,
+            List<CandidateSolution> reverified) {
+        try {
+            List<TestResults> acceptance = new ArrayList<>();
+            for (CandidateSolution candidate : reverified) {
+                if (candidate == null || candidate.verification() == null) {
+                    continue; // no verdict, no evidence either way
+                }
+                if (!candidate.verification().compiles()) {
+                    return null;
+                }
+                acceptance.add(candidate.verification().acceptance());
+            }
+            List<Task> planned = new ArrayList<>();
+            List<List<Task>> waves = wavesOf(runId);
+            if (waves != null) {
+                waves.forEach(planned::addAll);
+            }
+            Path tree = gitService == null || !gitService.isEnabled() ? null : gitService.repoPath();
+            return ErroredForEveryCandidate.find(acceptance,
+                BrokenAtStartup.projectPackages(tree, planned));
+        } catch (RuntimeException e) {
+            log.warn("Whether the corrected test errors for every candidate could not be "
+                + "established ({}); judged as before", e.toString());
+            return null;
+        }
+    }
+
+    /** The outcome for a corrected test that is broken for every candidate: no repair round. */
+    private TestRepairOutcome brokenOutcome(Task task, ErroredForEveryCandidate.Finding broken) {
+        String message = broken.reason();
+        log.warn("Task '{}': the corrected acceptance test is BROKEN, not red - {}. No repair "
+            + "round is started: no worker may change the test.", task.title(), broken.reason());
+        return new TestRepairOutcome(null, true, message, broken.failureText());
+    }
 
     /**
      * The tail every finished task shares, whether it got here on its first pass or after a repair:
@@ -3309,6 +3479,17 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     private void queueBlockedDecision(Task task, UUID runId, List<CandidateSolution> evidence,
                                       String headline, boolean repairable) {
+        queueBlockedDecision(task, runId, evidence, headline, repairable, false);
+    }
+
+    /**
+     * @param retestable true when the task stopped on its own acceptance test and no worker
+     *                   round is offered: the question then takes the answer {@code retest}
+     *                   through a mark of its own (section 86). A question that offers
+     *                   {@code repair} needs none
+     */
+    private void queueBlockedDecision(Task task, UUID runId, List<CandidateSolution> evidence,
+                                      String headline, boolean repairable, boolean retestable) {
         StringBuilder brief = new StringBuilder();
         brief.append(headline);
         // The reason, once and before the list of workers (section 83): a reader shown only
@@ -3322,8 +3503,10 @@ public class SwarmEngineImpl implements SwarmEngine {
             if (candidate.verification() != null) {
                 brief.append(" compiles=").append(candidate.verification().compiles());
                 if (candidate.verification().acceptance() != null) {
-                    brief.append(" acceptance ").append(candidate.verification().acceptance().passed())
-                        .append("p/").append(candidate.verification().acceptance().failed()).append('f');
+                    // Errored tests are counted too (section 86): a test that throws before
+                    // it asserts is neither passed nor failed, and "0p/0f" hid every one.
+                    brief.append(" acceptance ")
+                        .append(BlockedReason.counts(candidate.verification().acceptance()));
                 }
             }
             brief.append('\n');
@@ -3345,18 +3528,34 @@ public class SwarmEngineImpl implements SwarmEngine {
                     && open.kind() == DecisionKind.BLOCKED_TASK && runId.equals(open.runId())
                     && text.equals(open.briefMarkdown())) {
                 offerRepair(task, seeded ? open.id() : null);
+                offerRetest(task, retestable ? open.id() : null);
                 return; // the same question of the same run is already open
             }
         }
         UUID decisionId = UUID.randomUUID();
         // The task is marked first, so whoever reads the new question finds what it accepts.
         offerRepair(task, seeded ? decisionId : null);
+        offerRetest(task, retestable ? decisionId : null);
         artifactStore.append(() -> {
             artifactStore.root().decisions.put(decisionId, new Decision(decisionId, runId,
                 DecisionKind.BLOCKED_TASK, brief.toString(), DecisionState.PENDING,
                 null, Instant.now()));
             return null;
         });
+    }
+
+    /** Records on the task which open question takes {@code retest} by a mark of its own, or none. */
+    private void offerRetest(Task task, UUID decisionId) {
+        if (java.util.Objects.equals(task.retestOfferedBy(), decisionId)) {
+            return;
+        }
+        task.setRetestOfferedBy(decisionId);
+        try {
+            artifactStore.storeChanged(task).get();
+        } catch (Exception e) {
+            log.warn("Failed to persist which question offers task '{}' a retest: {}",
+                task.title(), e.getMessage());
+        }
     }
 
     /** Records on the task which open question may be answered {@code repair} for it, or none. */

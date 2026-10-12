@@ -30,6 +30,17 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **The answer `retest` for a stopped build.** A question from a build that stopped at its
+  build stage on one task that has an acceptance test of its own now also takes `retest` with
+  a required text. The test goes back to its author with the text as the instruction and with
+  what verification recorded; the correction is checked like a first-written test and committed
+  on the run's tests branch; the task is verified again from the candidates it already has and
+  built again only if none passes. The story is not designed again. It is listed in
+  `next_attention` and `decision_text` with the task's name, and the Console's answer box takes
+  text that begins with `retest` the same way. It is not offered for a fault of the plan or for
+  a failed final integration. Once per task per build unless
+  `-Dswarmcoder.retest.instructedRounds` says otherwise (at most 4).
+
 - **The answer `repair` for a stopped build.** A question from a build that stopped on one
   task - a task blocked after its swarm and repair round, or a final integration that failed on
   one task's journey or added code - now also takes `repair` with a required text. The task's
@@ -132,6 +143,21 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   back.
 
 ### Fixed
+
+- **A corrected acceptance test that errors in its own set-up was taken as a failing one.** A
+  test sent back to its author and corrected is now held to the standard of a first-written
+  test: a correction that errors before any code under test runs is a broken test, not a red
+  one. It goes back to its author once more with the error and the names of the tests that
+  pass, and if it is still broken the build stops with that reason. The same is asked when the
+  candidates are verified again against a correction, and when a task is built: where every
+  candidate compiled, none of their code ran and the same test errored for each, no repair
+  round is started, because no worker may change an acceptance test.
+
+- **A blocked task's question said "0p/0f" and gave no reason when its tests errored.**
+  Errored tests are counted wherever a candidate's results are shown (`0p/0f/4e`), and the
+  question names the first errored test with its exception and message. When every candidate
+  errored on the same test with the same exception and passed nothing, it says that the test,
+  not the candidates, is the likely cause.
 
 - **The documentation search tells sibling modules apart.** A question that writes a module's
   name with hyphens or underscores, such as `inventory-crud-server`, now also matches the folder

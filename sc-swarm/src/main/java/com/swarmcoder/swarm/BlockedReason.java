@@ -22,6 +22,7 @@ import com.swarmcoder.domain.CompileFailure;
 import com.swarmcoder.domain.Task;
 import com.swarmcoder.domain.TestFailure;
 import com.swarmcoder.domain.TestResults;
+import com.swarmcoder.verify.ErroredForEveryCandidate;
 
 import java.util.List;
 
@@ -33,7 +34,8 @@ import java.util.List;
  * shown about 1,300 characters - was told that eight workers failed and not on what. The reason
  * is what verification already recorded for the first candidate that has one: the file and line
  * the compile failed at with the compiler's message, or the first acceptance test that failed
- * with its message. It goes before the list of workers, and it is short.
+ * with its message. It goes before the list of workers, and it is short. When no test failed and
+ * some errored, it is the first errored test with its exception (section 86).
  *
  * <p>Pure functions over what verification recorded.
  */
@@ -78,6 +80,10 @@ final class BlockedReason {
                     : "")
                 + "\n\n";
         }
+        String errored = erroredReason(evidence, said);
+        if (errored != null) {
+            return errored;
+        }
         for (CandidateSolution candidate : evidence) {
             TestResults acceptance = candidate == null || candidate.verification() == null
                 ? null : candidate.verification().acceptance();
@@ -96,6 +102,63 @@ final class BlockedReason {
             }
         }
         return "";
+    }
+
+    /**
+     * The reason when the first candidate that has anything to show had no test FAIL and some
+     * ERROR (section 86): the first errored test with its exception class and message, and,
+     * when every verified candidate shows that same error and passed nothing, that the test is
+     * the likely cause. Null when that is not what verification recorded.
+     *
+     * <p>A test that throws before it asserts anything is counted as errored, not failed. The
+     * question of a task blocked on one read "0p/0f" for every worker and gave no reason at
+     * all.
+     */
+    private static String erroredReason(List<CandidateSolution> evidence, String said) {
+        List<TestResults> verdicts = new java.util.ArrayList<>();
+        for (CandidateSolution candidate : evidence) {
+            if (candidate != null && candidate.verification() != null
+                    && candidate.verification().compiles()
+                    && candidate.verification().acceptance() != null) {
+                verdicts.add(candidate.verification().acceptance());
+            }
+        }
+        TestResults first = null;
+        for (TestResults acceptance : verdicts) {
+            if (acceptance.failed() > 0 || acceptance.errored() > 0) {
+                first = acceptance;
+                break;
+            }
+        }
+        if (first == null || first.failed() > 0) {
+            return null;
+        }
+        TestFailure failure = first.failures() == null ? null : first.failures().stream()
+            .filter(f -> f != null && f.testId() != null).findFirst().orElse(null);
+        String counts = first.errored() + " acceptance test(s) errored, " + first.passed()
+            + " passed and none failed";
+        if (failure == null) {
+            return "Why: " + counts + "; the runner reported which only as a count.\n\n";
+        }
+        String type = ErroredForEveryCandidate.exceptionType(failure);
+        String line = "Why: acceptance test " + failure.testId() + " errored before it could "
+            + "fail or pass - " + (type.isBlank() ? "" : type + ": ")
+            + shortened(failure.message()) + " (" + counts + ")";
+        if (said.contains(line)) {
+            return "";
+        }
+        return line + (ErroredForEveryCandidate.sameError(verdicts)
+            ? "\nAll " + verdicts.size() + " verified candidate(s) errored on that same test "
+                + "with that same exception and passed nothing: the test, not the candidates, "
+                + "is the likely cause, and no worker may change it."
+            : "")
+            + "\n\n";
+    }
+
+    /** {@code 3p/1f/2e}: passed, failed and errored, wherever a candidate's counts are shown. */
+    static String counts(TestResults results) {
+        return results == null ? "none"
+            : results.passed() + "p/" + results.failed() + "f/" + results.errored() + "e";
     }
 
     /** One line of at most {@link #MESSAGE_LIMIT} characters. */
