@@ -224,6 +224,40 @@ public class Task {
     private String retestInstruction;
     /** Times this task's acceptance test went back to its author on such an instruction, in this run. */
     private int instructedRetests;
+    /**
+     * The open question of this task's run that may be answered {@code screen} for this task
+     * (section 88): a failed final integration stopped on a journey, and this task is the one
+     * whose screen the journey uses - the journey's owner, or for a journey delivered with an
+     * earlier story the one task of this build that changed what it uses. Null otherwise. See
+     * {@link JourneyVerdict}.
+     */
+    private UUID screenVerdictOfferedBy;
+    /**
+     * The open question of this task's run that may be answered {@code journey} for this task
+     * (section 88): a failed final integration stopped on a journey this task owns. Null
+     * otherwise.
+     */
+    private UUID journeyVerdictOfferedBy;
+    /** The journeys, by path, the question of the two marks above is about for this task. */
+    private List<String> disputedJourneys;
+    /**
+     * Journeys, by path, a person or the supervisor ruled right by answering {@code screen}.
+     * Such a journey is not sent back to its author again: the ruling outranks the author's.
+     */
+    private List<String> journeysUpheld;
+    /**
+     * What a person or the supervisor told the author of this task's journey when a question
+     * was answered {@code journey}; given to the author when the journey next fails at final
+     * integration, then cleared. Null when nothing is waiting.
+     */
+    private String journeyInstruction;
+    /** Who gave {@link #journeyInstruction}, and the question it answered. Null with it. */
+    private String journeyInstructionBy;
+    /**
+     * One entry, the journey's path, for each time a journey of this task went back to its
+     * author on such an instruction in this run; counted per journey and capped.
+     */
+    private List<String> journeyInstructionsGiven;
 
     public Task() {}
 
@@ -396,6 +430,61 @@ public class Task {
     public String getRetestInstruction() { return retestInstruction; }
     public void setRetestInstruction(String retestInstruction) {
         this.retestInstruction = retestInstruction;
+    }
+
+    public UUID screenVerdictOfferedBy() { return screenVerdictOfferedBy; }
+    public UUID getScreenVerdictOfferedBy() { return screenVerdictOfferedBy; }
+    public void setScreenVerdictOfferedBy(UUID screenVerdictOfferedBy) {
+        this.screenVerdictOfferedBy = screenVerdictOfferedBy;
+    }
+
+    public UUID journeyVerdictOfferedBy() { return journeyVerdictOfferedBy; }
+    public UUID getJourneyVerdictOfferedBy() { return journeyVerdictOfferedBy; }
+    public void setJourneyVerdictOfferedBy(UUID journeyVerdictOfferedBy) {
+        this.journeyVerdictOfferedBy = journeyVerdictOfferedBy;
+    }
+
+    /** Never null. */
+    public List<String> disputedJourneys() {
+        return disputedJourneys == null ? List.of() : disputedJourneys;
+    }
+    public List<String> getDisputedJourneys() { return disputedJourneys; }
+    public void setDisputedJourneys(List<String> disputedJourneys) {
+        this.disputedJourneys = disputedJourneys == null || disputedJourneys.isEmpty() ? null
+            : new java.util.ArrayList<>(disputedJourneys);
+    }
+
+    /** Never null. */
+    public List<String> journeysUpheld() {
+        return journeysUpheld == null ? List.of() : journeysUpheld;
+    }
+    public List<String> getJourneysUpheld() { return journeysUpheld; }
+    public void setJourneysUpheld(List<String> journeysUpheld) {
+        this.journeysUpheld = journeysUpheld == null || journeysUpheld.isEmpty() ? null
+            : new java.util.ArrayList<>(journeysUpheld);
+    }
+
+    public String journeyInstruction() { return journeyInstruction; }
+    public String getJourneyInstruction() { return journeyInstruction; }
+    public void setJourneyInstruction(String journeyInstruction) {
+        this.journeyInstruction = journeyInstruction;
+    }
+
+    public String journeyInstructionBy() { return journeyInstructionBy; }
+    public String getJourneyInstructionBy() { return journeyInstructionBy; }
+    public void setJourneyInstructionBy(String journeyInstructionBy) {
+        this.journeyInstructionBy = journeyInstructionBy;
+    }
+
+    /** Never null. */
+    public List<String> journeyInstructionsGiven() {
+        return journeyInstructionsGiven == null ? List.of() : journeyInstructionsGiven;
+    }
+    public List<String> getJourneyInstructionsGiven() { return journeyInstructionsGiven; }
+    public void setJourneyInstructionsGiven(List<String> journeyInstructionsGiven) {
+        this.journeyInstructionsGiven = journeyInstructionsGiven == null
+            || journeyInstructionsGiven.isEmpty() ? null
+            : new java.util.ArrayList<>(journeyInstructionsGiven);
     }
 
     public int instructedRetests() { return instructedRetests; }

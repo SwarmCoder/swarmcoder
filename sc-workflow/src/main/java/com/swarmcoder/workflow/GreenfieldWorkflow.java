@@ -1315,6 +1315,7 @@ public class GreenfieldWorkflow {
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
                             .tellingTheRun(this::log)
+                            .knowingBrowserOnlyCode(browserOnlySurveyOrNone())
                             .sendingJourneysBackTo((task, failed, mergedTree, onMergedTree) -> {
                                 try {
                                     return sendJourneyBackToItsAuthor(integrating, task, failed,
@@ -1333,6 +1334,7 @@ public class GreenfieldWorkflow {
                     if (authorUnreachable[0] != null) {
                         throw authorUnreachable[0];
                     }
+                    dropUnusedJourneyInstructions(run);
                     if (!integration.ok() && integration.journeyCorrected()) {
                         // Stays in FINAL_INTEGRATION: the corrected journey is on the run's
                         // tests commit, and the run is merged, verified and its journeys made
@@ -1359,10 +1361,16 @@ public class GreenfieldWorkflow {
                         log("Integration FAILED — parking run: " + integration.failure());
                         blockStoryOnIntegrationFailure(run, integration);
                         final Run stopping = run;
+                        // What a person may rule on about a failed journey (section 88), said
+                        // before the detail so that it is inside what a supervisor is shown.
+                        final JourneysOfAPlan.Offer verdicts = journeyVerdictsOffered(run,
+                            integration);
                         parkRun(run, "FINAL_INTEGRATION failed on branch "
-                            + integration.integrationBranch() + ":\n\n" + integration.failure(),
+                            + integration.integrationBranch() + ":\n\n"
+                            + (verdicts.paragraph().isEmpty() ? ""
+                                : verdicts.paragraph() + "\n\n") + integration.failure(),
                             question -> offerRepairAfterIntegration(stopping, question,
-                                integration));
+                                integration, verdicts));
                         persister.save(run); // stays in FINAL_INTEGRATION; resumable after the fix
                         return null;
                     }
@@ -1700,9 +1708,28 @@ public class GreenfieldWorkflow {
             Run run, Task task, List<JourneyFile.Result> failed, Path mergedTree,
             java.util.function.Function<List<JourneyFile.Journey>,
                 JourneyRunner.Outcome> onMergedTree) {
-        if (failed == null || failed.isEmpty()
-                || failed.stream().noneMatch(f -> JourneysOfAPlan.goesToItsAuthor(task, f))
+        // An answer `journey` to the question the run stopped on (section 88): the journeys
+        // that question was about go back to their author with the answer's text, whatever
+        // the marks say about ordinary reviews. A journey ruled right by the answer `screen`
+        // does not go back at all.
+        final String instruction = task.journeyInstruction() == null
+            || task.journeyInstruction().isBlank() ? null : task.journeyInstruction().strip();
+        final String instructedBy = task.journeyInstructionBy();
+        java.util.function.Predicate<JourneyFile.Result> onInstruction = f -> instruction != null
+            && (task.disputedJourneys().isEmpty()
+                || task.disputedJourneys().contains(f.journey().path()))
+            && com.swarmcoder.domain.JourneyVerdict.left(task, f.journey().path());
+        java.util.function.Predicate<JourneyFile.Result> goes = f -> onInstruction.test(f)
+            || (!task.journeysUpheld().contains(f.journey().path())
+                && JourneysOfAPlan.goesToItsAuthor(task, f));
+        if (failed == null || failed.isEmpty() || failed.stream().noneMatch(goes)
                 || roles.testAuthor() == null || repoPath == null || !gitService.isEnabled()) {
+            if (failed != null && failed.stream()
+                    .anyMatch(f -> task.journeysUpheld().contains(f.journey().path()))) {
+                log("FINAL_INTEGRATION: the journey(s) of task '" + task.title() + "' that "
+                    + "failed were ruled right by whoever answered this build's question; "
+                    + "they are not sent back to their author.");
+            }
             return FinalIntegrator.SentBack.STANDS;
         }
         // The criteria of the whole plan: the task that owns a journey writes the screen and
@@ -1723,6 +1750,8 @@ public class GreenfieldWorkflow {
         }
         List<String> disowned = new ArrayList<>();
         List<String> disownedAnswers = new ArrayList<>();
+        List<String> unmet = new ArrayList<>();
+        List<String> unmetAnswers = new ArrayList<>();
         String branch = testsBranch(run);
         Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
         DesignDocument design = run.designId() == null ? null
@@ -1736,20 +1765,27 @@ public class GreenfieldWorkflow {
             removeTree(worktree); // a leftover from a killed attempt, if any
             gitService.addWorktreeAt(branch, worktree);
             for (JourneyFile.Result result : failed) {
-                if (!JourneysOfAPlan.goesToItsAuthor(task, result)) {
+                if (!goes.test(result)) {
                     continue; // same or earlier step than at its last review, or asked twice
                 }
                 String path = result.journey().path();
-                boolean again = JourneysOfAPlan.reviewsOf(task, path) > 0;
+                // On a person's instruction: a turn of its own, counted per journey, beside
+                // the two reviews a journey gets and not one of them.
+                final boolean instructed = onInstruction.test(result);
+                boolean again = !instructed && JourneysOfAPlan.reviewsOf(task, path) > 0;
                 if (again) {
                     secondReviews.add(path);
                 }
-                reviewedAt.put(path, result.step());
+                if (!instructed) {
+                    reviewedAt.put(path, result.step());
+                }
                 String content = Files.readString(worktree.resolve(path));
                 log("FINAL_INTEGRATION: the journey \"" + result.journey().name() + "\" ("
-                    + path + ") of task '" + task.title() + "' failed in the browser. Before "
-                    + "any worker repairs anything it goes back to its author, with the "
-                    + "failing step and what the page showed.");
+                    + path + ") of task '" + task.title() + "' failed in the browser. "
+                    + (instructed ? "This build's question was answered \"journey\": it goes "
+                        + "back to its author with that instruction:\n" + instruction
+                        : "Before any worker repairs anything it goes back to its author, with "
+                            + "the failing step and what the page showed."));
                 // What the author is shown, on the run's log (live run 100: whether the page
                 // reading named a list's options could not be told afterwards).
                 logger.info("The page as the browser read it at the failing step of {}: {}", path,
@@ -1760,10 +1796,32 @@ public class GreenfieldWorkflow {
                          .tryingOnTheStartTreeWith(onTheStartTreeOf(run, "journey-draft"))) {
                     reviewed = roles.testAuthor()
                         .reviewFailedJourney(worktree, mergedTree, task, design, storyCriteria,
-                            path, content, JourneysOfAPlan.sendBackEvidence(result));
+                            path, content, instructed
+                                ? JourneysOfAPlan.instructedEvidence(instruction, instructedBy,
+                                    JourneysOfAPlan.sendBackEvidence(result))
+                                : JourneysOfAPlan.sendBackEvidence(result));
+                }
+                if (instructed) {
+                    // Counted once the author has answered: an unreachable model threw above.
+                    List<String> given = new ArrayList<>(task.journeyInstructionsGiven());
+                    given.add(path);
+                    task.setJourneyInstructionsGiven(given);
                 }
                 String note;
-                if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.UNANSWERED) {
+                if (instructed
+                        && reviewed.verdict() != TestAuthorClient.JourneyVerdict.CORRECTED) {
+                    // The person called the journey wrong; nothing replaces it, so it stands
+                    // as it was and no worker is started on it.
+                    note = "Sent back on an instruction, the journey's author "
+                        + (reviewed.verdict() == TestAuthorClient.JourneyVerdict.STANDS_BY
+                            ? "answered that the journey is right and the screen is wrong"
+                            : reviewed.verdict()
+                                == TestAuthorClient.JourneyVerdict.COULD_NOT_CORRECT
+                                ? "handed in no corrected journey, asked twice"
+                                : "gave no usable answer") + ": " + reviewed.reason();
+                    unmet.add(path);
+                    unmetAnswers.add(note);
+                } else if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.UNANSWERED) {
                     note = "The journey's author gave no usable answer (" + reviewed.reason()
                         + "), so the journey stands as written.";
                 } else if (reviewed.verdict() == TestAuthorClient.JourneyVerdict.STANDS_BY) {
@@ -1785,7 +1843,7 @@ public class GreenfieldWorkflow {
                                 return new JourneyRunner.Outcome(String.valueOf(e.getMessage()),
                                     null, List.of());
                             }
-                        });
+                        }, instructed, storyCriteria);
                     String refused = judged.refused();
                     if (judged.getsFurther()) {
                         // Section 75 (live run 101): it fails at a later step than the journey
@@ -1812,6 +1870,12 @@ public class GreenfieldWorkflow {
                             + JourneysOfAPlan.lastStepOf(result.journey())
                             + "` and now ends on `" + JourneysOfAPlan.lastStepOf(now) + "`, with " + now.steps().size() + " step(s) "
                             + "where it had " + result.journey().steps().size() + ".";
+                    } else if (instructed) {
+                        note = "Sent back on an instruction, the journey's author corrected "
+                            + "it: " + reviewed.reason() + " Its correction was not taken ("
+                            + refused + ").";
+                        unmet.add(path);
+                        unmetAnswers.add(note);
                     } else {
                         note = "The journey's author answered that the journey is WRONG: "
                             + reviewed.reason() + " Its correction was not taken (" + refused
@@ -1819,6 +1883,19 @@ public class GreenfieldWorkflow {
                         disowned.add(path);
                         disownedAnswers.add(note);
                     }
+                    if (judged.asksForLess()) {
+                        // Taken on a person's authority although it asks for less (section
+                        // 88): what it dropped goes on every record of the run.
+                        note = note + " " + recordLesserCorrection(run, task, path, instructedBy,
+                            instruction, judged.dropped());
+                    }
+                }
+                if (instructed) {
+                    note = "ON THE INSTRUCTION OF THE " + (instructedBy == null
+                        || instructedBy.isBlank() ? "OPERATOR"
+                        : instructedBy.toUpperCase(java.util.Locale.ROOT)) + " (the answer "
+                        + "\"journey\": " + instruction.replaceAll("\\s*\\R\\s*", " ") + "): "
+                        + note;
                 }
                 if (again) {
                     note = "SECOND REVIEW (after the repair round the journey failed at step "
@@ -1842,6 +1919,9 @@ public class GreenfieldWorkflow {
         } finally {
             removeTree(worktree); // the branch stays; a correction is on it
         }
+        // The instruction is used up, whatever came of it: it is not given a second time.
+        task.setJourneyInstruction(null);
+        task.setJourneyInstructionBy(null);
         String earlier = task.journeyReviewNote();
         task.setJourneyReviewNote((earlier == null || earlier.isBlank() ? "" : earlier + " ")
             + String.join(" ", notes));
@@ -1849,7 +1929,7 @@ public class GreenfieldWorkflow {
         // used too (section 75): while it is not, a journey its author stands by goes to them.
         boolean stopsOnSecond = !secondReviews.isEmpty() && taken.isEmpty()
             && task.journeyRepairAttempted();
-        if (!disowned.isEmpty() || stopsOnSecond) {
+        if (!disowned.isEmpty() || !unmet.isEmpty() || stopsOnSecond) {
             // A second review is recorded even so: a journey is not sent back a third time.
             secondReviews.forEach(p -> JourneysOfAPlan.recordReview(task, p, reviewedAt.get(p)));
             if (stopsOnSecond) {
@@ -1864,15 +1944,29 @@ public class GreenfieldWorkflow {
             // Not marked as asked: no worker repairs a journey its author disowns, so the
             // only ways on are a correction by hand or asking the author again on resume.
             artifactStore.saveTask(task);
-            log("FINAL_INTEGRATION: the author of the journey(s) " + disowned + " of task '"
-                + task.title() + "' calls them wrong and no correction could be taken. No "
-                + "worker is started; the run stops here.");
+            if (!disowned.isEmpty()) {
+                log("FINAL_INTEGRATION: the author of the journey(s) " + disowned + " of task '"
+                    + task.title() + "' calls them wrong and no correction could be taken. No "
+                    + "worker is started; the run stops here.");
+            }
+            if (!unmet.isEmpty()) {
+                log("FINAL_INTEGRATION: the journey(s) " + unmet + " of task '" + task.title()
+                    + "' went back to their author on an instruction and no correction could "
+                    + "be taken. No worker is started; the run stops here.");
+            }
             return FinalIntegrator.SentBack.disowned(
-                JourneysOfAPlan.disowned(task, disowned, disownedAnswers)
+                (disowned.isEmpty() ? ""
+                    : JourneysOfAPlan.disowned(task, disowned, disownedAnswers))
+                    + (disowned.isEmpty() || unmet.isEmpty() ? "" : "\n\n")
+                    + (unmet.isEmpty() ? ""
+                        : JourneysOfAPlan.instructionNotMet(task, unmet, unmetAnswers))
                     + OperatorCorrectedTests.whereToCorrect(run));
         }
         reviewedAt.forEach((p, step) -> JourneysOfAPlan.recordReview(task, p, step));
-        task.setJourneySentBack(true);
+        if (!reviewedAt.isEmpty()) {
+            // A turn on an instruction alone is not the task's ordinary review (section 88).
+            task.setJourneySentBack(true);
+        }
         artifactStore.saveTask(task);
         if (further.isEmpty()) {
             return taken.isEmpty() ? FinalIntegrator.SentBack.STANDS
@@ -1907,6 +2001,93 @@ public class GreenfieldWorkflow {
         return FinalIntegrator.SentBack.disowned(
             JourneysOfAPlan.furtherAndNothingLeft(task, further)
                 + OperatorCorrectedTests.whereToCorrect(run));
+    }
+
+    /**
+     * Puts on record that a corrected journey was taken although it asks for less than the
+     * journey it replaces (section 88): the run's log, a warning the run carries to its end
+     * and to whoever is asked to accept the delivery, and the project's decision log, beside
+     * the answer that authorised it. Returns the sentence, for the note on the task.
+     */
+    private String recordLesserCorrection(Run run, Task task, String path, String by,
+                                          String instruction, List<String> dropped) {
+        String text = JourneysOfAPlan.lesserCorrection(path, by, instruction, dropped);
+        CarriedWarning warning = new CarriedWarning(JourneysOfAPlan.LESSER_CORRECTION,
+            RunState.FINAL_INTEGRATION.name(), text, Instant.now());
+        run.carryWarning(warning);
+        warn("WARNING CARRIED (a person authorised it; it is shown with the delivery): "
+            + warning.oneLine());
+        if (run.projectId() != null) {
+            try {
+                Story story = run.storyId() == null ? null : artifactStore.getStory(run.storyId());
+                com.swarmcoder.domain.AutonomousDecision entry =
+                    new com.swarmcoder.domain.AutonomousDecision(UUID.randomUUID(),
+                        run.projectId(), null, Instant.now(),
+                        com.swarmcoder.domain.AutonomousDecisionKind.ANSWERED_RUN_QUESTION,
+                        story == null ? "A stopped build"
+                            : (story.key() + " " + story.title()).strip(),
+                        "A journey of task '" + task.title() + "' was sent back to its author "
+                            + "on the answer `journey`. What did the correction that was taken "
+                            + "drop?",
+                        text,
+                        "Recorded by the application when the correction was taken: the answer "
+                            + "`journey` authorises a correction that asks for less, and what "
+                            + "it drops must be on record.",
+                        true, null, task.journeyVerdictOfferedBy());
+                entry.setActor(by);
+                artifactStore.recordAutonomousDecision(entry);
+            } catch (RuntimeException e) {
+                // The correction is taken and the warning is on the run; the line is reported.
+                log("FINAL_INTEGRATION: what the corrected journey dropped could not be "
+                    + "written to the decision log (" + e + "); it is on the run's warnings.");
+            }
+        }
+        return text;
+    }
+
+    /** The build's browser-only modules, or null when they cannot be surveyed. */
+    private BrowserOnlyCode.Survey browserOnlySurveyOrNone() {
+        try {
+            return browserOnlySurvey(repoLayout());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * An instruction for a journey's author that this pass of the stage did not use - the
+     * journey passed, or the stage failed before any journey was made - is dropped and said
+     * so: it was an answer to one stop and must not be acted on at a later, different one.
+     */
+    private void dropUnusedJourneyInstructions(Run run) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null) {
+            return;
+        }
+        for (Task task : new ArrayList<>(graph.tasks())) {
+            if (task.journeyInstruction() == null) {
+                continue;
+            }
+            log("FINAL_INTEGRATION: the answer \"journey\" for task '" + task.title() + "' was "
+                + "not used: none of the journeys it was about failed in this pass. The "
+                + "instruction is dropped: " + task.journeyInstruction());
+            task.setJourneyInstruction(null);
+            task.setJourneyInstructionBy(null);
+            artifactStore.saveTask(task);
+        }
+    }
+
+    /** What a person may rule on about the journeys a failed integration stopped on. */
+    private JourneysOfAPlan.Offer journeyVerdictsOffered(Run run,
+                                                         FinalIntegrator.Result integration) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || integration.journeyDispute() == null) {
+            return JourneysOfAPlan.Offer.NONE;
+        }
+        return JourneysOfAPlan.offerFor(graph.tasks(), integration.journeyDispute(),
+            integration.journeyFailure() != null);
     }
 
     /** The runs whose journeys' owners were settled in this process; see below. */
@@ -6912,7 +7093,8 @@ public class GreenfieldWorkflow {
      * run, left by an earlier stop, are cleared.
      */
     private void offerRepairAfterIntegration(Run run, UUID question,
-                                             FinalIntegrator.Result integration) {
+                                             FinalIntegrator.Result integration,
+                                             JourneysOfAPlan.Offer verdicts) {
         UUID named = integration.journeyFailure() != null
             ? integration.journeyFailure().taskId()
             : integration.ownedRefusal() != null ? integration.ownedRefusal().taskId() : null;
@@ -6923,8 +7105,19 @@ public class GreenfieldWorkflow {
         }
         for (Task task : graph.tasks()) {
             UUID offer = task.id().equals(named) ? question : null;
-            if (!java.util.Objects.equals(task.repairOfferedBy(), offer)) {
+            // The answers `screen` and `journey` (section 88), marked the same way: which
+            // task each is for, and which journeys the question is about for that task.
+            UUID screen = verdicts.screen().containsKey(task.id()) ? question : null;
+            UUID journey = task.id().equals(verdicts.journeyOf()) ? question : null;
+            List<String> disputed = verdicts.disputedFor(task);
+            if (!java.util.Objects.equals(task.repairOfferedBy(), offer)
+                    || !java.util.Objects.equals(task.screenVerdictOfferedBy(), screen)
+                    || !java.util.Objects.equals(task.journeyVerdictOfferedBy(), journey)
+                    || !task.disputedJourneys().equals(disputed)) {
                 task.setRepairOfferedBy(offer);
+                task.setScreenVerdictOfferedBy(screen);
+                task.setJourneyVerdictOfferedBy(journey);
+                task.setDisputedJourneys(disputed);
                 artifactStore.saveTask(task);
             }
         }

@@ -82,7 +82,18 @@ public class FinalIntegrator {
      */
     public record Result(String integrationBranch, String failure, VerificationReport verification,
                          JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
-                         boolean journeyCorrected) {
+                         boolean journeyCorrected, JourneyDispute journeyDispute) {
+        public Result(String integrationBranch, String failure, VerificationReport verification,
+                      JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
+                      boolean journeyCorrected) {
+            this(integrationBranch, failure, verification, journeyFailure, ownedRefusal,
+                journeyCorrected, null);
+        }
+        /** The same result, with what a person may rule on about the failed journeys. */
+        Result disputing(JourneyDispute dispute) {
+            return new Result(integrationBranch, failure, verification, journeyFailure,
+                ownedRefusal, journeyCorrected, dispute);
+        }
         public Result(String integrationBranch, String failure) {
             this(integrationBranch, failure, null, null, null, false);
         }
@@ -108,6 +119,33 @@ public class FinalIntegrator {
      *                 browser said
      */
     public record JourneyFailure(UUID taskId, String evidence) {}
+
+    /**
+     * The journeys a failed integration stopped on, as far as a person can rule on them
+     * (section 88): which side of a failed journey is wrong is a decision about what the story
+     * means, and the person or supervisor who holds it must be able to give it.
+     *
+     * @param ownerTaskId   the task of this run that claims failed journeys; null when every
+     *                      failed journey was delivered with an earlier story
+     * @param ownerJourneys the failed journeys that task claims, by path, as they stand now
+     * @param earlier       the failed journeys no task of this run claims
+     */
+    public record JourneyDispute(UUID ownerTaskId, List<String> ownerJourneys,
+                                 List<EarlierJourney> earlier) {
+        public JourneyDispute {
+            ownerJourneys = ownerJourneys == null ? List.of() : List.copyOf(ownerJourneys);
+            earlier = earlier == null ? List.of() : List.copyOf(earlier);
+        }
+    }
+
+    /**
+     * A failed journey delivered with an earlier story.
+     *
+     * @param taskId the one task of this run that changed what the journey uses, as
+     *               {@code JourneysOfAPlan.screenTaskOf} names it; null when none can be named
+     * @param why    the facts it was, or could not be, named from
+     */
+    public record EarlierJourney(String path, UUID taskId, String why) {}
 
     /**
      * A refusal of this stage that names files one task of this run added - code nothing can
@@ -196,6 +234,16 @@ public class FinalIntegrator {
     private java.util.function.Consumer<String> runRecord = sentence -> { };
     /** Who is asked about a failed journey before a worker is; nobody by default. */
     private JourneySendBack journeySendBack;
+
+    /** The build's browser-only modules, for telling which changed file is a screen; may be null. */
+    private com.swarmcoder.verify.BrowserOnlyCode.Survey browserOnly;
+
+    /** Tells this stage which modules of the build run only in a browser (section 88). */
+    public FinalIntegrator knowingBrowserOnlyCode(
+            com.swarmcoder.verify.BrowserOnlyCode.Survey survey) {
+        this.browserOnly = survey;
+        return this;
+    }
 
     /** A failed journey of this run goes back to its author through {@code sendBack} first. */
     public FinalIntegrator sendingJourneysBackTo(JourneySendBack sendBack) {
@@ -466,7 +514,7 @@ public class FinalIntegrator {
             // And the other thing no test of the code can show: that a person can reach and use
             // what was built. The journeys are made here, once, in a real browser (section 63).
             Result journeys = makeJourneys(run, graph, worktree, integrationBranch, journeysHeld,
-                lastVerification[0]);
+                lastVerification[0], winners);
             if (journeys != null) {
                 return journeys;
             }
@@ -630,7 +678,8 @@ public class FinalIntegrator {
      * that claims it, so that task can be sent back to the workers with the failing step.
      */
     private Result makeJourneys(Run run, TaskGraph graph, Path worktree, String integrationBranch,
-                                Map<String, String> held, VerificationReport verification) {
+                                Map<String, String> held, VerificationReport verification,
+                                Map<UUID, CandidateSolution> winners) {
         // Counted on the run for whoever is asked to accept the delivery (section 84). Zero
         // until journeys have really been made in this pass.
         run.setJourneysMade(0);
@@ -688,8 +737,12 @@ public class FinalIntegrator {
             + "a real browser - the application was started and used from its entry page:\n");
         Task owner = null;
         List<JourneyFile.Result> ofOwner = new ArrayList<>();
+        List<EarlierJourney> earlier = new ArrayList<>();
         for (JourneyFile.Result result : failed) {
             Task claiming = claimedBy.get(result.journey().path());
+            if (claiming == null) {
+                earlier.add(whoChangedWhatItUses(result.journey(), graph, worktree, winners));
+            }
             text.append("\n- journey \"").append(result.journey().name()).append("\" (")
                 .append(result.journey().path()).append(claiming == null
                     ? ", delivered with an earlier story" : ", task '" + claiming.title() + "'")
@@ -719,7 +772,9 @@ public class FinalIntegrator {
             if (back != null && back.disowned() != null) {
                 // No JourneyFailure on the result: nothing goes to the workers (section 70).
                 return new Result(integrationBranch, text + "\n\n" + back.disowned(),
-                    verification);
+                    verification).disputing(new JourneyDispute(owner.id(),
+                        ofOwner.stream().map(result -> result.journey().path()).toList(),
+                        earlier));
             }
             if (back != null && back.further() != null && !back.further().isEmpty()) {
                 // The journey is a corrected one now and fails at a later step (section 75):
@@ -733,11 +788,44 @@ public class FinalIntegrator {
                 }
                 return new Result(integrationBranch, now.toString(), verification,
                     new JourneyFailure(owner.id(),
-                        JourneysOfAPlan.repairEvidenceAfterCorrection(back.further())));
+                        JourneysOfAPlan.repairEvidenceAfterCorrection(back.further())))
+                    .disputing(new JourneyDispute(owner.id(), back.further().stream()
+                        .map(result -> result.journey().path()).distinct().toList(), earlier));
             }
         }
         return new Result(integrationBranch, text.toString(), verification, owner == null ? null
-            : new JourneyFailure(owner.id(), JourneysOfAPlan.repairEvidence(ofOwner)));
+            : new JourneyFailure(owner.id(), JourneysOfAPlan.repairEvidence(ofOwner)))
+            .disputing(new JourneyDispute(owner == null ? null : owner.id(),
+                ofOwner.stream().map(result -> result.journey().path()).toList(), earlier));
+    }
+
+    /**
+     * For a failed journey no task of this run claims: the one task whose chosen change wrote
+     * what the journey uses, read off the winners' diffs and the merged tree (section 88,
+     * {@link JourneysOfAPlan#screenTaskOf}). No model; nothing is run.
+     */
+    private EarlierJourney whoChangedWhatItUses(JourneyFile.Journey journey, TaskGraph graph,
+                                                Path worktree,
+                                                Map<UUID, CandidateSolution> winners) {
+        try {
+            JourneysOfAPlan.ScreenTask named = JourneysOfAPlan.screenTaskOf(journey,
+                graph.tasks(),
+                task -> {
+                    CandidateSolution winner = winners == null ? null : winners.get(task.id());
+                    return winner == null || winner.diffUnified() == null ? List.of()
+                        : WorkerToolbox.touchedPaths(winner.diffUnified());
+                },
+                file -> com.swarmcoder.knowledge.ProjectTexts.textsOfFile(worktree.resolve(file)),
+                file -> !com.swarmcoder.verify.ScreenChange.screenPaths(List.of(file),
+                    browserOnly, true).isEmpty());
+            return new EarlierJourney(journey.path(),
+                named.task() == null ? null : named.task().id(), named.why());
+        } catch (RuntimeException e) {
+            log.warn("Which task changed what the journey {} uses could not be established: {}",
+                journey.path(), e.toString());
+            return new EarlierJourney(journey.path(), null, "which task of this build changed "
+                + "what it uses could not be established (" + e + ")");
+        }
     }
 
     /**

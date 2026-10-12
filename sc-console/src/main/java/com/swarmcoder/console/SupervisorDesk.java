@@ -423,6 +423,16 @@ public final class SupervisorDesk implements SupervisorService {
             facts.append(" Cloud tokens of this build: ").append(spend.input()).append(" in, ")
                 .append(spend.output()).append(" out.");
         }
+        // What the build carried past instead of stopping on (section 88): a journey that was
+        // corrected on a person's instruction to ask for less is among them, and whoever
+        // accepts the delivery must see what was dropped.
+        List<com.swarmcoder.domain.CarriedWarning> carried = run.carriedWarnings();
+        if (!carried.isEmpty()) {
+            facts.append(" The build carried ").append(carried.size()).append(" warning(s): ")
+                .append(listed(carried.stream().map(warning -> warning.check() + " - "
+                    + nn(warning.objection())).toList(), CARRIED_CHARS, CARRIED_CHARS))
+                .append('.');
+        }
         return facts.toString();
     }
 
@@ -1110,12 +1120,19 @@ public final class SupervisorDesk implements SupervisorService {
         return (nn(story.key()) + " " + nn(story.title())).strip();
     }
 
+    /** Room in a delivery's evidence for the warnings its build carried. */
+    private static final int CARRIED_CHARS = 900;
+
     /** A list as one line, cut at a whole entry, saying how many were left out. */
     private static String listed(List<String> entries, int max) {
+        return listed(entries, max, 90);
+    }
+
+    private static String listed(List<String> entries, int max, int each) {
         StringBuilder line = new StringBuilder();
         int shown = 0;
         for (String entry : entries) {
-            String next = clip(entry, 90);
+            String next = clip(entry, each);
             if (line.length() + next.length() + 2 > max) {
                 break;
             }

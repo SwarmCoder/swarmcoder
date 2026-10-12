@@ -2375,8 +2375,12 @@ public class SwarmEngineImpl implements SwarmEngine {
         instructedRepairs.put(task.id(), new Instructed(instruction, round));
         try {
             if (archivedWinner(task) != null) {
-                Decision asked = task.repairOfferedBy() == null ? null
-                    : artifactStore.root().decisions.get(task.repairOfferedBy());
+                // The question the run stopped on: the one that offered `repair`, or the one
+                // that offered `screen` for a failed journey (section 88).
+                UUID question = task.repairOfferedBy() != null ? task.repairOfferedBy()
+                    : task.screenVerdictOfferedBy();
+                Decision asked = question == null ? null
+                    : artifactStore.root().decisions.get(question);
                 return repairAfterFinalIntegration(task, runId,
                     asked == null ? "" : asked.briefMarkdown()) != null;
             }
