@@ -7,7 +7,7 @@
 ### Agentic software development that your organization can actually account for
 
 [![swarmcoder.dev](https://img.shields.io/badge/swarmcoder.dev-1f6feb?style=flat-square&logo=firefoxbrowser&logoColor=white)](https://www.swarmcoder.dev)
-[![Java 21+](https://img.shields.io/badge/Java-21%2B-e76f00?style=flat-square&logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Java 25+](https://img.shields.io/badge/Java-25%2B-e76f00?style=flat-square&logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/status-early%20release-orange?style=flat-square)](CHANGELOG.md)
 
@@ -157,7 +157,7 @@ Today the tested path is a Java project that is built with Maven.
 
 To start SwarmCoder and look around you only need two things:
 
-- Java 21 or newer
+- Java 25 or newer (Java 21 is enough for a build made with `-Phelidon`, see below)
 - Maven
 
 To build software with it you need two more, and SwarmCoder tells you about both when it starts:
@@ -187,6 +187,11 @@ java --add-exports java.base/jdk.internal.misc=ALL-UNNAMED \
 
 On Windows, `build.bat` and `run.bat` do the same thing. The four `--add` options are required by
 the storage engine and cannot be left out.
+
+The window is served by the Vidocq server binding of ZeroZ Stack, which needs Java 25 and which
+ZeroZ Stack still marks as experimental. To serve it with Helidon instead, on Java 21 or newer,
+build with `mvn clean package -DskipTests -Phelidon`. The start command is the same. Use `clean`
+when you switch, so that `sc-app/target/libs` holds the jars of one of the two only.
 
 SwarmCoder then prints the address of its console, which is `http://localhost:9090/`, and lists
 what is still needed before it can build anything. The [user manual](docs/USER_MANUAL.md) takes it

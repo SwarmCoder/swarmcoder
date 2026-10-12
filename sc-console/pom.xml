@@ -26,8 +26,8 @@
   <artifactId>sc-console</artifactId>
   <name>sc-console</name>
   <description>SwarmCoder Console server: zeroz4j RMI backend embedded in the orchestrator JVM
-    (TomEE embedded — servlet + WebSocket + CDI in-process, because EclipseStore is
-    single-process). See docs/OBSERVABILITY_DESIGN.md.</description>
+    (HTTP, WebSocket and CDI in-process, because EclipseStore is single-process; the container
+    is the Vidocq or the Helidon binding of ZeroZ Stack, chosen by profile). See docs/OBSERVABILITY_DESIGN.md.</description>
 
   <dependencies>
     <dependency>
@@ -61,10 +61,8 @@
       <groupId>com.zeroz4j</groupId>
       <artifactId>zerozstack-shared-api</artifactId>
     </dependency>
-    <dependency>
-      <groupId>com.zeroz4j</groupId>
-      <artifactId>zerozstack-server-helidon</artifactId>
-    </dependency>
+    <!-- The server container is not named here: it comes from the profile below (vidocq unless
+         -Phelidon is given). Application code calls Zeroz4jServer.start under either. -->
     <dependency>
       <groupId>com.zeroz4j</groupId>
       <artifactId>zerozstack-store-eclipsestore</artifactId>
@@ -132,6 +130,36 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <profiles>
+    <!-- Which container serves the Console. Exactly one of the two bindings may be on the
+         classpath; Zeroz4jServer.start uses the one it finds. Build with "clean" when switching,
+         so sc-app/target/libs holds one container's jars.
+
+           mvn clean package             Vidocq (needs Java 25 to run)
+           mvn clean package -Phelidon   Helidon (runs on Java 21 or newer) -->
+    <profile>
+      <id>vidocq</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>com.zeroz4j</groupId>
+          <artifactId>zerozstack-server-vidocq</artifactId>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>helidon</id>
+      <dependencies>
+        <dependency>
+          <groupId>com.zeroz4j</groupId>
+          <artifactId>zerozstack-server-helidon</artifactId>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 
   <build>
     <plugins>
