@@ -124,6 +124,11 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **The documentation search tells sibling modules apart.** A question that writes a module's
+  name with hyphens or underscores, such as `inventory-crud-server`, now also matches the folder
+  of that name as one word. Before, only its parts matched, so the example's client files
+  outranked its server files for a question about the server. The search index is rebuilt once
+  after the upgrade.
 - **The application's own settings file no longer blocks accepting a delivery.** Saving a
   project's settings or reference folders writes `.swarmcoder/project.yaml` into the project's
   repository, and accepting was then refused for "changes that are not committed". That file
