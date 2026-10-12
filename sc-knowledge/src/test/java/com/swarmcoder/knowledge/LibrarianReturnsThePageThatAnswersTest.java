@@ -215,7 +215,9 @@ class LibrarianReturnsThePageThatAnswersTest {
             .doesNotContain(ARCHETYPE)
             // Since docs/guides/starting-the-server.md (framework commit a7dd2ee) the prose half
             // carries that main, the call to Zeroz4jServer.start, so either half may show it. The
-            // code half alone no longer does: it ranks AppText and OidcLoginApp above Zeroz4jServer.
+            // code half alone does not: Zeroz4jServer declares no main and matches one word of
+            // the question, and of the classes that match two (a hump of the name and a main
+            // method) the examples' client start classes rank just above their server ones.
             .satisfiesAnyOf(
                 answer -> assertThat(answer)
                     .containsPattern("## Source: \\S+(Zeroz4jServer|ExampleServer)\\.java"),
