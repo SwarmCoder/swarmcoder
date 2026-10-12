@@ -23,6 +23,7 @@ import com.swarmcoder.domain.Task;
 import com.swarmcoder.domain.TestFailure;
 import com.swarmcoder.domain.TestResults;
 import com.swarmcoder.verify.ErroredForEveryCandidate;
+import com.swarmcoder.verify.Verdicts;
 
 import java.util.List;
 
@@ -35,7 +36,9 @@ import java.util.List;
  * is what verification already recorded for the first candidate that has one: the file and line
  * the compile failed at with the compiler's message, or the first acceptance test that failed
  * with its message. It goes before the list of workers, and it is short. When no test failed and
- * some errored, it is the first errored test with its exception (section 86).
+ * some errored, it is the first errored test with its exception (section 86). When the
+ * candidates compiled and passed every test, it is the verification objection that failed
+ * them (section 87).
  *
  * <p>Pure functions over what verification recorded.
  */
@@ -101,7 +104,60 @@ final class BlockedReason {
                     + shortened(failure.message()) + "\n\n";
             }
         }
-        return "";
+        return objectionReason(evidence, said);
+    }
+
+    /**
+     * The reason when nothing failed to compile and no test failed or errored (section 87): the
+     * verification objection recorded for the first candidate that compiled and passed every
+     * acceptance test, and, when every verified candidate was failed by that same objection,
+     * that it was. "" when verification recorded no such objection or {@code said} already
+     * quotes it.
+     *
+     * <p>Live supervised build, 2026-10-12: eight candidates compiled, passed 4 of 4 acceptance
+     * tests and were failed by one contract objection. The question listed eight workers as
+     * "[FAILED] compiles=true acceptance 4p/0f/0e" and gave no reason.
+     */
+    private static String objectionReason(List<CandidateSolution> evidence, String said) {
+        String first = null;
+        TestResults passed = null;
+        int verified = 0;
+        int same = 0;
+        for (CandidateSolution candidate : evidence) {
+            if (candidate == null || candidate.verification() == null) {
+                continue;
+            }
+            verified++;
+            if (!Verdicts.survived(candidate.verification())) {
+                continue;
+            }
+            String objection = NoChangeRepair.objectionIn(candidate.verification().logTail());
+            if (objection == null) {
+                continue;
+            }
+            if (first == null) {
+                first = objection;
+                passed = candidate.verification().acceptance();
+            }
+            if (first.equals(objection)) {
+                same++;
+            }
+        }
+        if (first == null) {
+            return "";
+        }
+        String quoted = shortened(first);
+        if (said.replaceAll("\\s+", " ").contains(
+                quoted.endsWith("...") ? quoted.substring(0, quoted.length() - 3) : quoted)) {
+            return "";
+        }
+        return "Why: it compiles and passes every acceptance test (" + counts(passed)
+            + "); verification failed it with this objection - " + quoted
+            + (verified > 1 && same == verified
+                ? "\nAll " + verified + " verified candidate(s) were failed by that same "
+                    + "objection."
+                : "")
+            + "\n\n";
     }
 
     /**

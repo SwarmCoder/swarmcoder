@@ -8442,3 +8442,101 @@ screen). Run with them: `TestRepairNeededTest`, `SameFailureForEveryCandidateTes
   `StoryDelivery`) is unchanged: it is not a candidate's count.
 - Opening a store written before the new fields. EclipseStore maps added fields on its own
   and `Task` has gained fields this way before; no old store was opened in a test.
+
+## 87. Eight correct candidates failed for a constructor their type cannot have (live supervised build, 2026-10-12)
+
+**What was found.** A supervised build of the three-module demo stopped on the task that adds a
+search query. All eight candidates (four first workers, four repair workers) compiled and passed
+all four acceptance tests. Verification failed each one with: the contract of the class that
+holds the project's queries "was delivered without the members `public BookSearchRequest
+request;`, `public Search()`, `public Search(BookSearchRequest request)`, `List<Book>
+execute(Object root)`". In that project a query is a class nested in the class of queries; the
+one that existed at the start is of that shape. The design had written the members of the new
+nested class `Search` in the contract of the outer class. The candidates wrote the nested class
+with exactly that field, those constructors and that method. `Search()` is a constructor, and a
+constructor is named for its type: no code can make it a member of another type.
+
+The question the supervisor was asked listed eight workers as `[FAILED] compiles=true
+acceptance 4p/0f/0e` and gave no reason.
+
+**Cause.**
+
+- `ContractMember.parse` reads `public Search()` as a method named `Search` with no return type
+  (`ContractMember.java:348`). Nothing asked whether a name with no return type is the name of
+  the contract's own type.
+- `ContractDelivery.shortfalls` compares every promised member with the members of the type the
+  contract names and with nothing else (`ContractDelivery.java:322`). Its constructor rule
+  (`ContractDelivery.java:428`) applies only when the name is the type's own.
+- Nothing at DESIGN_REVIEW looked for a constructor of another type (`DesignFactChecks`).
+  Section 76 gives a nested type's contract to the task of its outer type, but only when the
+  design wrote that contract (`pkg.Outer.Nested`); here it had not.
+- `BlockedReason.of` ended with `return ""` (`BlockedReason.java:104`) when no candidate failed
+  to compile and no test failed or errored. `NoChangeRepair` quotes the objection only when
+  every repair worker changed nothing; here they had changed something.
+
+(Line numbers are those before this change.)
+
+**What changed.**
+
+1. *A fact read from the declaration* (`ContractMember.constructorOfAnotherType`): an entry
+   with parentheses, no return type, and a name that is not the type's simple name and is
+   written as a type name is (upper-case first, not all capitals) is a constructor of the type
+   of that name. A lower-case name with no return type is still read as a loosely written
+   method.
+2. *When the design is accepted* (`ContractNestedTypes`, called from
+   `GreenfieldWorkflow.withAnnotationsWhereTheyCanBe` before the annotation step, so at
+   DESIGN_REVIEW, after each revision, on the stored design before PLAN and on a `check_design`
+   draft): a contract that lists such a constructor is split into the outer type's contract and
+   a contract `pkg.Outer.Nested`, the form of section 76. It is a note in the manner of sections
+   76 and 81, not an objection. The new contract's id is derived from the outer contract's id
+   and the name, so the same design gives the same id each time.
+   - The constructor's type is taken as declared inside the contract's type when the start tree
+     declares it there, or the design has a contract of that nested name, or the type on the
+     start tree already declares nested types and no type of the project or the design has that
+     name (new query: `ProjectTypes.nestedTypesOf`).
+   - Each other member stays with the outer type when the start tree's outer type declares it
+     (`ContractDelivery.declaredOnTheType`); goes with the nested type when the start tree's
+     nested type declares it or its contract already lists it; and, when the outer type on the
+     start tree declares nested types and no field or method of its own, goes with the one
+     nested type the contract names.
+   - Anything these do not decide is an objection of `DesignFactChecks` that names the
+     constructor and the members it could not place. Nothing is guessed.
+3. *At verification* (`ContractDelivery.notMetByANestedType`), for a contract stored before
+   this change: when a missing member is a constructor of another type and the candidate
+   declares a nested type of that name inside the contract's type, every missing member that
+   nested type has (declared, the default constructor, or inherited where that can be read) is
+   delivered, and the log says so. A member neither type has is still an objection, and names
+   only what is missing. A contract with no such constructor is judged exactly as before.
+4. *The question of a blocked task* (`BlockedReason.objectionReason`): when no candidate failed
+   to compile and no test failed or errored, the reason is the verification objection recorded
+   for the first candidate that compiled and passed every test, cut to the length of the other
+   reasons (300 characters), and one more line when every verified candidate was failed by
+   that same objection. Not repeated when the headline already quotes it.
+
+No stored type or enum changed.
+
+**What is not checked.**
+
+- A type name written in all capitals (`URL()`) is not read as a constructor of another type,
+  so that an enum constant written with parentheses is left alone. Such a contract is treated
+  as before.
+- A new outer type (not on the start tree) whose contract mixes its own members with a nested
+  type's is not split: it goes back to the architect, unless the design already has the nested
+  contract and it lists those members.
+- Whether a project's nested types are of one kind is not judged. "Declares nested types and no
+  field or method of its own" is the whole test.
+- A constructor of a type that is not nested (a top-level type written into the wrong contract)
+  is sent back, never moved.
+- The contract's free-text sketch (`signatureSketch`) is not corrected.
+- Tasks of a plan made before this change keep the contract as written; item 3 is what such a
+  task is verified with. Its workers still read the wrong contract in their opening.
+- The stored design before PLAN is corrected where the facts decide, but an undecided contract
+  there is not sent back; item 3 covers it at verification.
+- At verification an annotation promised on a member that the nested type declares without it
+  leaves that member reported as missing, not as lacking the annotation.
+- Not run live. The call sites in `GreenfieldWorkflow` are covered by no test; what they call
+  is.
+
+**Tests.** `AConstructorOfANestedTypeIsMetOnTheNestedTypeTest` (sc-knowledge),
+`ContractNestedTypesTest` (sc-workflow), `AVerificationObjectionIsTheBlockedReasonTest`
+(sc-swarm).

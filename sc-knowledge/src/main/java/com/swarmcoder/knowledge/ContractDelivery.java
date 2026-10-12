@@ -371,12 +371,101 @@ public final class ContractDelivery {
                         + "source; {}", fullName, member.strip(), elsewhere);
                 }
             }
+            if (!missing.isEmpty() && handWritten) {
+                missing = notMetByANestedType(fullName, missing, unannotated, types, builtTypes);
+            }
             if (!missing.isEmpty()) {
                 shortfalls.add(new Shortfall(contract, false, List.copyOf(missing),
                     List.copyOf(unannotated)));
             }
         }
         return List.copyOf(shortfalls);
+    }
+
+    /**
+     * {@code missing} without the members a nested type delivers, when the contract itself says
+     * they are a nested type's: it lists a constructor named for another type, and the tree
+     * declares a type of that name inside this one.
+     *
+     * <p>Live supervised build, 2026-10-12: the contract of {@code BookQueries} listed
+     * {@code public Search()}, {@code public Search(BookSearchRequest request)}, a field and a
+     * method. A constructor is named for its type, so no code can make those members of
+     * {@code BookQueries}; the design had written the members of the nested class
+     * {@code BookQueries.Search} under the outer type's name. Eight candidates that declared
+     * exactly that nested class were failed. A design is put right when it is accepted
+     * ({@code ContractNestedTypes}); this is the second line, for a task whose contract was
+     * stored before that.
+     *
+     * <p>Only on positive evidence: without such a constructor in the contract, or without a
+     * nested type of its name in the tree, nothing changes. A member neither the type nor that
+     * nested type has is still missing.
+     */
+    private static List<String> notMetByANestedType(String fullName, List<String> missing,
+                                                    List<Unannotated> unannotated,
+                                                    ProjectTypes types,
+                                                    java.util.function.Supplier<BuiltTypes> builtTypes) {
+        String simple = fullName.substring(fullName.lastIndexOf('.') + 1);
+        java.util.Set<String> annotated = new java.util.HashSet<>();
+        unannotated.forEach(u -> annotated.add(u.member()));
+        java.util.Set<String> nested = new java.util.LinkedHashSet<>();
+        for (String member : missing) {
+            if (!annotated.contains(member)) {
+                ContractMember.constructorOfAnotherType(member, simple)
+                    .filter(name -> types.declares(fullName + "." + name))
+                    .ifPresent(name -> nested.add(fullName + "." + name));
+            }
+        }
+        if (nested.isEmpty()) {
+            return missing;
+        }
+        List<String> still = new ArrayList<>();
+        for (String member : missing) {
+            Optional<ContractMember> parsed = annotated.contains(member) ? Optional.empty()
+                : ContractMember.parse(member, simple);
+            String constructorOf = ContractMember.constructorOfAnotherType(member, simple)
+                .orElse(null);
+            String by = null;
+            for (String inner : parsed.isEmpty() ? List.<String>of() : nested) {
+                if (constructorOf != null && !inner.equals(fullName + "." + constructorOf)) {
+                    continue; // a constructor is only ever the constructor of its own type
+                }
+                List<String> lacking = new ArrayList<>();
+                boolean[] unestablished = new boolean[1];
+                if (satisfied(parsed.get(), types.membersOf(inner), lacking)
+                        ? lacking.isEmpty()
+                        : foundElsewhere(parsed.get(), inner, types, builtTypes, unestablished)
+                            != null && !unestablished[0]) {
+                    by = inner;
+                    break;
+                }
+            }
+            if (by == null) {
+                still.add(member);
+            } else {
+                log.info("contract {}: the member \"{}\" is not on the type and is on the nested "
+                    + "type {}. The contract lists a constructor named for that nested type, "
+                    + "which cannot be a member of {}, so it wrote the nested type's members as "
+                    + "the outer type's; delivered by the nested type", fullName, member, by,
+                    simple);
+            }
+        }
+        return still;
+    }
+
+    /**
+     * Whether the type {@code fullName}, as this tree's own source declares it, has the promised
+     * member: the same comparison a delivery is judged by, on what the type itself writes out
+     * (nothing implicit, inherited or built). False for a text that is not a declaration.
+     */
+    public static boolean declaredOnTheType(ProjectTypes types, String fullName, String member) {
+        if (types == null || fullName == null || member == null) {
+            return false;
+        }
+        String name = normalized(fullName);
+        Optional<ContractMember> parsed =
+            ContractMember.parse(member, name.substring(name.lastIndexOf('.') + 1));
+        return parsed.isPresent()
+            && satisfied(parsed.get(), types.membersOf(name), new ArrayList<>());
     }
 
     /** Which of {@code wanted} the type's own declaration, in the source or as built, lacks. */

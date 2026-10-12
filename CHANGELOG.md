@@ -144,6 +144,21 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **Correct candidates were failed for a constructor their type cannot have.** A design wrote
+  the members of a nested class, its constructors among them, in the contract of the class it
+  is declared in. A constructor is named for its type, so no code can make it a member of
+  another type, and every candidate that wrote the nested class was failed. When a design is
+  accepted, such a contract is now split into the outer type's contract and one for the nested
+  type (`Outer.Nested`), and the architect is told in a note. This is done only where the
+  project's own code decides it; otherwise the contract goes back to the architect with the
+  constructor named. For a task planned before this change, a contract that lists such a
+  constructor is met when the nested type of that name declares the members.
+
+- **A blocked task's question gave no reason when its candidates passed every test.** When
+  the candidates compiled, passed every acceptance test and were failed by a verification
+  objection, the question now quotes the first candidate's objection, and says so when every
+  candidate was failed by that same one.
+
 - **A corrected acceptance test that errors in its own set-up was taken as a failing one.** A
   test sent back to its author and corrected is now held to the standard of a first-written
   test: a correction that errors before any code under test runs is a broken test, not a red
