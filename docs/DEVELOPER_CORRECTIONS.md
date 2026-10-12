@@ -8226,3 +8226,65 @@ counts are on the delivered run). Run with them: `BudgetAnswersTest`, `AStoryHas
   that gave up waiting leaves the acceptance running to its end was not tested.
 - The Console's project settings screen and its contract editor were not opened to see the
   refusal's new wording.
+
+## 85. SwarmCoder on ZeroZ Stack 0.10.0 and the Vidocq server binding (2026-10-12)
+
+**Why.** The owner maintains ZeroZ Stack too, and wanted SwarmCoder as the real-application trial
+of 0.10.0 and of its new, experimental Vidocq server binding. The branch `feat/zeroz-0.10-vidocq`
+was made against a build of 0.10.0 that was not yet published, ran a supervised multi-story build
+for some hours on it, and was merged on the day 0.10.0 was released: a public repository cannot
+depend on a version nobody else can download.
+
+**What changed.**
+
+- `pom.xml`: `zerozstack.version` is 0.10.0.
+- `sc-console/pom.xml`: the server binding is no longer a plain dependency. Two profiles name it:
+  `vidocq` (active unless another is given) brings `zerozstack-server-vidocq`, `helidon` brings
+  `zerozstack-server-helidon`. No exclusions were needed, because no SwarmCoder module depends
+  on Helidon or on the Jakarta EE umbrella API directly.
+- No Java source changed. `Zeroz4jServer.start(port, name)` is the same call under both, the
+  Console's one REST resource (`ClientLogResource`) and `CDI.current()` in
+  `DependencyGraph.bindConsole` work unchanged. None of the three breaking changes in 0.10.0
+  touches the Console's client: it has no busy indicator or failure banner of its own, never
+  calls `Router.onError`, and does not set the keepalive.
+- The build still compiles with release 21. Only running needs Java 25, because the binding's
+  jars are Java 25 class files. `README.md` and `docs/USER_MANUAL.md` say so. `run.bat`, the
+  packaging (`sc-app-<version>.jar` with `libs/` beside it) and the worker images are unchanged.
+
+**Back to Helidon.** `mvn clean package -DskipTests -Phelidon`. Nothing else. With both bindings
+on the classpath the server refuses to start unless `-Dzeroz.server.binding=` picks one, so
+`clean` matters.
+
+**Measured**, one run each unless said, same machine, a new empty home folder, Java 25, time from
+process start to the first answer of the entry page, memory ten seconds after it:
+
+| | start | resident memory | jars in `libs/` |
+|---|---|---|---|
+| Helidon, ZeroZ Stack 0.9.1 | 11.9 s first run, 8.1 s second | 328 MB, 329 MB | 445 (390 MB) |
+| Vidocq, ZeroZ Stack 0.10.0 | 7.6 s | 275 MB | 316 (377 MB) |
+
+**Checked.**
+
+- The whole build packages with tests skipped.
+- `ProjectStoreTest`, `StoreRootReachabilityTest`, `ClientLogEndpointTest`,
+  `ConsoleServicesTest`, `DocumentUploadTest`, `ConsoleProjectPickerBrowserTest` and
+  `FirstRunColdStartTest` pass, and their logs show the Vidocq binding started.
+- The packaged application, started on an empty home: the entry page and the script bundle are
+  served, a real browser opens the live connection, signs in, lists the projects, opens one
+  (the header and the requirements screen follow), and the connection stays open through 40 idle
+  seconds; an address that is no file gets the shell page; a POST to `/api/clientlog` is
+  answered 204 and reaches the log file, a GET gets 405; the MCP endpoint answers
+  `list_projects`.
+
+**Not checked.**
+
+- The full test suite was not run on this branch, and no build was run against a model.
+- File upload was checked by `DocumentUploadTest` only, not from a browser.
+- A long session, many browsers at once, a message near the 4 MB limit, and a port that is
+  already taken were not tried on Vidocq.
+- The `helidon` profile was not built on this branch with 0.10.0. The Helidon figures above are
+  from the build before the change.
+- The resolved JAX-RS API jar is 3.1.0, which the stack's server core brings, while Vidocq's
+  JAX-RS implementation is built against 4.0.0. The one resource SwarmCoder has works with it.
+- Neither container compresses the 5.6 MB script bundle or sends a cache header for it. That was
+  so before and is not changed here.

@@ -11,6 +11,15 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Breaking
 
+- **SwarmCoder now needs Java 25 to run.** It is built on ZeroZ Stack 0.10.0 and its window is
+  served by that release's Vidocq server binding in place of Helidon, and the binding needs
+  Java 25. The build still compiles for Java 21, the start command and `run.bat` are unchanged,
+  and nothing in the settings file or the store changes. To stay on Java 21, build with
+  `mvn clean package -DskipTests -Phelidon`: that serves the window with Helidon as before. Use
+  `clean` when switching, so `sc-app/target/libs` holds one container's jars. ZeroZ Stack marks
+  the Vidocq binding as experimental. The worker container images are not affected: they build
+  the target project, not SwarmCoder.
+
 - **MCP tools that change something now need a secret.** `start_run`, `decide_run`,
   `answer_decision` and every new tool that changes something are refused unless the call
   carries `Authorization: Bearer <secret>`. The secret is made the first time the MCP server

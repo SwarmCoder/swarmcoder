@@ -17,7 +17,8 @@ Welcome to **SwarmCoder**, a highly advanced, multi-agent framework designed to 
 
 To **start** SwarmCoder:
 
-- **Java 21 or newer.** Type `java -version` to check.
+- **Java 25 or newer.** Type `java -version` to check. (A build made with `-Phelidon` runs on
+  Java 21 or newer; see the README.)
 - **Maven**, to build it. Type `mvn -version` to check.
 
 To **build software with it**, two more, and SwarmCoder tells you about both when it starts, so
