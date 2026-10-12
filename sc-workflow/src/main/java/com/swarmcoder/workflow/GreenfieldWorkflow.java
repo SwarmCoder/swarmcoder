@@ -1215,6 +1215,25 @@ public class GreenfieldWorkflow {
                         return transition(run, RunState.FINAL_INTEGRATION, run.designId(),
                             run.taskGraphId());
                     }
+                    // A question answered "repair" (section 84): the task gets that one round
+                    // first. A task it leaves without a chosen candidate stops the run again
+                    // here, rather than being swarmed from the start by executeRun below.
+                    List<Task> unrepaired = giveInstructedRepairRounds(run, "EXECUTING");
+                    if (!unrepaired.isEmpty()) {
+                        String why = "EXECUTING stopped again: the repair round given on an "
+                            + "instruction left " + unrepaired.stream()
+                                .map(task -> "'" + task.title() + "'").toList()
+                            + " without a candidate that passes verification.";
+                        log(why);
+                        if (hasOpenQuestion(run)) {
+                            run.setParkedAt(Instant.now());
+                            run.setParkReason(why);
+                        } else {
+                            parkRun(run, why);
+                        }
+                        persister.save(run); // stays in EXECUTING
+                        return null;
+                    }
                     // Throws EndpointOutage when a task's whole wave never reached a model, so the
                     // swarm is re-dispatched after the pause instead of the repair round being spent
                     // on candidates that produced no evidence. Tasks that already have a winner are
@@ -1263,6 +1282,10 @@ public class GreenfieldWorkflow {
                 case FINAL_INTEGRATION -> {
                     log("Processing FINAL_INTEGRATION...");
                     settleJourneyOwnersOnce(run, "FINAL_INTEGRATION");
+                    // A question answered "repair" (section 84): the named task gets that one
+                    // round first, and the run is merged and verified with whatever the task's
+                    // choice is afterwards - the new one, or the earlier one when none passed.
+                    giveInstructedRepairRounds(run, "FINAL_INTEGRATION");
                     // A failed journey goes back to its author before any worker (section 69).
                     // The author is a model: when its endpoint is down nothing was learned, and
                     // the stage runs again when it answers - said after the integrator has
@@ -1316,8 +1339,11 @@ public class GreenfieldWorkflow {
                     if (!integration.ok()) {
                         log("Integration FAILED — parking run: " + integration.failure());
                         blockStoryOnIntegrationFailure(run, integration);
+                        final Run stopping = run;
                         parkRun(run, "FINAL_INTEGRATION failed on branch "
-                            + integration.integrationBranch() + ":\n\n" + integration.failure());
+                            + integration.integrationBranch() + ":\n\n" + integration.failure(),
+                            question -> offerRepairAfterIntegration(stopping, question,
+                                integration));
                         persister.save(run); // stays in FINAL_INTEGRATION; resumable after the fix
                         return null;
                     }
@@ -1339,12 +1365,29 @@ public class GreenfieldWorkflow {
                     // where the merged tree is verified — a gate can only be judged against the
                     // code that would actually ship.
                     boolean deliveredForJudgment = recordDelivery(run, integration);
+                    // The run's end is written BEFORE the learning step below (section 84).
+                    // recordDelivery has just put the story in REVIEW; the learning step calls
+                    // a model and can take minutes, and for all of that time the store said
+                    // "story back for a verdict" beside "its build is at FINAL_INTEGRATION". A
+                    // supervisor was told a finished delivery's build had not finished, and a
+                    // process that died there would have merged and verified the run again.
+                    Run ended = persister.save(transition(run,
+                        deliveredForJudgment ? RunState.DELIVERED : RunState.ABORTED,
+                        run.designId(), run.taskGraphId()));
                     // Context Ledger (spec §12.4): mine this run's sessions for durable
                     // guidelines (PROPOSED — they never touch prompts until promoted).
                     if (contextLedger != null) {
-                        List<String> learned = contextLedger.extractGuidelines(run.id());
-                        if (!learned.isEmpty()) {
-                            log("Learned " + learned.size() + " PROPOSED guideline(s): " + learned);
+                        try {
+                            List<String> learned = contextLedger.extractGuidelines(run.id());
+                            if (!learned.isEmpty()) {
+                                log("Learned " + learned.size() + " PROPOSED guideline(s): "
+                                    + learned);
+                            }
+                        } catch (RuntimeException e) {
+                            // The run has ended and is saved as ended. A learning step that
+                            // fails (its model is unreachable, say) must not hand the loop an
+                            // exception that puts the run back at this stage.
+                            log("Nothing was learned from this run's sessions: " + e);
                         }
                     }
                     // The build ends here, one way or the other. It does NOT park at a gate of its
@@ -1352,9 +1395,7 @@ public class GreenfieldWorkflow {
                     // belongs to the story, which is already sitting in REVIEW carrying it, with the
                     // buttons that answer it on its own card. The old second gate had no button
                     // anywhere that could open it, which is how 37 runs parked here for a day.
-                    return transition(run,
-                        deliveredForJudgment ? RunState.DELIVERED : RunState.ABORTED,
-                        run.designId(), run.taskGraphId());
+                    return ended;
                 }
                 case APPROVAL -> {
                     // A run persisted by an older build, parked at the gate that no longer exists.
@@ -1999,6 +2040,12 @@ public class GreenfieldWorkflow {
             runs.add(run.id());
             story.setRunIds(runs);
         }
+
+        // What the merged tree's own verification counted, for whoever is asked to accept the
+        // delivery (section 84). Only from the integrator's report: a candidate's own report
+        // counted that candidate alone.
+        run.setAcceptanceTestsPassed(fromIntegration && report.acceptance() != null
+            ? Integer.valueOf(report.acceptance().passed()) : null);
 
         boolean delivered = CriterionEvidence.allDelivered(scope, report);
         if (!delivered && requeueForMissingPiece(run, story)) {
@@ -6303,6 +6350,16 @@ public class GreenfieldWorkflow {
      * they were not.
      */
     private void queueDecision(Run run, String brief) {
+        queueDecision(run, brief, null);
+    }
+
+    /**
+     * @param beforeItIsAsked given the question's id before the question can be read, so that
+     *                        what the question accepts is on record by the time anyone reads it
+     *                        (section 84); also given the id of the same question when it is
+     *                        already open. Null when nothing depends on the id
+     */
+    private void queueDecision(Run run, String brief, Consumer<UUID> beforeItIsAsked) {
         if (replaced(run)) {
             log("Run " + run.id() + " is an earlier build of its story — its question is not "
                 + "raised: " + brief);
@@ -6312,10 +6369,16 @@ public class GreenfieldWorkflow {
             if (open != null && open.state() == DecisionState.PENDING
                     && open.kind() == DecisionKind.BLOCKED_TASK && run.id().equals(open.runId())
                     && java.util.Objects.equals(brief, open.briefMarkdown())) {
+                if (beforeItIsAsked != null) {
+                    beforeItIsAsked.accept(open.id());
+                }
                 return; // the same question of the same run is already open
             }
         }
         UUID decisionId = UUID.randomUUID();
+        if (beforeItIsAsked != null) {
+            beforeItIsAsked.accept(decisionId);
+        }
         artifactStore.append(() -> {
             artifactStore.root().decisions.put(decisionId, new Decision(
                 decisionId, run.id(), DecisionKind.BLOCKED_TASK, brief,
@@ -6355,9 +6418,99 @@ public class GreenfieldWorkflow {
     }
 
     private void parkRun(Run run, String reason) {
+        parkRun(run, reason, null);
+    }
+
+    private void parkRun(Run run, String reason, Consumer<UUID> beforeItIsAsked) {
         run.setParkedAt(Instant.now());
         run.setParkReason(reason);
-        queueDecision(run, reason);
+        queueDecision(run, reason, beforeItIsAsked);
+    }
+
+    /**
+     * A failed final integration that names one task - the task that claims the failed journey,
+     * or the task whose added code was refused - may be answered {@code repair} for that task:
+     * it has a chosen candidate to start a repair round from, and the failure is about what it
+     * built (section 84). A failure that names no task offers none. Marks on other tasks of the
+     * run, left by an earlier stop, are cleared.
+     */
+    private void offerRepairAfterIntegration(Run run, UUID question,
+                                             FinalIntegrator.Result integration) {
+        UUID named = integration.journeyFailure() != null
+            ? integration.journeyFailure().taskId()
+            : integration.ownedRefusal() != null ? integration.ownedRefusal().taskId() : null;
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null) {
+            return;
+        }
+        for (Task task : graph.tasks()) {
+            UUID offer = task.id().equals(named) ? question : null;
+            if (!java.util.Objects.equals(task.repairOfferedBy(), offer)) {
+                task.setRepairOfferedBy(offer);
+                artifactStore.saveTask(task);
+            }
+        }
+    }
+
+    /**
+     * Gives each task of this run whose question was answered {@code repair} the one repair
+     * round that answer asks for, with the answer's text as the workers' instruction (section
+     * 84). Done when the run is taken up again, before the stage itself: at EXECUTING for a
+     * BLOCKED task, at FINAL_INTEGRATION for a task whose chosen candidate failed there.
+     *
+     * <p>The instruction is cleared when its round has ended, so a process that stops in the
+     * middle gives the round again. When the workers' model cannot be reached nothing was
+     * learned, the instruction stays, and the stage runs again when the model answers.
+     *
+     * @return the tasks that were given a round and have no candidate chosen in it
+     */
+    private List<Task> giveInstructedRepairRounds(Run run, String stage) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || !(swarmEngine instanceof SwarmEngineImpl engine)) {
+            return List.of();
+        }
+        List<Task> unrepaired = new ArrayList<>();
+        for (Task task : new ArrayList<>(graph.tasks())) {
+            String instruction = task.repairInstruction();
+            if (instruction == null || instruction.isBlank()) {
+                continue;
+            }
+            log(stage + ": the question about task '" + task.title() + "' was answered "
+                + "\"repair\". Its workers get one more repair round, with this instruction:\n"
+                + instruction);
+            boolean chosen = false;
+            try {
+                chosen = engine.repairOnInstruction(task, run.id(), instruction);
+            } catch (EndpointOutage outage) {
+                throw outage; // nothing was learned: the stage runs again when the endpoint answers
+            } catch (RuntimeException e) {
+                log(stage + ": the repair round given to '" + task.title() + "' on an "
+                    + "instruction did not finish: " + e);
+            }
+            task.setRepairInstruction(null);
+            artifactStore.saveTask(task);
+            if (chosen) {
+                log(stage + ": a repaired candidate of '" + task.title() + "' passed "
+                    + "verification and is the task's choice now.");
+            } else {
+                log(stage + ": no repaired candidate of '" + task.title() + "' was chosen.");
+                unrepaired.add(task);
+            }
+        }
+        return unrepaired;
+    }
+
+    /** Whether this run has a question open that a person or the supervisor can answer. */
+    private boolean hasOpenQuestion(Run run) {
+        for (Decision decision : new ArrayList<>(artifactStore.root().decisions.values())) {
+            if (decision != null && decision.state() == DecisionState.PENDING
+                    && run.id().equals(decision.runId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -8025,3 +8025,204 @@ reason, the appended stop reason). Run with them: `TypeDeliverabilityTest`,
   with the same path below the module folder are not told apart, and a measurement whose tree
   was not listed keeps the old reading.
 - Nothing adds a dependency between tasks or reorders the plan.
+
+## 84. Three gaps a supervisor met: its own settings file, a finished delivery called unfinished, and no way to say "repair this" (live supervised build, 2026-10-12)
+
+An outside supervising model drove a multi-story build over the supervisor connection
+(section 78). Three things stood in its way.
+
+### A. The application's own settings file blocked accepting a delivery
+
+**What was observed.** `add_context_folder` saved the project's reference folders. Later
+`accept_delivery` was refused: "S1 was not accepted, because its code could not be put with the
+rest of the project. the project's repository has changes that are not committed." The only
+uncommitted file was `.swarmcoder/project.yaml`, which the application had written. The refusal
+named no file, and it came after the merge and the whole project's build and test had been made.
+
+**What the application writes into a project's repository.** Two files, both under
+`.swarmcoder/`:
+
+- `project.yaml`, the project's settings (`ProjectConfigLoader.save`, reached from
+  `ControlService.saveProjectConfig`: the Console's project settings and `add_context_folder` /
+  `remove_context_folder`). Never committed.
+- `verify.yaml`, the verification contract. `TargetRepository.register` commits it when a
+  project is registered; the Console's own save of a contract (`BuildContractBridge.save`)
+  writes it and commits nothing.
+
+Nothing else: `.swarmcoder/guidelines/` is only read (a checkout from before rules moved to the
+store), and worktrees, blobs, the store and logs are in the SwarmCoder home folder.
+
+**Decision: the merge ignores exactly these two files; the application does not commit them.**
+Both are read from the operator's own checkout and never from a commit
+(`ProjectConfigLoader.load(project.primaryPath())`, `VerifySpecLoader.loadTrusted`), so
+committing is not needed for either to take effect. The settings file holds folder paths of
+this PC, which do not belong in a project's history, and a commit made on a person's branch
+because a setting was saved is a change they did not ask for. The contract's commit at
+registration stays as it is: it happens once, when the person adds the project.
+
+**What changed.**
+
+- `GitService.APPLICATION_FILES` names the two paths. `uncommittedWork()` lists what differs
+  from the last commit (changed, staged, deleted, conflicting, untracked) without them, and
+  `uncommittedWorkRefusal()` is the sentence, now with up to five file names and "and N more".
+  `fastForwardBranchTo` uses it. Only the two paths are left out: a person's file beside them
+  still blocks.
+- git still refuses the fast-forward itself when the delivered commit holds a file that is
+  untracked or changed in the checkout, so a delivery cannot write over either file.
+- `StoryDelivery.deliver` asks the same question before the merge and its verification, so a
+  refusal for uncommitted work comes at once and not after several minutes.
+
+### B. A finished delivery was described as unfinished
+
+**What was observed.** The supervisor's DELIVERY item said "The application cannot vouch for
+it: its build has not finished" for a story whose run had every task done, every acceptance
+test green on the merged tree and every journey passed. The run's state was FINAL_INTEGRATION.
+
+**Cause.** `GreenfieldWorkflow` puts the story in REVIEW inside the final-integration stage
+(`recordDelivery`), then ran the learning step (`ContextLedger.extractGuidelines`, a model
+call that can take minutes), and only then returned the run as DELIVERED for the loop to save.
+For all of that time the store held "story back for a verdict" beside "its build is at
+FINAL_INTEGRATION". Every durable write wakes `wait_for_attention`, so the supervisor was told
+of the delivery inside that window. `UnattendedAcceptance.judge` read any state but DELIVERED
+as "its build has not finished".
+
+**The pilot's "proved finished" test would have refused this story too**, for as long as the
+window lasted: it wrote "Left for you rather than accepted overnight, because its build has not
+finished." on the card and accepted the story on a later tick.
+
+**What changed.**
+
+1. *The run's end is written first.* The stage saves the run as DELIVERED (or ABORTED) right
+   after `recordDelivery` and before the learning step. A failure in the learning step is
+   logged and no longer thrown to the loop, where it would have put the saved run back at
+   FINAL_INTEGRATION.
+2. *The test.* `UnattendedAcceptance.hasRecordedItsDelivery`: a story in REVIEW is finished
+   when its run is DELIVERED, at FINAL_INTEGRATION (the stage that puts it in REVIEW, and the
+   only place that does) or at the retired APPROVAL gate. A run that is ABORTED or ABANDONED
+   says "its build was ended"; an earlier stage still says "has not finished".
+3. *The sentence.* The run now carries what its last final integration counted:
+   `acceptanceTestsPassed` (from the integrator's own report of the merged tree),
+   `journeysMade` and `journeysFailed` (`FinalIntegrator.makeJourneys`). `SupervisorDesk.
+   deliveryFacts` adds to the evidence, each part only when it is on record: the delivered
+   commit, the acceptance tests that passed on the merged tree, the journeys made in a browser
+   and how many failed, and the cloud input and output tokens of the build (the run's
+   `CloudSpendRecord`).
+
+**Why accepting took more than two minutes.** `accept_delivery` is one synchronous call:
+`StoryDelivery.deliver` merges the story's commit with the delivery branch in a separate
+worktree, runs the project's whole verification contract on the merged tree in a container
+(compile, acceptance tests, the project's own tests), and only then fast-forwards the branch.
+Nearly all the time is that build and test. This was left as it is. The tool's description
+now says so and says what to read when no answer arrives; the answer itself says what was done
+and how many seconds it took, and a refusal that came after the build says that too.
+
+### C. A stopped build could only be run again or sent back
+
+**What was observed.** Twice a build stopped on something its workers had to change (a screen,
+a journey). `retry` runs the stage again and stops the same way; `send_back` designs and builds
+the whole story again. The right act, "one more repair round for this task, told this", did
+not exist.
+
+**Where one more repair round is sound.**
+
+- *A task BLOCKED after its swarm and repair round* (zero survivors, or nothing good enough to
+  choose), when at least one of its candidates has a branch and a verification report. The
+  round is the ordinary repair round, seeded from the best of those candidates.
+- *A failed final integration that names one task*: the task that claims the failed journey
+  (`FinalIntegrator.JourneyFailure`) or whose added code was refused (`OwnedRefusal`). The task
+  has a chosen candidate; the round is the one `repairAfterFinalIntegration` already gives.
+
+**Where it is not, and is not offered.**
+
+- A task stopped for a fault of the plan: its own test needs a task not yet run
+  (`TestOfATaskNotYetRun`), it wrote a file of a task not yet run (`FileOfATaskNotYetRun`), or
+  every candidate failed in a file outside the write set that could not be widened
+  (`RepairCannotHelp`). The three call sites say so with a parameter; no text is read.
+- A task with no candidate to start from.
+- A stop that is not one task's: winners that do not merge, a wave whose tree does not compile,
+  a red check, a failed integration that names no task, a quality gate, a spending limit.
+
+**What was built.**
+
+1. *The mark.* `Task.repairOfferedBy` holds the id of the open question that may be answered
+   `repair` for that task. `SwarmEngineImpl.queueBlockedDecision` sets it (new parameter
+   `repairable`), before the question can be read; `GreenfieldWorkflow.
+   offerRepairAfterIntegration` sets it for a failed integration and clears older marks.
+2. *The answer.* `DecisionAnswers.optionsFor(store, decision)` adds `repair` when the question
+   is open, its run is stopped, a task carries its mark and every such task has a round left.
+   `answerAndResume` refuses `repair` with the reason when it is not offered and when the text
+   is empty, before anything is recorded. Otherwise it writes the text on each task
+   (`Task.repairInstruction`), records "Answered by the (actor) (repair): (text)" and hands the
+   run back. `next_attention`, `decision_text` and `SupervisorDesk.decisionOptions` list it with
+   the task's title and "Round n of the m". The Console's answer path (`answerFromConsole`)
+   takes text whose first word is `repair` as this answer where it is offered, as it does
+   `extend` and `stop` for a spending limit; elsewhere such text is a plain answer.
+3. *The round.* `GreenfieldWorkflow.giveInstructedRepairRounds` runs at the start of EXECUTING
+   and of FINAL_INTEGRATION when the run is taken up again: each task with an instruction gets
+   `SwarmEngineImpl.repairOnInstruction`, then the instruction is cleared. The workers read the
+   instruction before the failure evidence (`InstructedRepair.brief`); for a failed integration
+   the evidence is the question the run stopped on. Candidates are verified and chosen as in
+   any repair round. At EXECUTING a task left without a chosen candidate stops the run again at
+   once with its own new question, instead of being swarmed from the start. At
+   FINAL_INTEGRATION the run is merged and verified with the task's choice, new or earlier.
+4. *Counted and capped.* `Task.instructedRepairRounds`, counted when a round starts. The limit
+   is `-Dswarmcoder.repair.instructedRounds` (default 1, at most 4) read by
+   `InstructedRepair.limit()`. At the limit the option is not listed and the answer is refused
+   with the count and the setting's name.
+5. *Branches.* A repair worker's index names its branch. An instructed round takes attempt
+   numbers 2n and 2n+1 of each seed (`InstructedRepair.firstAttemptOf`), after the ordinary
+   round's 0 and 1, so it never takes over the branch of an earlier repair that is itself a
+   seed of the round. Ten attempts per seed is the scheme's room, hence at most four rounds.
+6. *The record.* The supervisor's answer is in its decision log as before
+   (`ANSWERED_RUN_QUESTION`, with the token, the text and what happened); a person's is on the
+   question. No enum constant was added.
+
+**Stored differently.** Fields were added, no constant: `Run.acceptanceTestsPassed`,
+`journeysMade`, `journeysFailed` (null on a run stored before), `Task.repairOfferedBy`,
+`repairInstruction` (null) and `instructedRepairRounds` (0). `Decision` is unchanged.
+
+**Tests.** New: `AStoppedBuildCanBeAnsweredRepairTest` (sc-console: offered and listed, text
+required, the instruction on the task, the recorded answer and log entry, not offered without
+the engine's mark, the cap and the setting, the same answer on screen),
+`ATaskGetsOneMoreRepairRoundOnAnInstructionTest` (sc-swarm, real engine with scripted workers:
+a blocked task's question is marked, the instructed round's workers get the instruction and
+indices of their own, a survivor is chosen, the round is counted). Extended:
+`DeliveryBranchTest` (the two files do not block, a person's file beside them does, five names
+and a count), `UnattendedRunningTest` (REVIEW with the run at FINAL_INTEGRATION is finished;
+an ended run is not), `SupervisorDeskTest` (the delivery's evidence from what was counted;
+nothing claimed for a run with no counts), `FinalIntegrationDecidesTheStoryOutcomeTest` (the
+counts are on the delivered run). Run with them: `BudgetAnswersTest`, `AStoryHasOneBuildTest`,
+`AutonomousModeTest`, `BacklogServiceTest`, `SupervisorMcpToolsTest`, `DeliveryHandbackTest`,
+`ParkWithdrawnOnResumeTest`, `OnlyAStorysCurrentBuildIsDrivenTest`, `RunCarriesWarningsTest`,
+`ATaskWaitsWhileADependencyIsBlockedTest`, `RepairHasSafetyStopsTest`,
+`NoRepairRoundWhenTheTasksOwnTestNeedsATaskNotYetRunTest`.
+
+**Not checked:**
+
+- Nothing here was run live or against a model.
+- No test drives `GreenfieldWorkflow.giveInstructedRepairRounds`, the stop that follows it at
+  EXECUTING, or `offerRepairAfterIntegration`: the tests that drive the workflow use a stand-in
+  for the swarm engine, and these need the real one. The answer and the round are each tested;
+  the hand-over between them is not.
+- The repair round after a failed final integration (`repairOnInstruction` for a task that has
+  a chosen candidate) is exercised by no test; it goes through `repairAfterFinalIntegration`,
+  which had none before either.
+- That the three plan-fault stops raise a question without the mark is by a parameter at their
+  call sites; no test reaches those stops on the engine.
+- A failed final integration that names no task (an acceptance test red on the merged tree, a
+  journey delivered with an earlier story) offers no repair. Naming the task from the failing
+  test's owner is not done.
+- The supervisor cannot choose the task; it is the one the question names.
+- The cap is a `-D` setting like the repair round's ceiling, not a line of the settings file,
+  and the Console does not show it.
+- A round interrupted by an unreachable model, or by the process ending, is given again when
+  the run is next taken up and is counted twice.
+- The seeds of a blocked task's round are its candidates' branches. If those branches are gone
+  the workers cannot start and the task is BLOCKED again; not tested.
+- The order "run saved as ended, then the learning step" has no test of its own.
+- Opening a store written before the new fields. EclipseStore maps added fields on its own and
+  both classes have gained fields this way before; no old store was opened in a test.
+- `accept_delivery` still answers only when the merge and the build are done. Whether a client
+  that gave up waiting leaves the acceptance running to its end was not tested.
+- The Console's project settings screen and its contract editor were not opened to see the
+  refusal's new wording.

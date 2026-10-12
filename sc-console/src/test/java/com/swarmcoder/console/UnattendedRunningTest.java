@@ -115,6 +115,42 @@ class UnattendedRunningTest {
         }
     }
 
+    /**
+     * Section 84: a story is put back for a verdict by the final integration, and its run is
+     * written as ended a moment (once: minutes) later. In between the story is finished and
+     * proved, and "its build has not finished" was said of it.
+     */
+    @Test
+    void aStoryBackForAVerdictIsFinishedWhileItsBuildIsStillWritingItsOwnEnd(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            Story story = delivered(store, "S6", "Return a book");
+            UUID runId = story.runIds().get(0);
+            store.append(() -> {
+                Run run = store.root().runs.get(runId);
+                store.root().runs.put(runId, run.withState(RunState.FINAL_INTEGRATION));
+                return null;
+            }).get();
+            assertThat(UnattendedAcceptance.judge(store, story).acceptable()).isTrue();
+        }
+    }
+
+    @Test
+    void aStoryWhoseBuildWasEndedIsNotAccepted(@TempDir Path dir) throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            Story story = delivered(store, "S7", "Renew a loan");
+            UUID runId = story.runIds().get(0);
+            store.append(() -> {
+                Run run = store.root().runs.get(runId);
+                store.root().runs.put(runId, run.withState(RunState.ABORTED));
+                return null;
+            }).get();
+            UnattendedAcceptance.Verdict verdict = UnattendedAcceptance.judge(store, story);
+            assertThat(verdict.acceptable()).isFalse();
+            assertThat(verdict.reason()).contains("was ended");
+        }
+    }
+
     @Test
     void aStoryWithNoFinishedCodeIsNotAccepted(@TempDir Path dir) throws Exception {
         try (ArtifactStore store = new ArtifactStore(dir)) {

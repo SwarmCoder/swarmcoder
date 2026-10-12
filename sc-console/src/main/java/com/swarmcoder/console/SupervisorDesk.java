@@ -351,7 +351,7 @@ public final class SupervisorDesk implements SupervisorService {
         if (cut) {
             evidence.append(" Whole question: decision_text decision_id=").append(decision.id());
         }
-        List<String> options = DecisionAnswers.optionsFor(decision.kind()).stream()
+        List<String> options = DecisionAnswers.optionsFor(store, decision).stream()
             .map(option -> option.token() + ": " + option.description()).toList();
         return new AttentionItem("RUN_QUESTION", project, story == null ? "" : name(story),
             question, options, evidence.toString(),
@@ -370,6 +370,8 @@ public final class SupervisorDesk implements SupervisorService {
                 .append('.');
         }
         List<UUID> runs = story.runIds();
+        evidence.append(deliveryFacts(store, story,
+            runs.isEmpty() ? null : store.root().runs.get(runs.get(runs.size() - 1))));
         if (!runs.isEmpty()) {
             evidence.append(" To read the code: run_diff run_id=").append(runs.get(runs.size() - 1));
         }
@@ -383,6 +385,45 @@ public final class SupervisorDesk implements SupervisorService {
             evidence.toString(),
             "accept_delivery story=" + story.key() + "  |  send_back story=" + story.key()
                 + " note=<what was wrong>");
+    }
+
+    /**
+     * What was measured about a delivery, each part only when it is on record (section 84): the
+     * commit, the acceptance tests that passed on the merged tree, the journeys made in a
+     * browser and how many failed, and the cloud tokens of the build. Nothing is worked out
+     * here and nothing is said that was not counted when it happened.
+     */
+    static String deliveryFacts(ArtifactStore store, Story story, Run run) {
+        StringBuilder facts = new StringBuilder();
+        String commit = story.integrationCommit() != null ? story.integrationCommit()
+            : story.deliveredCommit();
+        if (commit != null) {
+            facts.append(" Delivered commit ")
+                .append(commit.length() > 8 ? commit.substring(0, 8) : commit).append('.');
+        }
+        if (run == null) {
+            return facts.toString();
+        }
+        if (run.acceptanceTestsPassed() != null) {
+            facts.append(' ').append(run.acceptanceTestsPassed())
+                .append(" acceptance test(s) passed on the merged tree.");
+        }
+        if (run.journeysMade() != null) {
+            if (run.journeysMade() == 0) {
+                facts.append(" No journey was made in a browser: the merged tree holds none.");
+            } else {
+                facts.append(' ').append(run.journeysMade())
+                    .append(" journey(s) were made in a browser, ")
+                    .append(run.journeysFailed() == null ? 0 : run.journeysFailed())
+                    .append(" failed.");
+            }
+        }
+        com.swarmcoder.domain.CloudSpendRecord spend = store.root().cloudSpend().get(run.id());
+        if (spend != null) {
+            facts.append(" Cloud tokens of this build: ").append(spend.input()).append(" in, ")
+                .append(spend.output()).append(" out.");
+        }
+        return facts.toString();
     }
 
     /**
@@ -877,7 +918,23 @@ public final class SupervisorDesk implements SupervisorService {
         }
         ConsoleContext context = ConsoleContext.get();
         UnattendedAcceptance.Verdict verdict = UnattendedAcceptance.judge(context.store(), found);
+        long started = System.currentTimeMillis();
         String result = new BacklogServiceImpl().acceptStoryAs(found.id().toString(), ACTOR);
+        long seconds = (System.currentTimeMillis() - started) / 1_000;
+        if (!failed(result) && nn(result).isBlank()) {
+            // Said in the answer because the call is one long piece of work with nothing to
+            // watch (section 84): the merge and the whole project's build and test come first,
+            // and only then is the delivery branch moved.
+            result = !context.deliversToBranch() ? "Accepted."
+                : "Accepted, after " + seconds + " s. Its code was merged with the delivery "
+                    + "branch on a separate copy, the whole project was built and tested there "
+                    + "with the project's own verification contract, and only then was the "
+                    + "branch moved onto the result. Nearly all of the time is that build and "
+                    + "test.";
+        } else if (failed(result) && seconds >= 10) {
+            result = result + " (Refused after " + seconds + " s: the merge and the build and "
+                + "test of the merged project had already been made.)";
+        }
         if (!failed(result)) {
             record(AutonomousDecisionKind.ACCEPTED_DELIVERY, name(found),
                 "Is this delivery what was asked for?",
@@ -914,8 +971,10 @@ public final class SupervisorDesk implements SupervisorService {
     @Override
     public List<String> decisionOptions(String decisionId) {
         Decision decision = decision(decisionId);
-        return decision == null ? List.of() : DecisionAnswers.optionsFor(decision.kind()).stream()
-            .map(option -> option.token() + ": " + option.description()).toList();
+        ConsoleContext context = ConsoleContext.get();
+        return decision == null || context == null ? List.of()
+            : DecisionAnswers.optionsFor(context.store(), decision).stream()
+                .map(option -> option.token() + ": " + option.description()).toList();
     }
 
     @Override

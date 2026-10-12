@@ -21,6 +21,16 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **The answer `repair` for a stopped build.** A question from a build that stopped on one
+  task - a task blocked after its swarm and repair round, or a final integration that failed on
+  one task's journey or added code - now also takes `repair` with a required text. The task's
+  workers get one more repair round, started from the candidates the task already has, with the
+  text as their instruction; then the stage runs again. It is listed in `next_attention` and
+  `decision_text` with the task's name, and the Console's answer box takes text that begins
+  with `repair` the same way. It is not offered where a repair round could not succeed, such as
+  a stop for a fault of the plan. One such round per task per build unless
+  `-Dswarmcoder.repair.instructedRounds` says otherwise (at most 4).
+
 - **Supervisor tools for a project's reference folders.** `list_context_folders`,
   `add_context_folder` and `remove_context_folder` let a supervising model give a project the
   source of the libraries it builds on, as the Console's project settings do. The two that change
@@ -113,6 +123,21 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   back.
 
 ### Fixed
+
+- **The application's own settings file no longer blocks accepting a delivery.** Saving a
+  project's settings or reference folders writes `.swarmcoder/project.yaml` into the project's
+  repository, and accepting was then refused for "changes that are not committed". That file
+  and `.swarmcoder/verify.yaml` are the application's own and are no longer counted. A person's
+  uncommitted work still blocks, the refusal now names up to five of the files, and it comes
+  before the merge and the build instead of after them.
+
+- **A finished delivery is no longer described as unfinished.** A story came back for a verdict
+  a moment before its build was written as ended, and for minutes when the learning step that
+  followed was slow; in that time the supervisor was told "its build has not finished" and
+  unattended running left the story for a person. The build's end is now written first, a story
+  back for a verdict counts as finished while its build is at that last stage, and the delivery
+  is described by what was counted: the commit, the acceptance tests that passed on the merged
+  tree, the journeys made in a browser and how many failed, and the build's cloud tokens.
 
 - **A test owned by a task that could never compile it.** A plan gave an acceptance check to a
   task whose test imported types a later task writes. Every candidate compiled, the task's
@@ -284,6 +309,10 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   by step.
 
 ### Changed
+
+- **`accept_delivery` says what it did and how long it took.** Accepting merges the story with
+  the delivery branch on a copy and builds and tests the whole project before it answers, which
+  takes minutes. The tool's description says so, and its answer names the steps and the seconds.
 
 - **The architect hands what it found to the workers.** While it designs, the architect keeps
   the facts a worker will need about how the project and its framework do things (which

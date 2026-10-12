@@ -92,8 +92,9 @@ final class UnattendedAcceptance {
         if (run == null) {
             return Verdict.no("the build that produced it cannot be found any more");
         }
-        if (run.state() != RunState.DELIVERED) {
-            return Verdict.no("its build has not finished");
+        if (!hasRecordedItsDelivery(run.state())) {
+            return Verdict.no(run.state() == RunState.ABORTED || run.state() == RunState.ABANDONED
+                ? "its build was ended" : "its build has not finished");
         }
         if (!run.wasEverPlanned()) {
             return Verdict.no("its build finished without ever planning any work, so it produced "
@@ -108,6 +109,22 @@ final class UnattendedAcceptance {
             return Verdict.no("its build stopped to ask you something: " + question);
         }
         return Verdict.YES;
+    }
+
+    /**
+     * Whether a run at this stage can be the build that put its story back for a verdict.
+     *
+     * <p>A story is put in REVIEW in one place: the final integration, after the merged tree
+     * passed every check the story promised. The run itself is written DELIVERED a moment
+     * later, and used to be written minutes later, after a learning step that calls a model
+     * (section 84). Reading "FINAL_INTEGRATION" as "not finished" refused a story whose every
+     * test and journey had passed and wrote "its build has not finished" on its card. The story
+     * being in REVIEW is the proof; the run only has to be at the stage that records it, or past
+     * it. APPROVAL is the retired gate that followed that stage in older stores.
+     */
+    static boolean hasRecordedItsDelivery(RunState state) {
+        return state == RunState.DELIVERED || state == RunState.FINAL_INTEGRATION
+            || state == RunState.APPROVAL;
     }
 
     /** The first unanswered question this run raised, or null. */

@@ -194,6 +194,21 @@ public class Task {
      * list is the record that the reservation grew. Null until it did.
      */
     private List<String> takenBeyondPlan;
+    /**
+     * The open question of this task's run that may be answered {@code repair} for this task
+     * (section 84): a question raised where one more repair round, told what to change, can
+     * succeed. Null when no such question is open - in particular when the task stopped for a
+     * fault of the plan. See {@link InstructedRepair}.
+     */
+    private UUID repairOfferedBy;
+    /**
+     * What a person or the supervisor told this task's repair workers when a question was
+     * answered {@code repair}; the engine gives the task one repair round with it when the run
+     * is taken up again, then clears it. Null when nothing is waiting.
+     */
+    private String repairInstruction;
+    /** Repair rounds this task was given on such an instruction, in this run. */
+    private int instructedRepairRounds;
 
     public Task() {}
 
@@ -346,6 +361,22 @@ public class Task {
     public String getJourneyReviewNote() { return journeyReviewNote; }
     public void setJourneyReviewNote(String journeyReviewNote) {
         this.journeyReviewNote = journeyReviewNote;
+    }
+
+    public UUID repairOfferedBy() { return repairOfferedBy; }
+    public UUID getRepairOfferedBy() { return repairOfferedBy; }
+    public void setRepairOfferedBy(UUID repairOfferedBy) { this.repairOfferedBy = repairOfferedBy; }
+
+    public String repairInstruction() { return repairInstruction; }
+    public String getRepairInstruction() { return repairInstruction; }
+    public void setRepairInstruction(String repairInstruction) {
+        this.repairInstruction = repairInstruction;
+    }
+
+    public int instructedRepairRounds() { return instructedRepairRounds; }
+    public int getInstructedRepairRounds() { return instructedRepairRounds; }
+    public void setInstructedRepairRounds(int instructedRepairRounds) {
+        this.instructedRepairRounds = instructedRepairRounds;
     }
 
     public boolean integrationRepairAttempted() { return integrationRepairAttempted; }
