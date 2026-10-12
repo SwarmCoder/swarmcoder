@@ -219,6 +219,40 @@ public record ContractMember(List<String> annotations, boolean method, String na
             ? List.copyOf(annotations) : List.of();
     }
 
+    private static final Pattern CONSTANT_NAME = Pattern.compile("[A-Z][A-Z0-9_]*");
+
+    /**
+     * The type a contract entry is a constructor of, when that is not the contract's own type;
+     * empty for everything else.
+     *
+     * <p>Live supervised build, 2026-10-12: the contract of {@code BookQueries} listed
+     * {@code public Search()} and {@code public Search(BookSearchRequest request)}. A constructor
+     * is named for its type, so those are constructors of a type {@code Search} and can never be
+     * members of {@code BookQueries}. Eight candidates that wrote the nested class
+     * {@code BookQueries.Search} were failed for a member no code can have.
+     *
+     * <p>Read from the declaration alone: parentheses, no return type, and a name that is not the
+     * type's own simple name and is written as a type name is (upper-case first, not a constant's
+     * all-capitals). A lower-case name without a return type stays what it has always been read
+     * as, a method written loosely.
+     */
+    public static Optional<String> constructorOfAnotherType(String promised,
+                                                            String typeSimpleName) {
+        if (typeSimpleName == null || typeSimpleName.isBlank()) {
+            return Optional.empty();
+        }
+        Optional<ContractMember> parsed = parse(promised, typeSimpleName);
+        if (parsed.isEmpty() || !parsed.get().method() || !parsed.get().type().isEmpty()) {
+            return Optional.empty();
+        }
+        String name = parsed.get().name();
+        if (name.equals(typeSimpleName.strip()) || !Character.isUpperCase(name.charAt(0))
+                || CONSTANT_NAME.matcher(name).matches()) {
+            return Optional.empty();
+        }
+        return Optional.of(name);
+    }
+
     /** True when {@code promised} reads as a declaration. */
     public static boolean isDeclaration(String promised) {
         return parse(promised).isPresent();

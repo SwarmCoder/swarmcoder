@@ -43,7 +43,8 @@ final class DesignFactChecks {
      * name the project already has, a contract in a package no task can write, a member naming a
      * type that does not exist, a contract with no package, a member that is not a declaration,
      * an annotation written where its own declaration says it cannot be
-     * ({@link ContractAnnotationPlaces}, 2026-10-11).
+     * ({@link ContractAnnotationPlaces}, 2026-10-11), a constructor of another type that the
+     * project's tree does not place ({@link ContractNestedTypes}, 2026-10-12).
      * An annotation a contract states on a type the project already has, which the real
      * declaration lacks, comes first ({@link ContractsMatchExistingTypes}, harness run 78).
      *
@@ -100,6 +101,13 @@ final class DesignFactChecks {
             log.accept("DESIGN_REVIEW: " + misplaced.size() + " contract annotation(s) are "
                 + "written where they cannot be, and cannot be on the type either: " + misplaced);
             objections.addAll(misplaced);
+        }
+        List<String> constructors = ContractNestedTypes.check(design, checkout).objections();
+        if (!constructors.isEmpty()) {
+            log.accept("DESIGN_REVIEW: " + constructors.size() + " contract(s) list the "
+                + "constructor of another type, and the project does not say where that type "
+                + "and its members belong: " + constructors);
+            objections.addAll(constructors);
         }
         return objections;
     }

@@ -183,6 +183,24 @@ public final class ProjectTypes {
         return Set.copyOf(byFullName.keySet());
     }
 
+    /**
+     * The simple names of the types declared directly inside {@code fullName}, in reading order;
+     * empty when the tree does not declare it or it declares none.
+     */
+    public List<String> nestedTypesOf(String fullName) {
+        List<String> nested = new ArrayList<>();
+        if (fullName == null) {
+            return nested;
+        }
+        String prefix = normalized(fullName) + ".";
+        for (String name : nestedByTrueName.keySet()) {
+            if (name.startsWith(prefix) && name.indexOf('.', prefix.length()) < 0) {
+                nested.add(name.substring(prefix.length()));
+            }
+        }
+        return nested;
+    }
+
     /** The file declaring {@code fullName}, or null when the tree does not declare it. */
     public Path fileOf(String fullName) {
         if (fullName == null) {

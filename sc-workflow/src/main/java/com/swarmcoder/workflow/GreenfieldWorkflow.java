@@ -6584,8 +6584,13 @@ public class GreenfieldWorkflow {
 
             @Override
             public List<String> designNotes(DesignDocument draft) {
-                return contractAnnotationPlaces(
-                    withoutContractsForExistingLibraryTypes(draft, line -> { })).notes();
+                DesignDocument design =
+                    withoutContractsForExistingLibraryTypes(draft, line -> { });
+                ContractNestedTypes.Outcome nested =
+                    ContractNestedTypes.check(design, ProjectTypes.of(repoPath));
+                List<String> notes = new ArrayList<>(nested.notes());
+                notes.addAll(contractAnnotationPlaces(nested.applyTo(design)).notes());
+                return notes;
             }
 
             @Override
@@ -6664,6 +6669,16 @@ public class GreenfieldWorkflow {
 
     private DesignDocument withAnnotationsWhereTheyCanBe(DesignDocument design,
                                                          Consumer<String> say) {
+        // First a nested type's members out of its outer type's contract (live build of
+        // 2026-10-12), so that an annotation is judged against the type its member is on.
+        ContractNestedTypes.Outcome nested =
+            ContractNestedTypes.check(design, ProjectTypes.of(repoPath));
+        if (nested.changed()) {
+            say.accept("Design: " + nested.notes().size() + " contract(s) listed the "
+                + "constructor of a type declared inside theirs; that type has a contract of "
+                + "its own now: " + nested.notes());
+            design = nested.applyTo(design);
+        }
         ContractAnnotationPlaces.Outcome outcome = contractAnnotationPlaces(design);
         if (!outcome.changed()) {
             return design;
