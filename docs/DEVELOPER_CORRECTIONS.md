@@ -8231,9 +8231,9 @@ counts are on the delivered run). Run with them: `BudgetAnswersTest`, `AStoryHas
 
 **Why.** The owner maintains ZeroZ Stack too, and wanted SwarmCoder as the real-application trial
 of 0.10.0 and of its new, experimental Vidocq server binding. The branch `feat/zeroz-0.10-vidocq`
-was made against a build of 0.10.0 that was not yet published and **waits for the 0.10.0 release**
-before it is merged or pushed: a public repository cannot depend on a version nobody else can
-download.
+was made against a build of 0.10.0 that was not yet published, ran a supervised multi-story build
+for some hours on it, and was merged on the day 0.10.0 was released: a public repository cannot
+depend on a version nobody else can download.
 
 **What changed.**
 
