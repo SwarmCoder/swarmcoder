@@ -209,6 +209,21 @@ public class Task {
     private String repairInstruction;
     /** Repair rounds this task was given on such an instruction, in this run. */
     private int instructedRepairRounds;
+    /**
+     * The open question of this task's run that may be answered {@code retest} for this task
+     * though it does not offer a repair round (section 86): a stop on the task's own acceptance
+     * test, raised by the workflow. Null otherwise; a question that carries
+     * {@link #repairOfferedBy} for the task needs no second mark. See {@link InstructedRetest}.
+     */
+    private UUID retestOfferedBy;
+    /**
+     * What a person or the supervisor told the author of this task's acceptance test when a
+     * question was answered {@code retest}; the workflow sends the test back with it when the
+     * run is taken up again, then clears it. Null when nothing is waiting.
+     */
+    private String retestInstruction;
+    /** Times this task's acceptance test went back to its author on such an instruction, in this run. */
+    private int instructedRetests;
 
     public Task() {}
 
@@ -371,6 +386,22 @@ public class Task {
     public String getRepairInstruction() { return repairInstruction; }
     public void setRepairInstruction(String repairInstruction) {
         this.repairInstruction = repairInstruction;
+    }
+
+    public UUID retestOfferedBy() { return retestOfferedBy; }
+    public UUID getRetestOfferedBy() { return retestOfferedBy; }
+    public void setRetestOfferedBy(UUID retestOfferedBy) { this.retestOfferedBy = retestOfferedBy; }
+
+    public String retestInstruction() { return retestInstruction; }
+    public String getRetestInstruction() { return retestInstruction; }
+    public void setRetestInstruction(String retestInstruction) {
+        this.retestInstruction = retestInstruction;
+    }
+
+    public int instructedRetests() { return instructedRetests; }
+    public int getInstructedRetests() { return instructedRetests; }
+    public void setInstructedRetests(int instructedRetests) {
+        this.instructedRetests = instructedRetests;
     }
 
     public int instructedRepairRounds() { return instructedRepairRounds; }

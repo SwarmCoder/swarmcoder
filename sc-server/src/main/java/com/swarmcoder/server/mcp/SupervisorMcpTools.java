@@ -280,11 +280,16 @@ final class SupervisorMcpTools {
                 + "says whether the build was restarted. Where the question lists the answer "
                 + "repair, that answer gives the named task's workers one more repair round "
                 + "with text as their instruction, before the stage runs again; it is counted "
-                + "per task and capped.",
+                + "per task and capped. Where it lists the answer retest, that answer sends "
+                + "the named task's acceptance test back to its author with text as the "
+                + "instruction: the correction is checked like a first-written test, the task "
+                + "is verified again from the candidates it has and built again only if none "
+                + "passes. Use retest when the test is what is wrong - workers may not change "
+                + "a test, so repair cannot. Also counted per task and capped.",
             SwarmMcpTools.schema("""
                 {"decision_id": {"type":"string"},
                  "answer": {"type":"string","description":"One of the answer tokens the question lists."},
-                 "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change."}}""",
+                 "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change. Required for retest: what is wrong with the acceptance test and what its author must change."}}""",
                 "decision_id", "answer"),
             args -> done(supervisor.answerDecision(SwarmMcpTools.str(args, "decision_id"),
                 SwarmMcpTools.str(args, "answer"), SwarmMcpTools.str(args, "text")), "Recorded.")));

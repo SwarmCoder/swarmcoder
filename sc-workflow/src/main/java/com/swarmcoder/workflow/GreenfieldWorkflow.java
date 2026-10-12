@@ -58,6 +58,7 @@ import com.swarmcoder.domain.Task;
 import com.swarmcoder.domain.TaskEdge;
 import com.swarmcoder.domain.TaskGraph;
 import com.swarmcoder.domain.TaskState;
+import com.swarmcoder.domain.InstructedRetest;
 import com.swarmcoder.domain.TestResults;
 import com.swarmcoder.domain.UserFacingWording;
 import com.swarmcoder.git.AcceptanceOverlay;
@@ -1218,6 +1219,20 @@ public class GreenfieldWorkflow {
                     // A question answered "repair" (section 84): the task gets that one round
                     // first. A task it leaves without a chosen candidate stops the run again
                     // here, rather than being swarmed from the start by executeRun below.
+                    // A question answered "retest" (section 86): the task's acceptance test
+                    // goes back to its author with the answer's text first, and the task is
+                    // verified again from the candidates it has. A test that cannot be put
+                    // right stops the run again here.
+                    RetestStop retestStop = giveInstructedRetests(run);
+                    if (retestStop != null) {
+                        String park = retestStop.brief() + OperatorCorrectedTests.whereToCorrect(run);
+                        log("EXECUTING - parking run: " + park);
+                        final Run retesting = run;
+                        parkRun(run, park,
+                            question -> offerRetest(retesting, retestStop.taskId(), question));
+                        persister.save(run); // stays in EXECUTING
+                        return null;
+                    }
                     List<Task> unrepaired = giveInstructedRepairRounds(run, "EXECUTING");
                     if (!unrepaired.isEmpty()) {
                         String why = "EXECUTING stopped again: the repair round given on an "
@@ -1271,7 +1286,11 @@ public class GreenfieldWorkflow {
                         if (park != null) {
                             park += OperatorCorrectedTests.whereToCorrect(run);
                             log("EXECUTING - parking run: " + park);
-                            parkRun(run, park);
+                            // The stop is about this task's own test, so its question takes
+                            // the answer "retest" (section 86).
+                            final Run faulted = run;
+                            parkRun(run, park,
+                                question -> offerRetest(faulted, fault.taskId(), question));
                             persister.save(run); // stays in EXECUTING; resumable after the fix
                             return null;
                         }
@@ -3052,7 +3071,7 @@ public class GreenfieldWorkflow {
             }
             problem = "the test author could not be reached: " + outage.getMessage();
         }
-        if (review.settled) {
+        if (review.settled || review.stopped) {
             return problem;
         }
         TaskGraph graph = run.taskGraphId() == null ? null
@@ -3083,6 +3102,12 @@ public class GreenfieldWorkflow {
         boolean corrected;
         /** True once a correction is committed and the engine has been handed the task back. */
         boolean settled;
+        /**
+         * True when the correction was found broken - it errors before any code under test
+         * runs - and could not be put right (section 86): the run stops with that reason, and
+         * no repair round is started on the test as first written either.
+         */
+        boolean stopped;
     }
 
     /** Writes what the review of a suspect test came to onto the task, for the run report. */
@@ -3154,11 +3179,14 @@ public class GreenfieldWorkflow {
         Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
         String redcheckBranch = "swarm/testrepair-redcheck/" + run.id();
         Path redcheckWorktree = WORKTREE_ROOT.resolve("testrepair-redcheck-" + run.id());
+        // True once the correction itself went back to its author for erroring before any
+        // code under test runs (section 86). It goes back once, not once per check.
+        boolean askedAgain = false;
+        final DesignDocument design = artifactStore.root().designs.get(run.designId());
         try {
             removeTree(worktree); // a leftover from a killed attempt, if any
             gitService.addWorktreeAt(branch, worktree);
             String existingContent = Files.readString(worktree.resolve(targetPath));
-            DesignDocument design = artifactStore.root().designs.get(run.designId());
 
             // Which of the two faults this is decides what the author is told (harness run 37,
             // 2026-09-25). "Your test crashed inside its own setup" would be false for a test that
@@ -3261,6 +3289,27 @@ public class GreenfieldWorkflow {
                             + "for a reason no task in this plan can fix:\n"
                             + miscompiled.quoted());
                     }
+                    // THE START-UP CHECK, exactly as at TEST_AUTHORING (section 86): a
+                    // correction that errors before any code under test runs is a broken test,
+                    // not a red one. It was taken as red on the live build of 2026-10-12. It
+                    // goes back to its author once more with the error; still broken, the run
+                    // stops with that reason and no repair round is started.
+                    BrokenAtStartup.Finding startup =
+                        RedChecker.brokenAtStartup(redResult, redcheckWorktree, graph.tasks());
+                    if (startup != null) {
+                        log("EXECUTING: the corrected acceptance test " + fault.testClass()
+                            + " is broken, not red: " + startup.reason() + ". It goes back to "
+                            + "its author once more with the error.");
+                        askedAgain = true;
+                        String stop = sendBrokenCorrectionBack(run, task, graph, design, worktree,
+                            startup.reason(), startup.failureText(), fault.suspect());
+                        if (stop != null) {
+                            if (review != null) {
+                                review.stopped = true;
+                            }
+                            return stop;
+                        }
+                    }
                     if (!redResult.red() && review != null) {
                         // A suspect test's correction gets no second go: the original stands.
                         return "the corrected test passes on the tree before any candidate's "
@@ -3315,11 +3364,424 @@ public class GreenfieldWorkflow {
         SwarmEngineImpl.TestRepairOutcome outcome = review == null
             ? engine.resumeAfterTestRepair(task, run.id())
             : engine.resumeAfterTestReview(task, run.id(), true, review.answer);
+        if (outcome.stillFaulty() && outcome.brokenTestFailure() != null) {
+            // THE SAME START-UP STANDARD AT RE-VERIFICATION (section 86): the correction
+            // errors for every candidate before any of their code runs. The engine started
+            // no repair round. The test goes back once more, unless it already has.
+            final String answer = review == null ? null : review.answer;
+            return recorrectOrStop(run, task, graph, design, outcome, askedAgain,
+                fault.suspect(), () -> answer == null
+                    ? engine.resumeAfterTestRepair(task, run.id())
+                    : engine.resumeAfterTestReview(task, run.id(), true, answer));
+        }
         if (outcome.stillFaulty()) {
             return "the acceptance test for task '" + task.title() + "' is broken and could not be "
                 + "repaired: " + outcome.faultMessage();
         }
         return null; // the task now has a winner, or is BLOCKED for an ordinary reason
+    }
+
+    /**
+     * A corrected test that errors for every re-verified candidate before any candidate's code
+     * runs (section 86): it goes back to its author once more - unless it already has - and
+     * the candidates are verified again; still broken, or not correctable, the run stops.
+     *
+     * @param reverify verifies the task's candidates again against the run's tests commit
+     * @return null when the task was carried on with; otherwise the brief the run stops with
+     */
+    private String recorrectOrStop(Run run, Task task, TaskGraph graph, DesignDocument design,
+                                   SwarmEngineImpl.TestRepairOutcome broken, boolean askedAgain,
+                                   boolean earlierStarted,
+                                   java.util.function.Supplier<SwarmEngineImpl.TestRepairOutcome> reverify) {
+        if (askedAgain) {
+            return SentBackTest.stop(task.title(), broken.faultMessage(),
+                broken.brokenTestFailure(), "The test had already gone back to its author once "
+                    + "more for the same kind of error; it is not sent a third time.");
+        }
+        log("EXECUTING: the corrected acceptance test of '" + task.title() + "' is broken, not "
+            + "red: " + broken.faultMessage() + ". It goes back to its author once more with "
+            + "the error; no repair round is started.");
+        String stop;
+        try {
+            stop = sendBrokenCorrectionBack(run, task, graph, design, null,
+                broken.faultMessage(), broken.brokenTestFailure(), earlierStarted);
+        } catch (EndpointOutage outage) {
+            return SentBackTest.stop(task.title(), broken.faultMessage(),
+                broken.brokenTestFailure(), "The test author could not be reached to correct "
+                    + "it: " + outage.getMessage());
+        }
+        if (stop != null) {
+            return stop;
+        }
+        SwarmEngineImpl.TestRepairOutcome again = reverify.get();
+        if (again.stillFaulty() && again.brokenTestFailure() != null) {
+            return SentBackTest.stop(task.title(), again.faultMessage(),
+                again.brokenTestFailure(), "The test went back to its author once more with "
+                    + "the error. The second correction passed every check made before a "
+                    + "candidate is applied and is still broken for every candidate.");
+        }
+        if (again.stillFaulty()) {
+            return "the acceptance test for task '" + task.title() + "' is broken and could not "
+                + "be repaired: " + again.faultMessage();
+        }
+        return null;
+    }
+
+    /** What the checks every correction of a test goes through came to. */
+    private record CorrectionCheck(String refusal, BrokenAtStartup.Finding startup) {
+        static final CorrectionCheck OK = new CorrectionCheck(null, null);
+
+        static CorrectionCheck refused(String why) {
+            return new CorrectionCheck(why, null);
+        }
+    }
+
+    /**
+     * Every check a correction of a task's acceptance test goes through before it is taken, in
+     * the order {@link #repairFaultyAcceptanceTest} makes them: the project's rules, the
+     * vocabulary, self-implementation, reach, reflection, and the red check on the tree before
+     * any candidate - where a correction that does not compile for a reason no task can fix,
+     * one that errors before any code under test runs ({@link BrokenAtStartup}) and one that
+     * passes with nothing built are each not red.
+     *
+     * @param worktree the run's tests worktree, holding the correction at {@code paths}
+     */
+    private CorrectionCheck checkCorrection(Run run, Task task, TaskGraph graph,
+                                            DesignDocument design, Path worktree,
+                                            List<String> paths) throws IOException {
+        String ruleBreak = correctionBreaksARule(run, task, worktree, paths);
+        if (ruleBreak != null) {
+            return CorrectionCheck.refused(ruleBreak);
+        }
+        AcceptanceTestVocabulary.Check vocabulary =
+            AcceptanceTestVocabulary.check(worktree, design, paths, graph.tasks());
+        if (!vocabulary.ok()) {
+            return CorrectionCheck.refused("the correction names " + vocabulary.unknowns().size()
+                + " type(s) nothing in this plan delivers: " + vocabulary.unknowns().stream()
+                    .map(AcceptanceTestVocabulary.Unknown::typeName).toList());
+        }
+        SelfImplementedContract.Check selfImplemented =
+            SelfImplementedContract.check(worktree, design, paths, graph.tasks());
+        if (!selfImplemented.ok()) {
+            return CorrectionCheck.refused(SelfImplementedContract.brief(task.title(), selfImplemented));
+        }
+        AcceptanceTestReach.Check reach =
+            AcceptanceTestReach.check(worktree, browserOnlySurvey(repoLayout()), paths);
+        if (!reach.ok()) {
+            return CorrectionCheck.refused(AcceptanceTestReach.brief(task.title(), reach));
+        }
+        AcceptanceTestReflection.Check reflection = AcceptanceTestReflection.check(worktree, paths);
+        if (!reflection.ok()) {
+            return CorrectionCheck.refused(AcceptanceTestReflection.brief(task.title(), reflection));
+        }
+        Optional<VerifySpec> spec = VerifySpecLoader.load(repoPath);
+        if (spec.isEmpty() || spec.get().acceptance() == null || spec.get().acceptance().isEmpty()) {
+            return CorrectionCheck.OK;
+        }
+        String branch = "swarm/testrepair-recheck/" + run.id();
+        Path tree = WORKTREE_ROOT.resolve("testrepair-recheck-" + run.id());
+        try {
+            removeTree(tree);
+            gitService.addOrResumeWorktree(branch, tree, run.verificationPoint(),
+                run.id().toString());
+            AcceptanceOverlay.reduceTo(gitService, tree, task.acceptanceTestDir(),
+                run.acceptanceTestsCommit(), task.authoredTestPaths());
+            for (String path : paths) {
+                Files.createDirectories(tree.resolve(path).getParent());
+                Files.writeString(tree.resolve(path), Files.readString(worktree.resolve(path)));
+            }
+            RedChecker.RedCheckResult red = new RedChecker()
+                .check(buildTarget(tree), spec.get(), earlierTestsIn(tree, task));
+            AcceptanceCompileErrors.Reading miscompiled =
+                miscompiledReading(tree, red, task, graph.tasks());
+            if (miscompiled != null) {
+                return CorrectionCheck.refused("the corrected test does not compile for a reason "
+                    + "no task in this plan can fix:\n" + miscompiled.quoted());
+            }
+            BrokenAtStartup.Finding startup = RedChecker.brokenAtStartup(red, tree, graph.tasks());
+            if (startup != null) {
+                return new CorrectionCheck(null, startup);
+            }
+            if (!red.red()) {
+                return CorrectionCheck.refused("the corrected test passes on the tree before any "
+                    + "candidate's change, so it would prove nothing (" + red.note() + ")");
+            }
+            return CorrectionCheck.OK;
+        } finally {
+            removeTree(tree);
+            gitService.deleteCandidateBranch(branch);
+        }
+    }
+
+    /** The task's test files as the tests worktree holds them, path to content. */
+    private static Map<String, String> testFilesIn(Path worktree, Task task) throws IOException {
+        Map<String, String> files = new LinkedHashMap<>();
+        for (String path : task.authoredTestPaths()) {
+            if (path.endsWith(".java") && Files.isRegularFile(worktree.resolve(path))) {
+                files.put(path, Files.readString(worktree.resolve(path)));
+            }
+        }
+        return files;
+    }
+
+    /**
+     * Which acceptance tests pass, for the author of a test that is sent back
+     * ({@link SentBackTest#setupLookups}): this task's own that passed for a candidate, those
+     * of the build's tasks that have a chosen candidate, and those of earlier stories. Names
+     * only - how each is set up is the author's lookup.
+     */
+    private String passingTestsFor(Task task, TaskGraph graph, Path worktree) {
+        List<String> ownClasses = task.authoredTestPaths().stream()
+            .filter(path -> path.endsWith(".java")).map(SwarmEngineImpl::testClassOfPath).toList();
+        List<String> mine = new ArrayList<>();
+        List<String> project = new ArrayList<>();
+        if (swarmEngine instanceof SwarmEngineImpl engine) {
+            for (String id : engine.passedAcceptanceIds(task)) {
+                String cls = id.contains("#") ? id.substring(0, id.indexOf('#')) : id;
+                (ownClasses.contains(cls) ? mine : project).add(id);
+            }
+        }
+        for (Task other : graph.tasks()) {
+            if (other.id().equals(task.id()) || !(other.state() == TaskState.SELECTED
+                    || other.state() == TaskState.INTEGRATED || other.state() == TaskState.DONE)) {
+                continue;
+            }
+            other.authoredTestPaths().stream().filter(path -> path.endsWith(".java"))
+                .map(SwarmEngineImpl::testClassOfPath).forEach(project::add);
+        }
+        project.addAll(earlierTestsIn(worktree, task));
+        project.removeIf(id -> ownClasses.contains(
+            id.contains("#") ? id.substring(0, id.indexOf('#')) : id));
+        return SentBackTest.setupLookups(mine, project);
+    }
+
+    /**
+     * Sends a correction that errors before any code under test runs back to its author, once,
+     * with the error and with which tests pass (section 86), and puts the second correction
+     * through {@link #checkCorrection}.
+     *
+     * @param open the run's tests worktree when the caller holds it open with the broken
+     *             correction not yet committed - the second correction is written there and
+     *             the caller commits; null when the broken correction is committed - the
+     *             second is then committed here and the run pointed at it
+     * @return null when a correction that passes every check is in place; otherwise the brief
+     *         the run stops with
+     */
+    private String sendBrokenCorrectionBack(Run run, Task task, TaskGraph graph,
+                                            DesignDocument design, Path open, String reason,
+                                            String failureText, boolean earlierStarted) {
+        String branch = testsBranch(run);
+        Path worktree = open != null ? open : WORKTREE_ROOT.resolve("tests-" + run.id());
+        try {
+            if (open == null) {
+                removeTree(worktree); // a leftover from a killed attempt, if any
+                gitService.addWorktreeAt(branch, worktree);
+            }
+            Map<String, String> existing = testFilesIn(worktree, task);
+            TestAuthorClient.Authored authored;
+            try (TestAuthorClient.Scope compiling = compilingRepairsOf(run, task)) {
+                authored = roles.testAuthor().correctSentBackTest(worktree, task, design, existing,
+                    SentBackTest.brokenCorrectionReask(reason, failureText, earlierStarted,
+                        passingTestsFor(task, graph, worktree)));
+            }
+            if (authored.failureReason() != null) {
+                return SentBackTest.stop(task.title(), reason, failureText, "The test went back "
+                    + "to its author once more with this error, and the author's call did not "
+                    + "produce a corrected file: " + authored.failureReason());
+            }
+            CorrectionCheck check = checkCorrection(run, task, graph, design, worktree,
+                authored.paths());
+            if (check.startup() != null) {
+                return SentBackTest.stop(task.title(), check.startup().reason(),
+                    check.startup().failureText(), "The test went back to its author once more "
+                        + "with the error, and the second correction is still broken.");
+            }
+            if (check.refusal() != null) {
+                return SentBackTest.stop(task.title(), reason, failureText, "The test went back "
+                    + "to its author once more with this error, and the second correction was "
+                    + "refused: " + check.refusal());
+            }
+            if (open == null) {
+                gitService.commitAll(worktree, "Correct acceptance test(s) of task '"
+                    + task.title() + "' for run " + run.id() + "\n\nThe earlier correction "
+                    + "errored before any code under test ran.");
+                run.setAcceptanceTestsCommit(gitService.headSha(branch));
+            }
+            log("EXECUTING: the acceptance test(s) " + authored.paths() + " of task '"
+                + task.title() + "' were corrected a second time by their author and pass "
+                + "every check made before a candidate is applied.");
+            return null;
+        } catch (IOException e) {
+            return SentBackTest.stop(task.title(), reason, failureText,
+                "Reading or writing the test file failed: " + e.getMessage());
+        } finally {
+            if (open == null) {
+                removeTree(worktree); // the branch stays; the correction is on it
+            }
+        }
+    }
+
+    /** A task whose test could not be put right on an instruction, and the brief to stop with. */
+    private record RetestStop(UUID taskId, String brief) {}
+
+    /**
+     * Records on the tasks of a run which open question may be answered {@code retest}: the
+     * one task the question's stop is about, when it has an acceptance test of its own
+     * (section 86). Marks left on the run's other tasks by an earlier stop are cleared.
+     */
+    private void offerRetest(Run run, UUID taskId, UUID question) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null) {
+            return;
+        }
+        for (Task task : graph.tasks()) {
+            UUID offer = task.id().equals(taskId) && InstructedRetest.hasATest(task)
+                ? question : null;
+            if (!java.util.Objects.equals(task.retestOfferedBy(), offer)) {
+                task.setRetestOfferedBy(offer);
+                artifactStore.saveTask(task);
+            }
+        }
+    }
+
+    /**
+     * Sends the acceptance test of each task whose question was answered {@code retest} back
+     * to its author with the answer's text (section 86, {@link InstructedRetest}). Done when
+     * the run is taken up again at EXECUTING, before any repair round and before the stage.
+     *
+     * <p>The instruction is cleared when its turn has ended. When the author's model cannot be
+     * reached nothing was learned: the instruction stays, the turn is not counted, and the
+     * stage runs again when the model answers.
+     *
+     * @return null when every such task was carried on with; otherwise the first task whose
+     *         test could not be put right, with the brief the run stops with
+     */
+    private RetestStop giveInstructedRetests(Run run) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null) {
+            return null;
+        }
+        for (Task task : new ArrayList<>(graph.tasks())) {
+            String instruction = task.retestInstruction();
+            if (instruction == null || instruction.isBlank()) {
+                continue;
+            }
+            int turn = task.instructedRetests() + 1;
+            task.setInstructedRetests(turn);
+            artifactStore.saveTask(task);
+            log("EXECUTING: the question about task '" + task.title() + "' was answered "
+                + "\"retest\" (" + turn + " of the " + InstructedRetest.limit() + " a task is "
+                + "given per build). Its acceptance test goes back to its author with this "
+                + "instruction:\n" + instruction);
+            String stop;
+            try {
+                stop = retestOnInstruction(run, graph, task, instruction.strip());
+            } catch (EndpointOutage outage) {
+                task.setInstructedRetests(turn - 1);
+                artifactStore.saveTask(task);
+                throw outage; // nothing was learned: the stage runs again when it answers
+            } catch (RuntimeException e) {
+                stop = "The acceptance test of task '" + task.title() + "' was sent back to "
+                    + "its author on an instruction, and that did not finish: " + e;
+            }
+            task.setRetestInstruction(null);
+            artifactStore.saveTask(task);
+            if (stop != null) {
+                return new RetestStop(task.id(), stop);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * One task's acceptance test, back to its author on an instruction (section 86): the
+     * author is given the instruction, what verification last recorded for the task's
+     * candidates and which tests pass; the correction goes through {@link #checkCorrection},
+     * with the one further ask a correction broken at start-up gets; it is committed on the
+     * run's tests branch; and the candidates the task already has are verified against it.
+     * When one passes it is finished and chosen. When none does for a reason of its own, the
+     * task is left for the stage, which builds it again against the corrected test.
+     *
+     * @return null when the run may carry on; otherwise the brief it stops with
+     */
+    private String retestOnInstruction(Run run, TaskGraph graph, Task task, String instruction) {
+        String sentBack = "The acceptance test of task '" + task.title() + "' was sent back to "
+            + "its author on an instruction, and ";
+        if (repoPath == null || !gitService.isEnabled() || roles.testAuthor() == null
+                || !(swarmEngine instanceof SwarmEngineImpl engine)) {
+            return sentBack + "this build has no repository, test author or engine to do that "
+                + "with";
+        }
+        if (!InstructedRetest.hasATest(task)) {
+            return sentBack + "the task has no acceptance test file of its own";
+        }
+        DesignDocument design = artifactStore.root().designs.get(run.designId());
+        String evidence = engine.testEvidence(task);
+        String branch = testsBranch(run);
+        Path worktree = WORKTREE_ROOT.resolve("tests-" + run.id());
+        boolean askedAgain = false;
+        List<String> corrected;
+        try {
+            removeTree(worktree); // a leftover from a killed attempt, if any
+            gitService.addWorktreeAt(branch, worktree);
+            Map<String, String> existing = testFilesIn(worktree, task);
+            if (existing.isEmpty()) {
+                return sentBack + "none of its test files " + task.authoredTestPaths()
+                    + " is on the branch " + branch;
+            }
+            TestAuthorClient.Authored authored;
+            try (TestAuthorClient.Scope compiling = compilingRepairsOf(run, task)) {
+                authored = roles.testAuthor().correctSentBackTest(worktree, task, design, existing,
+                    SentBackTest.instructedReask(instruction, evidence,
+                        passingTestsFor(task, graph, worktree)));
+            }
+            if (authored.failureReason() != null) {
+                return sentBack + "the author's call did not produce a corrected file: "
+                    + authored.failureReason();
+            }
+            corrected = authored.paths();
+            CorrectionCheck check = checkCorrection(run, task, graph, design, worktree, corrected);
+            if (check.refusal() != null) {
+                return sentBack + "the correction was refused: " + check.refusal();
+            }
+            if (check.startup() != null) {
+                log("EXECUTING: the test corrected on an instruction is broken, not red: "
+                    + check.startup().reason() + ". It goes back to its author once more.");
+                askedAgain = true;
+                String stop = sendBrokenCorrectionBack(run, task, graph, design, worktree,
+                    check.startup().reason(), check.startup().failureText(), false);
+                if (stop != null) {
+                    return stop;
+                }
+            }
+            gitService.commitAll(worktree, "Correct acceptance test(s) of task '" + task.title()
+                + "' on an instruction for run " + run.id() + "\n\n" + instruction);
+            run.setAcceptanceTestsCommit(gitService.headSha(branch));
+        } catch (IOException e) {
+            return sentBack + "reading or writing the test file failed: " + e.getMessage();
+        } finally {
+            removeTree(worktree); // the branch stays; the correction is on it
+        }
+        String note = "acceptance test(s) " + corrected + " were corrected by the test author "
+            + "on an instruction given in answer to the stopped build's question: " + instruction;
+        log("EXECUTING: " + note);
+        recordTestRepair(task, note);
+        SwarmEngineImpl.TestRepairOutcome outcome = engine.resumeAfterRetest(task, run.id());
+        if (outcome.stillFaulty() && outcome.brokenTestFailure() != null) {
+            String stop = recorrectOrStop(run, task, graph, design, outcome, askedAgain, false,
+                () -> engine.resumeAfterRetest(task, run.id()));
+            if (stop != null) {
+                return stop;
+            }
+        } else if (outcome.stillFaulty()) {
+            return sentBack + "the corrected test is still at fault: " + outcome.faultMessage();
+        }
+        log("EXECUTING: task '" + task.title() + "' was verified again from the candidates it "
+            + "has, against the test corrected on an instruction. A candidate that passes is "
+            + "its choice now; when none does, the stage builds the task again.");
+        return null;
     }
 
     /**

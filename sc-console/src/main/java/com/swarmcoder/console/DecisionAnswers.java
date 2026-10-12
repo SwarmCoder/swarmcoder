@@ -21,6 +21,7 @@ import com.swarmcoder.domain.Decision;
 import com.swarmcoder.domain.DecisionKind;
 import com.swarmcoder.domain.DecisionState;
 import com.swarmcoder.domain.InstructedRepair;
+import com.swarmcoder.domain.InstructedRetest;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.RunState;
 import com.swarmcoder.domain.Story;
@@ -135,7 +136,9 @@ public final class DecisionAnswers {
      * stopped build's question {@code repair} when one more repair round is sound for it
      * (section 84, {@link InstructedRepair}). That is decided from what the engine recorded
      * when it raised the question - which tasks it may be answered {@code repair} for - and
-     * from the count on each task, never from the question's words.
+     * from the count on each task, never from the question's words. And {@code retest}, which
+     * sends the task's acceptance test back to its author, where {@link #retestTasks} names a
+     * task (section 86).
      */
     public static List<Option> optionsFor(ArtifactStore store, Decision decision) {
         List<Option> options = optionsFor(decision.kind());
@@ -147,7 +150,81 @@ public final class DecisionAnswers {
                 + "to change. " + roundsLeft(tasks) + " Use it when the cause is something the "
                 + "workers must change; retry repeats the same stop", true));
         }
+        List<Task> retesting = retestTasks(store, decision);
+        if (whyNoRetest(store, decision, retesting) == null) {
+            options.add(new Option(InstructedRetest.TOKEN, "send the acceptance test of "
+                + titles(retesting) + " back to its author. text is REQUIRED: it is what the "
+                + "author is told is wrong with the test and must change. The correction is "
+                + "checked like a first-written test and committed on the run's tests branch; "
+                + "the task is then verified again from the candidates it already has and "
+                + "built again only if none passes. The story is not designed again. "
+                + retestsLeft(retesting) + " Use it when the test, not the candidates, is "
+                + "what is wrong: no worker may change an acceptance test, so repair cannot",
+                true));
+        }
         return options;
+    }
+
+    /**
+     * The tasks of the question's build whose acceptance test may be sent back to its author
+     * in answer to it (section 86, {@link InstructedRetest}): the build is at its build stage,
+     * the engine marked the question as being about that one task and not about a fault of
+     * the plan - the mark that offers {@code repair}, or the workflow's own mark for a stop on
+     * the task's test - and the task has an acceptance test file of its own. Read from what
+     * was recorded, never from the question's words.
+     */
+    static List<Task> retestTasks(ArtifactStore store, Decision decision) {
+        if (decision == null || decision.kind() != DecisionKind.BLOCKED_TASK
+                || decision.runId() == null) {
+            return List.of();
+        }
+        Run run = store.root().runs.get(decision.runId());
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : store.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || graph.tasks() == null || run.state() != RunState.EXECUTING) {
+            return List.of();
+        }
+        return graph.tasks().stream()
+            .filter(task -> decision.id().equals(task.repairOfferedBy())
+                || decision.id().equals(task.retestOfferedBy()))
+            .filter(InstructedRetest::hasATest).toList();
+    }
+
+    /** Why this question cannot be answered {@code retest}, or null when it can. */
+    static String whyNoRetest(ArtifactStore store, Decision decision, List<Task> tasks) {
+        if (decision.kind() != DecisionKind.BLOCKED_TASK) {
+            return "this kind of question has no acceptance test to send back";
+        }
+        if (decision.state() != DecisionState.PENDING) {
+            return "that question has already been answered";
+        }
+        if (tasks.isEmpty()) {
+            return "there is no acceptance test to send back here: the build did not stop at "
+                + "its build stage on one task that has an acceptance test of its own (it "
+                + "stopped for a fault of the plan, at final integration, or on something that "
+                + "is not one task's)";
+        }
+        Run run = store.root().runs.get(decision.runId());
+        if (run == null || run.parkedAt() == null) {
+            return "the build this question came from is not stopped waiting on it";
+        }
+        for (Task task : tasks) {
+            if (!InstructedRetest.left(task)) {
+                return "the acceptance test of task '" + task.title() + "' has already gone "
+                    + "back to its author " + task.instructedRetests() + " time(s) on an "
+                    + "instruction in this build, and " + InstructedRetest.limit() + " is the "
+                    + "most a task is given (-D" + InstructedRetest.LIMIT_PROPERTY + " changes "
+                    + "it). Correct the test by hand on the run's tests branch and retry, or "
+                    + "send the story back";
+            }
+        }
+        return null;
+    }
+
+    private static String retestsLeft(List<Task> tasks) {
+        int used = tasks.stream().mapToInt(Task::instructedRetests).max().orElse(0);
+        return "Time " + (used + 1) + " of the " + InstructedRetest.limit()
+            + " a task's test is sent back per build.";
     }
 
     /** The tasks of the question's build that it may be answered {@code repair} for. */
@@ -272,6 +349,20 @@ public final class DecisionAnswers {
                     + "one that failed.");
             }
         }
+        List<Task> retesting = List.of();
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && word.equals(InstructedRetest.TOKEN)) {
+            retesting = retestTasks(store, decision);
+            String whyNot = whyNoRetest(store, decision, retesting);
+            if (whyNot != null) {
+                return failed("Not recorded: " + whyNot + ". The answers this question accepts "
+                    + "are " + options.stream().map(Option::token).toList());
+            }
+            if (text == null || text.isBlank()) {
+                return failed("Not recorded: retest needs text. It is what the test's author "
+                    + "is told is wrong with the test and must change; sent back with nothing "
+                    + "new to go on, the author has no reason to write it differently.");
+            }
+        }
         if (options.stream().noneMatch(option -> option.token().equals(word))) {
             return failed("'" + token + "' is not an answer this question accepts; the answers are "
                 + options.stream().map(Option::token).toList());
@@ -300,6 +391,17 @@ public final class DecisionAnswers {
                 + " one more repair round with the text as the workers' instruction. "
                 + roundsLeft(repairing) + " ";
         }
+        if (!retesting.isEmpty()) {
+            // On the task before the answer is recorded and the build handed back: the
+            // workflow sends the test back when it takes the run up again, and clears this.
+            for (Task task : retesting) {
+                task.setRetestInstruction(text.strip());
+                store.saveTask(task);
+            }
+            raised = "The acceptance test of " + titles(retesting) + " goes back to its "
+                + "author with the text as the instruction; the task is then verified again "
+                + "from the candidates it has. " + retestsLeft(retesting) + " ";
+        }
         try {
             new ControlServiceImpl().recordAnswer(id.toString(),
                 responseFor(decision.kind(), word, text, actor));
@@ -319,7 +421,9 @@ public final class DecisionAnswers {
      * rule-question parser reads its own first word) and the stopped build, if there is one, is
      * handed back, as it is for the same answer given over the supervisor connection. A stopped
      * build's question whose text starts with repair, where that answer is offered, is answered
-     * as that option with the rest of the text as the workers' instruction.
+     * as that option with the rest of the text as the workers' instruction; one whose text
+     * starts with retest, where that is offered, as that option with the rest as the
+     * instruction to the author of the task's acceptance test (section 86).
      */
     public static Outcome answerFromConsole(String decisionId, String text) {
         ConsoleContext context = ConsoleContext.get();
@@ -346,6 +450,13 @@ public final class DecisionAnswers {
                 && whyNoRepair(context.store(), decision,
                     repairTasks(context.store(), decision)) == null) {
             // The same answer the supervisor connection gives, with the rest as the instruction.
+            return answerAndResume(decisionId, first, said.substring(first.length())
+                .replaceFirst("^[\\s:.,;]+", ""), "operator");
+        }
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(InstructedRetest.TOKEN)
+                && whyNoRetest(context.store(), decision,
+                    retestTasks(context.store(), decision)) == null) {
+            // The same answer again, with the rest as the instruction to the test's author.
             return answerAndResume(decisionId, first, said.substring(first.length())
                 .replaceFirst("^[\\s:.,;]+", ""), "operator");
         }

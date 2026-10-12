@@ -2420,6 +2420,31 @@ public class TestAuthorClient {
                 + "unchanged>\",\"content\":\"<corrected java source>\"}],\"wrote\":[]}");
     }
 
+    /**
+     * Sends a task's acceptance test file(s) back to their author after candidates exist, with
+     * what the build measured and what is asked (section 86; see {@link SentBackTest}): a
+     * correction that errors before any candidate's code runs, or a test sent back on the
+     * instruction of whoever answered the stopped build's question. Same one-shot shape as
+     * {@link #repairBrokenTest}, in the author's own conversation when it is still kept, with
+     * its lookups and {@code compile_test}. Nothing is said here about how a test should start:
+     * the message names the tests that pass, to be looked up.
+     *
+     * @param message {@link SentBackTest#brokenCorrectionReask} or
+     *                {@link SentBackTest#instructedReask}
+     */
+    public Authored correctSentBackTest(Path repoRoot, Task task, DesignDocument design,
+                                        Map<String, String> existingFiles, String message) {
+        return repairWith(repoRoot, task, design, existingFiles, message,
+            "You are a test author. The acceptance test(s) you wrote for this task are sent "
+                + "back to you; what the build measured and what is asked of you are below. "
+                + "Correct them so that each still proves the SAME criterion and still fails on "
+                + "code that does not implement it. Change how a test starts or reaches the "
+                + "code only where the message shows that is what is wrong, and look up how the "
+                + "passing tests it names are set up before you write. Respond ONLY with JSON: "
+                + "{\"files\":[{\"path\":\"<one of the paths below, unchanged>\",\"content\":"
+                + "\"<corrected java source>\"}],\"wrote\":[]}");
+    }
+
     private Authored repairWith(Path repoRoot, Task task, DesignDocument design,
                                 Map<String, String> existingFiles, String reaskMessage,
                                 String system0) {
