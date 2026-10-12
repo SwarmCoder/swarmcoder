@@ -552,7 +552,24 @@ final class JourneysOfAPlan {
      *                later than the journey it replaces, and the page as read at that step
      * @param journey the correction as read; null when it is not a well-formed journey
      */
-    record Correction(String refused, JourneyFile.Result further, JourneyFile.Journey journey) {
+    record Correction(String refused, JourneyFile.Result further, JourneyFile.Journey journey,
+                      List<String> dropped) {
+
+        Correction {
+            dropped = dropped == null ? List.of() : List.copyOf(dropped);
+        }
+
+        Correction(String refused, JourneyFile.Result further, JourneyFile.Journey journey) {
+            this(refused, further, journey, List.of());
+        }
+
+        /**
+         * True when the correction was taken although it asks for less than the journey it
+         * replaces, on a person's authority (section 88); {@link #dropped} says what.
+         */
+        boolean asksForLess() {
+            return refused == null && !dropped.isEmpty();
+        }
 
         boolean taken() {
             return refused == null;
@@ -588,6 +605,28 @@ final class JourneysOfAPlan {
                                           JourneyRunner.Outcome> onMergedTree,
                                       java.util.function.Function<List<JourneyFile.Journey>,
                                           JourneyRunner.Outcome> onStartTree) {
+        return judgeCorrection(failed, path, corrected, onMergedTree, onStartTree, false, null);
+    }
+
+    /**
+     * As above, with the one difference a person authorises by answering a stopped build's
+     * question {@code journey} (section 88): a correction that asks for less than the journey
+     * it replaces is not refused for that. Every other guard is asked as before, in the same
+     * two browser runs - it passes on the merged tree or fails there at a later step, it fails
+     * on the tree the run started from, and neither its last expectation nor one it begins
+     * with is already true there. What it no longer does is on the result
+     * ({@link Correction#dropped}, from {@code JourneyExpectations.dropped}) for the record.
+     *
+     * @param lessAuthorised true only for a correction made on a person's instruction
+     * @param criteria       the story's criteria by number, for the words of a criterion that
+     *                       is no longer proved; may be null
+     */
+    static Correction judgeCorrection(JourneyFile.Result failed, String path, String corrected,
+                                      java.util.function.Function<List<JourneyFile.Journey>,
+                                          JourneyRunner.Outcome> onMergedTree,
+                                      java.util.function.Function<List<JourneyFile.Journey>,
+                                          JourneyRunner.Outcome> onStartTree,
+                                      boolean lessAuthorised, List<String> criteria) {
         JourneyFile.Read read = JourneyFile.read(path, corrected);
         if (!read.ok()) {
             return new Correction("it is not a well-formed journey: "
@@ -596,9 +635,17 @@ final class JourneysOfAPlan {
         JourneyFile.Journey journey = read.journey();
         List<String> weaker =
             com.swarmcoder.verify.JourneyExpectations.weakened(failed.journey(), journey);
-        if (!weaker.isEmpty()) {
+        if (!weaker.isEmpty() && !lessAuthorised) {
             return new Correction("it asks for less than the journey it replaces: "
                 + String.join("; ", weaker), null, journey);
+        }
+        List<String> dropped = List.of();
+        if (lessAuthorised) {
+            dropped = com.swarmcoder.verify.JourneyExpectations.dropped(failed.journey(),
+                journey, criteria);
+            if (dropped.isEmpty()) {
+                dropped = weaker; // weaker by its counts with no step to name
+            }
         }
         JourneyRunner.Outcome merged = onMergedTree.apply(List.of(journey));
         if (merged == null || !merged.made() || merged.results().isEmpty()) {
@@ -649,7 +696,276 @@ final class JourneysOfAPlan {
                 com.swarmcoder.verify.JourneyExpectations.alreadyThereObjection(there), null,
                 journey);
         }
-        return new Correction(null, further, journey);
+        return new Correction(null, further, journey, dropped);
+    }
+
+    /** The name of the check a lesser correction is carried under as a warning of the run. */
+    static final String LESSER_CORRECTION =
+        "a journey corrected on a person's instruction asks for less";
+
+    /**
+     * What is recorded when a correction that asks for less was taken on a person's
+     * instruction (section 88): which journey, on whose word, and exactly what it no longer
+     * does. The same text goes to the run's log, its carried warnings, the task's note and the
+     * decision log.
+     */
+    static String lesserCorrection(String path, String by, String instruction,
+                                   List<String> dropped) {
+        return "The journey " + path + " was corrected on the instruction of the "
+            + (by == null || by.isBlank() ? "operator" : by) + " and now asks for LESS than "
+            + "the journey it replaces. Dropped: " + String.join("; ", dropped) + ". The "
+            + "correction was tried in a browser like any other - it fails on the tree the run "
+            + "started from and gets further on the merged tree - and was taken only because "
+            + "the answer `journey` authorises a lesser correction. The instruction was: "
+            + (instruction == null ? "" : instruction.strip().replaceAll("\\s*\\R\\s*", " "));
+    }
+
+    /**
+     * What the author of a failed journey is shown when it is sent back on a person's
+     * instruction (section 88): the instruction first, then the ordinary evidence. The person
+     * has already answered the review's question, so the author is told which side is wrong
+     * and what the one thing is that differs from an ordinary correction.
+     */
+    static String instructedEvidence(String instruction, String by, String evidence) {
+        return "THE QUESTION OF THIS REVIEW HAS ALREADY BEEN ANSWERED by the "
+            + (by == null || by.isBlank() ? "operator" : by) + ", who decides what the story "
+            + "means: THE JOURNEY IS WRONG. Do not answer SCREEN_WRONG. Correct the journey as "
+            + "the instruction below says, give the complete corrected file to check_journey "
+            + "and answer JOURNEY_WRONG. Where the instruction tells you to take a step, a "
+            + "field or a criterion's proof out, do so: for this correction, and only as far "
+            + "as the instruction says, the rule that a correction keeps every use the journey "
+            + "makes of the screen does not apply. Everything else holds: it must still fail "
+            + "on the application as it was before the story and pass on the built one, and "
+            + "both are tried in a browser.\n\nTHE INSTRUCTION:\n"
+            + (instruction == null ? "" : instruction.strip())
+            + "\n\nWHAT THE BROWSER MADE OF THE JOURNEY AS IT IS:\n" + evidence;
+    }
+
+    /**
+     * What the run stops on when a journey went back to its author on a person's instruction
+     * and no correction could be taken (section 88). No worker is started: the person called
+     * the journey wrong.
+     */
+    static String instructionNotMet(Task task, List<String> paths, List<String> answers) {
+        return "The journey went back to its author on the instruction given in answer to this "
+            + "build's question, and no corrected journey could be taken. Task '" + task.title()
+            + "', " + paths + ":\n- " + String.join("\n- ", answers)
+            + "\n\nNo worker was started: the journey was called wrong by whoever answered, "
+            + "and it stands as it was. A journey goes back on an instruction at most "
+            + com.swarmcoder.domain.JourneyVerdict.limit() + " time(s) in a build (-D"
+            + com.swarmcoder.domain.JourneyVerdict.LIMIT_PROPERTY + " changes it).";
+    }
+
+    /**
+     * The one task of this build that can be named as having changed what a journey uses, or
+     * why none can (section 88).
+     *
+     * @param task null when no single task can be named
+     * @param why  the facts, as a clause that stands alone
+     */
+    record ScreenTask(Task task, String why) {}
+
+    /**
+     * Names the task of this build that changed what a journey delivered with an EARLIER story
+     * uses (section 88). Such a journey is claimed by no task of the build, so when it fails
+     * nothing could be offered for it. Decided from what the product holds, with no model and
+     * no word read for its meaning:
+     *
+     * <ol>
+     *   <li>the names the journey's steps look for on the screen
+     *       ({@code JourneyExpectations.namesUsed}: the texts and accessible names of its
+     *       selectors);</li>
+     *   <li>the shipped files each task's CHOSEN change wrote, from its diff;</li>
+     *   <li>which of those files, as the merged tree has them, hold one of those names (read
+     *       as {@code texts_of} reads: string literals, page and message files), and which
+     *       are a screen ({@link ScreenChange#screenPaths}).</li>
+     * </ol>
+     *
+     * <p>One task whose files hold a name is named. Of several, the only one that also wrote a
+     * screen is named. With no file holding a name, the only task that wrote a screen is
+     * named. Anything else names nobody, and says what was found.
+     *
+     * <p>Not seen: a name the screen puts together from parts or takes from a file this reader
+     * does not read; a regression in server code that changes what an unchanged screen shows.
+     *
+     * @param changedBy   the paths a task's chosen change wrote; empty for a task without one
+     * @param textsOfFile the texts a file of the merged tree holds, lower case
+     * @param isScreen    whether a path is a screen
+     */
+    static ScreenTask screenTaskOf(JourneyFile.Journey journey, List<Task> tasks,
+                                   java.util.function.Function<Task, List<String>> changedBy,
+                                   java.util.function.Function<String, List<String>> textsOfFile,
+                                   Predicate<String> isScreen) {
+        List<String> names = com.swarmcoder.verify.JourneyExpectations.namesUsed(journey)
+            .stream().map(name -> name.strip().toLowerCase(java.util.Locale.ROOT))
+            .filter(name -> !name.isEmpty()).toList();
+        java.util.Map<Task, String> byName = new java.util.LinkedHashMap<>();
+        java.util.Map<Task, List<String>> byScreen = new java.util.LinkedHashMap<>();
+        for (Task task : tasks == null ? List.<Task>of() : tasks) {
+            List<String> changed = changedBy.apply(task);
+            for (String entry : ScreenChange.shippedPaths(changed == null ? List.of() : changed)) {
+                String file = entry.replace((char) 92, '/').strip();
+                if (isScreen.test(file)) {
+                    byScreen.computeIfAbsent(task, key -> new ArrayList<>()).add(file);
+                }
+                if (byName.containsKey(task) || names.isEmpty()) {
+                    continue;
+                }
+                List<String> texts = textsOfFile.apply(file);
+                for (String name : names) {
+                    if (texts != null && texts.stream().anyMatch(text -> text.contains(name))) {
+                        byName.put(task, file + " holds \"" + name + "\"");
+                        break;
+                    }
+                }
+            }
+        }
+        if (byName.size() == 1) {
+            Task named = byName.keySet().iterator().next();
+            return new ScreenTask(named, "it is the one task of this build whose chosen change "
+                + "wrote a file that holds a name the journey looks for (" + byName.get(named)
+                + ")");
+        }
+        if (byName.size() > 1) {
+            List<Task> alsoScreen = byName.keySet().stream().filter(byScreen::containsKey)
+                .toList();
+            if (alsoScreen.size() == 1) {
+                Task named = alsoScreen.get(0);
+                return new ScreenTask(named, "of the " + byName.size() + " tasks of this build "
+                    + "whose chosen change wrote a file that holds a name the journey looks "
+                    + "for, it is the only one that also wrote a screen (" + byName.get(named)
+                    + ")");
+            }
+            return new ScreenTask(null, byName.size() + " tasks of this build wrote files that "
+                + "hold names the journey looks for (" + titlesOf(byName.keySet()) + "), so "
+                + "no one task can be named");
+        }
+        if (byScreen.size() == 1) {
+            Task named = byScreen.keySet().iterator().next();
+            return new ScreenTask(named, "it is the only task of this build whose chosen change "
+                + "wrote a screen (" + shortList(byScreen.get(named)) + "); no file this build "
+                + "wrote holds a name the journey looks for");
+        }
+        return new ScreenTask(null, byScreen.isEmpty()
+            ? "no task of this build wrote a screen or a file that holds a name the journey "
+                + "looks for"
+            : byScreen.size() + " tasks of this build wrote a screen (" + titlesOf(
+                byScreen.keySet()) + ") and no file they wrote holds a name the journey looks "
+                + "for, so no one task can be named");
+    }
+
+    private static String titlesOf(java.util.Collection<Task> tasks) {
+        return String.join(", ", tasks.stream().map(task -> "'" + task.title() + "'").toList());
+    }
+
+    /**
+     * What a failed final integration that stopped on a journey may be answered, beside
+     * {@code retry} (section 88).
+     *
+     * @param screen      the tasks {@code screen} gives a repair round, by id, each with the
+     *                    journeys the verdict is about for it
+     * @param journeyOf   the id of the task whose journeys {@code journey} sends back; null
+     *                    when none
+     * @param correctable those journeys, by path
+     * @param paragraph   what each answer does, for the question; empty when nothing is offered
+     *                    and nothing needs saying
+     */
+    record Offer(java.util.Map<java.util.UUID, List<String>> screen, java.util.UUID journeyOf,
+                 List<String> correctable, String paragraph) {
+
+        static final Offer NONE = new Offer(java.util.Map.of(), null, List.of(), "");
+
+        /** The journeys the open question is about for {@code task}; empty when none. */
+        List<String> disputedFor(Task task) {
+            List<String> paths = new ArrayList<>(screen.getOrDefault(task.id(), List.of()));
+            if (task.id().equals(journeyOf)) {
+                correctable.stream().filter(path -> !paths.contains(path)).forEach(paths::add);
+            }
+            return paths;
+        }
+    }
+
+    /**
+     * Decides the offer from the dispute the integrator recorded and the tasks' own counts.
+     *
+     * <ul>
+     *   <li>{@code screen} for the journey's owner when the stop offers its workers nothing
+     *       else ({@code workersOffered} false: the author disowned the journey, or the
+     *       reviews are used up), the task has a chosen candidate and an instructed repair
+     *       round left;</li>
+     *   <li>{@code journey} for the owner's failed journeys that may still go back on an
+     *       instruction;</li>
+     *   <li>{@code screen} for the one task named for a journey delivered with an earlier
+     *       story, on the same two conditions.</li>
+     * </ul>
+     *
+     * @param workersOffered true when the stop already names the owner for {@code repair}
+     */
+    static Offer offerFor(List<Task> tasks, FinalIntegrator.JourneyDispute dispute,
+                          boolean workersOffered) {
+        if (dispute == null || tasks == null) {
+            return Offer.NONE;
+        }
+        java.util.Map<java.util.UUID, List<String>> screen = new java.util.LinkedHashMap<>();
+        Task owner = tasks.stream().filter(task -> task.id().equals(dispute.ownerTaskId()))
+            .findFirst().orElse(null);
+        StringBuilder first = new StringBuilder();
+        StringBuilder text = new StringBuilder();
+        List<String> correctable = List.of();
+        if (owner != null && !dispute.ownerJourneys().isEmpty()) {
+            if (!workersOffered && repairable(owner)) {
+                screen.put(owner.id(), new ArrayList<>(dispute.ownerJourneys()));
+                text.append(" `").append(com.swarmcoder.domain.JourneyVerdict.SCREEN)
+                    .append("` with text: the journey is right and the screen is wrong - task '")
+                    .append(owner.title()).append("' gets one repair round with your text as "
+                        + "its instruction, whatever the journey's author answered.");
+            }
+            correctable = dispute.ownerJourneys().stream()
+                .filter(path -> com.swarmcoder.domain.JourneyVerdict.left(owner, path)).toList();
+            if (!correctable.isEmpty()) {
+                text.append(" `").append(com.swarmcoder.domain.JourneyVerdict.JOURNEY)
+                    .append("` with text: the journey is wrong - its author corrects it as "
+                        + "your text says; the correction is tried in a browser on both trees "
+                        + "like any correction and may ask for less, which is recorded and "
+                        + "shown with the delivery.");
+            }
+        }
+        for (FinalIntegrator.EarlierJourney earlier : dispute.earlier()) {
+            Task named = earlier.taskId() == null ? null : tasks.stream()
+                .filter(task -> task.id().equals(earlier.taskId())).findFirst().orElse(null);
+            // Said first in the paragraph: when no task can be named, no answer carries it.
+            first.append(" The journey ").append(earlier.path()).append(", delivered with an "
+                + "earlier story, is claimed by no task of this build. ");
+            if (named == null) {
+                first.append("Nothing can be offered for it: ").append(earlier.why())
+                    .append(". Only sending the story back remains for it.");
+            } else if (!repairable(named)) {
+                first.append("Task '").append(named.title()).append("' changed what it uses (")
+                    .append(earlier.why()).append("), but that task has no repair round left "
+                        + "on an instruction. Only sending the story back remains for it.");
+            } else {
+                List<String> paths =
+                    screen.computeIfAbsent(named.id(), key -> new ArrayList<>());
+                if (!paths.contains(earlier.path())) {
+                    paths.add(earlier.path());
+                }
+                first.append("`").append(com.swarmcoder.domain.JourneyVerdict.SCREEN)
+                    .append("` with text gives task '").append(named.title())
+                    .append("' one repair round for it: ").append(earlier.why()).append('.');
+            }
+        }
+        java.util.UUID journeyOf = correctable.isEmpty() ? null : owner.id();
+        if (text.length() == 0 && first.length() == 0) {
+            return Offer.NONE;
+        }
+        return new Offer(screen, journeyOf, correctable, "WHAT THIS QUESTION CAN BE ANSWERED."
+            + first + " `retry`: the stage runs again as it is." + text);
+    }
+
+    /** Whether a task can be given a repair round on an instruction now. */
+    private static boolean repairable(Task task) {
+        return task.selectedCandidateId() != null
+            && com.swarmcoder.domain.InstructedRepair.roundLeft(task);
     }
 
     /** What follows a correction that was taken although it still fails, at a later step. */

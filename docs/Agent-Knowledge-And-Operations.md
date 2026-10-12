@@ -1494,7 +1494,7 @@ over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a
 | `promote_story`, `start_story` | yes | `BacklogService.promoteStory` / `startSession`. |
 | `accept_delivery` | yes | Accepts a story back for a verdict; the story records `acceptedBy = supervisor`. A gate a person normally passes. Slow: the merge and the whole project's build and test are made before it answers; the answer says what was done and how long it took. |
 | `send_back` | yes | `BacklogService.retryStory` with the note. |
-| `answer_question` | yes | Answers a question a build stopped to ask and hands the parked run back to its engine (`DecisionAnswers.answerAndResume`). Where the question lists `repair`, that answer with a text gives the named task one more repair round with the text as the workers' instruction (section 84 of the corrections). Where it lists `retest`, that answer with a text sends the named task's acceptance test back to its author with the text as the instruction; the correction is checked like a first-written test and the task is verified again from the candidates it has (section 86). |
+| `answer_question` | yes | Answers a question a build stopped to ask and hands the parked run back to its engine (`DecisionAnswers.answerAndResume`). Where the question lists `repair`, that answer with a text gives the named task one more repair round with the text as the workers' instruction (section 84 of the corrections). Where it lists `retest`, that answer with a text sends the named task's acceptance test back to its author with the text as the instruction; the correction is checked like a first-written test and the task is verified again from the candidates it has (section 86). Where a build stopped at final integration on a failed journey the question may list `screen` and `journey`, each with a required text: `screen` rules the journey right and gives the task whose screen it uses one repair round with the text, over the answer of the journey's author; `journey` rules it wrong and sends it back to its author with the text, judged in a browser on both trees like any correction, and it may ask for less - what it drops is recorded (section 88). |
 
 **One item** (`AttentionItem`) carries `kind`, `project`, `story`, `question`, `options`, `evidence`
 and `answerWith` (the tool call that answers it, ids filled in). Its texts are cut to 1,300 characters
@@ -1508,8 +1508,9 @@ queue starts stories itself), and `FINISHED` when every story is delivered or dr
 `keep` / `reword` / `allow` / `repair` for a rule question (the first word is what
 `RuleQuestions.parse` reads), `retry` with optional text for a blocked task, `repair` and `retest`
 with a required text where the question lists them (`InstructedRepair`, `InstructedRetest`: a worker
-round for the task, or its acceptance test back to its author), `note` for a budget or approval
-question. It writes the answer through `ControlServiceImpl.resolveDecision` and, when the
+round for the task, or its acceptance test back to its author), `screen` and `journey` with a
+required text where a failed final integration stopped on a journey (`JourneyVerdict`: the ruling
+of whoever answers on which side is wrong), `note` for a budget or approval question. It writes the answer through `ControlServiceImpl.resolveDecision` and, when the
 decision's run is parked, calls `ConsoleContext.resumeRun`, which sc-app binds to that project's
 `WorkflowEngine.advanceAsync`. A run is not handed back sooner than 3 seconds after it parked, and
 not twice for the same stop. The journey harness (`CoordinatorAsk`) answers through this same class.

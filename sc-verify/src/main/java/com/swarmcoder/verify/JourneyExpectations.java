@@ -203,6 +203,82 @@ public final class JourneyExpectations {
         return why;
     }
 
+    /**
+     * Exactly what {@code corrected} no longer does that {@code original} did (section 88), one
+     * line each, for the record of a correction that was taken although it asks for less:
+     *
+     * <ul>
+     *   <li>each step that changes something (fill, select, click, press) the original makes
+     *       and the correction does not - compared as the step is written, counted, so two
+     *       equal clicks of which one is left count once;</li>
+     *   <li>each field the original fills and the correction does not;</li>
+     *   <li>each criterion the original's {@code proves} gives steps for and the correction's
+     *       gives none for, or says is not on a screen.</li>
+     * </ul>
+     *
+     * <p>From the two files alone; no word of a step is read for its meaning. A step that was
+     * rewritten (another selector for the same control) is listed as dropped, with the step
+     * that replaced it not listed: the record errs towards saying more was dropped.
+     *
+     * @param criteria the criteria by number, for their words; null leaves the number alone
+     */
+    public static List<String> dropped(JourneyFile.Journey original,
+                                       JourneyFile.Journey corrected, List<String> criteria) {
+        List<String> lines = new ArrayList<>();
+        if (original == null || corrected == null) {
+            return lines;
+        }
+        List<String> kept = new ArrayList<>();
+        List<String> filled = new ArrayList<>();
+        for (VerifySpec.StepSpec step : corrected.steps()) {
+            if (changes(step)) {
+                kept.add(written(step));
+            }
+            if (step.fill() != null) {
+                filled.add(step.fill().strip());
+            }
+        }
+        List<String> fieldsGone = new ArrayList<>();
+        for (int i = 0; i < original.steps().size(); i++) {
+            VerifySpec.StepSpec step = original.steps().get(i);
+            if (changes(step) && !kept.remove(written(step))) {
+                lines.add("step " + (i + 1) + " is no longer made: " + written(step));
+            }
+            if (step.fill() != null && !filled.contains(step.fill().strip())
+                    && !fieldsGone.contains(step.fill().strip())) {
+                fieldsGone.add(step.fill().strip());
+            }
+        }
+        for (String field : fieldsGone) {
+            lines.add("the field " + field + " is no longer filled");
+        }
+        for (JourneyFile.Proof proof : original.proves()) {
+            if (proof.notOnScreen() != null) {
+                continue;
+            }
+            JourneyFile.Proof now = corrected.proves().stream()
+                .filter(other -> other.criterion() == proof.criterion()).findFirst().orElse(null);
+            if (now != null && now.notOnScreen() == null) {
+                continue;
+            }
+            String words = criteria != null && proof.criterion() >= 1
+                && proof.criterion() <= criteria.size()
+                && criteria.get(proof.criterion() - 1) != null
+                ? " \"" + criteria.get(proof.criterion() - 1).strip() + "\"" : "";
+            lines.add("criterion " + proof.criterion() + words + " is no longer proved on "
+                + "screen (it was by steps " + proof.first() + "-" + proof.last() + "; "
+                + (now == null ? "the correction has no entry for it"
+                    : "the correction says it is not on a screen: " + now.notOnScreen()) + ")");
+        }
+        return lines;
+    }
+
+    /** A changing step as its file writes it, with the value it types or chooses. */
+    private static String written(VerifySpec.StepSpec step) {
+        return step.describe() + (step.fill() != null && step.value() != null
+            ? " = \"" + step.value() + "\"" : "");
+    }
+
     /** Most expectations at the head of one journey that are tried alone on the start tree. */
     public static final int MAX_LEADING = 5;
 

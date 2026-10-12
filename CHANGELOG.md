@@ -30,6 +30,29 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **The answers `screen` and `journey` for a build that stopped on a failed journey.** When
+  the final integration of a story stops on a journey - its author called the journey wrong and
+  no correction could be taken, its reviews are used up, or the task's repair round is - the
+  question now takes the ruling of whoever answers on which side is wrong, each with a required
+  text. `screen`: the journey is right and the screen is wrong; the task whose screen the
+  journey uses gets one repair round with the text as its instruction, whatever the journey's
+  author answered, and the journey is not sent back to its author again. `journey`: the journey
+  is wrong; it goes back to its author with the text, the correction is tried in a browser on
+  the tree the run started from and on the merged tree like any correction, and it may ask for
+  less than the journey it replaces. Exactly what such a correction drops (steps, fields,
+  criteria no longer proved on screen) is written to the run's log, its carried warnings, the
+  task's note and the decision log, and the warnings a build carried are now part of a
+  delivery's evidence. `screen` is counted with `repair`
+  (`-Dswarmcoder.repair.instructedRounds`); `journey` is counted per journey per build, once
+  unless `-Dswarmcoder.journey.instructedCorrections` says otherwise (at most 4). The Console's
+  answer box takes text that begins with either word the same way.
+- **A failed journey delivered with an earlier story names a task where the code shows one.**
+  Such a journey is claimed by no task of the build, so nothing could be offered for it. The
+  application now reads which task's chosen change wrote a file that holds a name the journey
+  looks for, or wrote a screen, and offers `screen` for that task when exactly one can be
+  named; the question says which task and why. When none can be named the question says so in
+  one sentence, and that only sending the story back remains for that journey.
+
 - **The answer `retest` for a stopped build.** A question from a build that stopped at its
   build stage on one task that has an acceptance test of its own now also takes `retest` with
   a required text. The test goes back to its author with the text as the instruction and with

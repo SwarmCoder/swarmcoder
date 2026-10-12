@@ -285,11 +285,19 @@ final class SupervisorMcpTools {
                 + "instruction: the correction is checked like a first-written test, the task "
                 + "is verified again from the candidates it has and built again only if none "
                 + "passes. Use retest when the test is what is wrong - workers may not change "
-                + "a test, so repair cannot. Also counted per task and capped.",
+                + "a test, so repair cannot. Also counted per task and capped. Where a build "
+                + "stopped at final integration on a failed journey, the question may list "
+                + "screen and journey: your ruling on which side is wrong, each with text. "
+                + "screen = the journey is right; the task whose screen it uses gets one "
+                + "repair round with text as the instruction, over the answer of the "
+                + "journey's author. journey = the journey is wrong; its author corrects it "
+                + "as text says, the correction is tried in a browser on both trees like any "
+                + "correction and may ask for less, and what it drops is recorded in the "
+                + "decision log and shown with the delivery. Both are counted and capped.",
             SwarmMcpTools.schema("""
                 {"decision_id": {"type":"string"},
                  "answer": {"type":"string","description":"One of the answer tokens the question lists."},
-                 "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change. Required for retest: what is wrong with the acceptance test and what its author must change."}}""",
+                 "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change. Required for retest: what is wrong with the acceptance test and what its author must change. Required for screen: what the screen must do. Required for journey: how the journey must be corrected."}}""",
                 "decision_id", "answer"),
             args -> done(supervisor.answerDecision(SwarmMcpTools.str(args, "decision_id"),
                 SwarmMcpTools.str(args, "answer"), SwarmMcpTools.str(args, "text")), "Recorded.")));

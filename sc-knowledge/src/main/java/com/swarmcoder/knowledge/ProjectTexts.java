@@ -75,6 +75,39 @@ public final class ProjectTexts {
         };
     }
 
+    /**
+     * The texts ONE shipped file holds, lower case, read as {@link #heldIn} reads a tree: the
+     * string literals of a Java source, comments left out; the whole content of a page or
+     * message file. Empty for any other file, one that is too large, and one that cannot be
+     * read. For the question "which file holds this name" (section 88).
+     */
+    public static List<String> textsOfFile(Path file) {
+        List<String> texts = new ArrayList<>();
+        if (file == null || !Files.isRegularFile(file)) {
+            return texts;
+        }
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String type = dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        boolean java = type.equals("java");
+        try {
+            if ((!java && !WHOLE.contains(type)) || Files.size(file) > MAX_FILE_BYTES) {
+                return texts;
+            }
+            String content = Files.readString(file);
+            if (java) {
+                for (String literal : TreeQueries.literalsIn(JavaOutline.withoutComments(content))) {
+                    texts.add(literal.toLowerCase(Locale.ROOT));
+                }
+            } else {
+                texts.add(content.toLowerCase(Locale.ROOT));
+            }
+        } catch (IOException | RuntimeException unreadable) {                     // noqa
+            // not text: it holds none
+        }
+        return texts;
+    }
+
     private static List<String> read(Path tree) {
         List<String> texts = new ArrayList<>();
         long[] total = new long[1];

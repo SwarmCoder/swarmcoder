@@ -8540,3 +8540,148 @@ No stored type or enum changed.
 **Tests.** `AConstructorOfANestedTypeIsMetOnTheNestedTypeTest` (sc-knowledge),
 `ContractNestedTypesTest` (sc-workflow), `AVerificationObjectionIsTheBlockedReasonTest`
 (sc-swarm).
+
+## 88. The supervisor knew the journey was right and could not say so (live supervised build, 2026-10-12)
+
+**What was observed.** A story adds a rating to books. At final integration every acceptance
+test passed and 2 of 4 journeys failed.
+
+- The story's own journey filled `role=textbox[name="Rating"]` and later typed a value out of
+  range to see an error. The screen was built as a radio group. The journey went back to its
+  author (section 69), who answered `JOURNEY_WRONG` and handed in a correction that clicks a
+  radio button and leaves the out-of-range case out. The correction was not taken, rightly: it
+  asks for less than the journey it replaces. No worker was started (section 70), and the
+  question offered `retry`, which asks the author again.
+- The supervisor held the functional decision: the requirement says a person types a rating and
+  is told when it is not one, so the journey was right and the screen wrong. No answer said
+  that. The only route that worked was sending the whole story back.
+- In the same stop a journey delivered with an earlier story failed. It names no task of the
+  build, so nothing was offered for it either.
+
+**Why section 86 left journeys out, and what answers that here.** An instruction to a
+journey's author done beside the send-back would let a journey change without the two browser
+runs that make a correction sound. So the instruction is not carried out when it is given. It
+waits on the task; the stage merges and verifies the build again and makes the journeys; the
+journey fails; and the instruction enters `sendJourneyBackToItsAuthor` as a turn of its own,
+judged by `JourneysOfAPlan.judgeCorrection` in the same two browser runs. It is counted per
+journey beside the two reviews of section 71 and is not one of them.
+
+**What was built.**
+
+1. *The dispute is on the integrator's result.* `FinalIntegrator.JourneyDispute`: the task that
+   claims failed journeys with their paths, and each failed journey no task claims
+   (`EarlierJourney`). Set on every result that stops on failed journeys.
+2. *Which answers a stop takes* (`JourneysOfAPlan.offerFor`, from the dispute and the tasks'
+   counts; no word is read).
+   - `screen` for the journey's owner when the stop offers its workers nothing else (no
+     `JourneyFailure`: the author disowned the journey, or its reviews are used up), the task
+     has a chosen candidate and an instructed repair round left. Where the stop already offers
+     `repair` for the owner, `screen` is not listed beside it.
+   - `journey` for the owner's failed journeys that may still go back on an instruction.
+   - `screen` for the task named for an earlier story's journey (item 5).
+   `GreenfieldWorkflow.offerRepairAfterIntegration` writes the marks before the question can be
+   read: `Task.screenVerdictOfferedBy`, `journeyVerdictOfferedBy` and `disputedJourneys`.
+3. *The answer `screen`* (`JourneyVerdict.SCREEN`, `DecisionAnswers`). Text is required. Each
+   marked task gets `Task.repairInstruction` - a fixed sentence that the ruling outranks what
+   the journey's author answered, the journeys' paths, then the text - so the round is section
+   84's `repairOnInstruction`, with its count and its cap; the engine takes the question the
+   run stopped on as evidence from this mark as it does from `repairOfferedBy`. The journeys
+   are added to `Task.journeysUpheld`: a journey ruled right is not sent back to its author
+   again, and a later failure of it goes to the workers' ordinary round or stops the run. That
+   the ruling outranked the author is recorded on the task (`journeyReviewNote`, after the
+   author's own answer, which stays), in the recorded answer and in the supervisor's decision
+   log.
+4. *The answer `journey`* (`JourneyVerdict.JOURNEY`). Text is required. The task carries
+   `journeyInstruction` and who gave it; an earlier ruling that the journey was right is
+   withdrawn. At the next failure of the journey its author is shown the instruction before
+   the ordinary evidence (`JourneysOfAPlan.instructedEvidence`: the question is answered, the
+   journey is wrong, and a use the instruction says to take out may go). The correction is
+   judged as any is, with one difference: `judgeCorrection(..., lessAuthorised = true, ...)`
+   does not refuse it for asking for less. It must still be well formed, pass on the merged
+   tree or fail there at a later step, fail on the tree the run started from, and neither end
+   nor begin on what was there before. What it dropped is `Correction.dropped`
+   (`JourneyExpectations.dropped`): each changing step no longer made, each field no longer
+   filled, each criterion its `proves` gave steps for and no longer does. That list goes to the
+   run's log, a carried warning of the run (`JourneysOfAPlan.LESSER_CORRECTION`), the task's
+   note and the project's decision log (`ANSWERED_RUN_QUESTION`, with the question's id and who
+   answered). `SupervisorDesk.deliveryFacts` now lists the warnings a build carried, so the
+   reduction is in the delivery's evidence. A turn that takes nothing stops the run with no
+   worker (`instructionNotMet`). Counted when the author has answered
+   (`Task.journeyInstructionsGiven`, one entry a turn), capped by
+   `-Dswarmcoder.journey.instructedCorrections` (default 1, at most 4). An instruction the
+   pass did not use - the journey passed, or the stage failed earlier - is dropped and logged.
+5. *A journey delivered with an earlier story* (`JourneysOfAPlan.screenTaskOf`, called from
+   `FinalIntegrator.whoChangedWhatItUses` while the merged tree is there). From: the names the
+   journey's selectors look for (`JourneyExpectations.namesUsed`); the shipped files each
+   task's chosen change wrote, from its diff; which of those files hold one of the names in
+   the merged tree (`ProjectTexts.textsOfFile`, read as `texts_of` reads) and which are a
+   screen (`ScreenChange.screenPaths`, with the build's browser-only modules). One task whose
+   files hold a name is named; of several, the only one that also wrote a screen; with no name
+   held, the only task that wrote a screen. Otherwise nobody is named and the sentence says
+   what was found.
+6. *The question.* The park reason has one paragraph after its first line, before the detail:
+   the earlier journeys first (which task and why, or that only sending the story back
+   remains), then what `retry`, `screen` and `journey` do. It is placed there so that it is
+   inside the 700 characters `next_attention` shows of a long question; the options
+   themselves are listed in full and never cut. `next_attention`, `decision_text` and
+   `answer_question` take the options from `DecisionAnswers.optionsFor`; the Console's answer
+   path takes text whose first word is `screen` or `journey` where that answer is offered.
+
+**Decisions.**
+
+- *A ruling does not skip the browser.* `journey` allows one thing, a lesser correction, and
+  only when both browser runs bear it out.
+- *After `screen`, the author is not asked about that journey again.* If the screen still
+  fails it after the round, the task's ordinary repair round follows when unused; otherwise
+  the run stops, and `journey` is still there for a person who changes their mind.
+- *`screen` uses the repair-on-instruction count.* A task that has had its instructed round is
+  not offered `screen`.
+- *The decision log entry reuses `ANSWERED_RUN_QUESTION`.* No enum constant was added.
+
+**Stored differently.** Fields were added to `Task`, no constant to any enum:
+`screenVerdictOfferedBy`, `journeyVerdictOfferedBy`, `disputedJourneys`, `journeysUpheld`,
+`journeyInstruction`, `journeyInstructionBy`, `journeyInstructionsGiven` (all null on a task
+stored before). `FinalIntegrator.Result` gained `journeyDispute`; it is held in memory only.
+
+**The run that was already stopped.** Its open question carries no mark, so it lists `retry`
+alone. When the application starts it takes unfinished runs up again (`RunResumer`); the stage
+runs again, the author is asked again (a disowned journey is not marked as asked) and the run
+stops with a new question that carries the marks. Answering the old question `retry` does the
+same.
+
+**Tests.** New: `APersonRulesOnADisputedJourneyTest` (sc-workflow: a lesser correction is
+refused without the authority and taken with it; what it dropped; the authority covers nothing
+else; the author's opening; naming a task for an earlier story's journey, four cases; what a
+stop offers, the caps, and the sentence when nobody can be named),
+`AStoppedBuildCanBeAnsweredScreenOrJourneyTest` (sc-console: offered and listed, text
+required, what each writes on the task, the recorded answer and log entry, not offered without
+the mark or away from final integration, the caps, the same answers on screen, a carried
+warning in the delivery's evidence). Run with them: `AFailedJourneyGoesBackToItsAuthorTest`,
+`AStoppedBuildCanBeAnsweredRepairTest`, `AStoppedBuildCanBeAnsweredRetestTest`,
+`SupervisorDeskTest`, `SupervisorMcpToolsTest`,
+`ATaskGetsOneMoreRepairRoundOnAnInstructionTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model, a container, a browser or a live build.
+- `sendJourneyBackToItsAuthor` with an instruction, `FinalIntegrator.makeJourneys` setting the
+  dispute, `whoChangedWhatItUses` on a real merged tree, the marks written at the park and the
+  round after `screen` have no test: they need a container with a browser or the real engine
+  inside the workflow, as sections 69 to 75 and 84 say of the same paths. The judging, the
+  naming, the offer and the answers are tested as parts.
+- The author is given the instruction inside the review's ordinary opening, whose brief still
+  says a correction that asks for less is refused; the instruction says that this does not
+  apply as far as it goes. Whether a model follows it was not tried.
+- "Dropped" compares steps as written. A step rewritten with another selector is listed as
+  dropped; the record errs towards saying more.
+- Naming a task for an earlier story's journey reads string literals and page files. A name
+  put together from parts, and a regression in server code under an unchanged screen, are not
+  seen; then nobody is named. The repair workers of that task are told the journey's path and
+  the question the run stopped on; `acceptance_test` does not show them a journey their task
+  does not claim.
+- When one stop marks two tasks for `screen`, the one answer gives both the same text.
+- An instruction lost to a file that could not be read from the tests branch is not counted
+  and is not given again.
+- Opening a store written before the new fields. EclipseStore maps added fields on its own and
+  `Task` has gained fields this way before; no old store was opened in a test.
+- The Console's question card was not opened to see the new paragraph or options.

@@ -22,6 +22,7 @@ import com.swarmcoder.domain.DecisionKind;
 import com.swarmcoder.domain.DecisionState;
 import com.swarmcoder.domain.InstructedRepair;
 import com.swarmcoder.domain.InstructedRetest;
+import com.swarmcoder.domain.JourneyVerdict;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.RunState;
 import com.swarmcoder.domain.Story;
@@ -138,7 +139,10 @@ public final class DecisionAnswers {
      * when it raised the question - which tasks it may be answered {@code repair} for - and
      * from the count on each task, never from the question's words. And {@code retest}, which
      * sends the task's acceptance test back to its author, where {@link #retestTasks} names a
-     * task (section 86).
+     * task (section 86). And, for a failed final integration that stopped on a journey,
+     * {@code screen} and {@code journey}: the verdict of whoever answers on which side of the
+     * failed journey is wrong, where {@link #screenTasks} and {@link #journeyTasks} name a
+     * task (section 88, {@link JourneyVerdict}).
      */
     public static List<Option> optionsFor(ArtifactStore store, Decision decision) {
         List<Option> options = optionsFor(decision.kind());
@@ -162,7 +166,148 @@ public final class DecisionAnswers {
                 + "what is wrong: no worker may change an acceptance test, so repair cannot",
                 true));
         }
+        List<Task> screening = screenTasks(store, decision);
+        if (whyNoScreen(store, decision, screening) == null) {
+            options.add(new Option(JourneyVerdict.SCREEN, "you rule that the journey is right "
+                + "and the screen is wrong. " + capitalised(titles(screening)) + " get"
+                + (screening.size() == 1 ? "s" : "") + " one repair round, started from the "
+                + "candidate the task has chosen, for the journey(s) " + disputed(screening)
+                + ". text is REQUIRED: it is what the workers are told the screen must do. "
+                + "Your ruling outranks what the journey's author answered, is recorded as "
+                + "such, and the journey is not sent back to its author again. "
+                + roundsLeft(screening), true));
+        }
+        List<Task> correcting = journeyTasks(store, decision);
+        if (whyNoJourney(store, decision, correcting) == null) {
+            options.add(new Option(JourneyVerdict.JOURNEY, "you rule that the journey is "
+                + "wrong. The journey(s) " + correctable(correcting) + " of "
+                + titles(correcting) + " go back to their author. text is REQUIRED: it is how "
+                + "the journey must be corrected. The correction is tried in a browser on the "
+                + "tree the run started from and on the merged tree, like any correction; it "
+                + "may ask for less than the journey it replaces, and exactly what it drops "
+                + "is then recorded in the decision log and shown with the delivery. No "
+                + "worker is started. " + correctionsLeft(correcting), true));
+        }
         return options;
+    }
+
+    /**
+     * The tasks of the question's build that it may be answered {@code screen} for (section
+     * 88): the build is at final integration and the workflow marked the question as one
+     * about a failed journey whose screen is that task's. Read from what was recorded, never
+     * from the question's words.
+     */
+    static List<Task> screenTasks(ArtifactStore store, Decision decision) {
+        return markedAtFinalIntegration(store, decision, true);
+    }
+
+    /** The tasks whose failed journeys the question may be answered {@code journey} for. */
+    static List<Task> journeyTasks(ArtifactStore store, Decision decision) {
+        return markedAtFinalIntegration(store, decision, false);
+    }
+
+    private static List<Task> markedAtFinalIntegration(ArtifactStore store, Decision decision,
+                                                       boolean screen) {
+        if (decision == null || decision.kind() != DecisionKind.BLOCKED_TASK
+                || decision.runId() == null) {
+            return List.of();
+        }
+        Run run = store.root().runs.get(decision.runId());
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : store.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || graph.tasks() == null
+                || run.state() != RunState.FINAL_INTEGRATION) {
+            return List.of();
+        }
+        return graph.tasks().stream().filter(task -> decision.id().equals(screen
+            ? task.screenVerdictOfferedBy() : task.journeyVerdictOfferedBy())).toList();
+    }
+
+    /** Why this question cannot be answered {@code screen}, or null when it can. */
+    static String whyNoScreen(ArtifactStore store, Decision decision, List<Task> tasks) {
+        String common = whyNoVerdict(store, decision, tasks);
+        if (common != null) {
+            return common;
+        }
+        for (Task task : tasks) {
+            if (task.selectedCandidateId() == null) {
+                return "task '" + task.title() + "' has no chosen candidate to start a repair "
+                    + "round from";
+            }
+            if (!InstructedRepair.roundLeft(task)) {
+                return "task '" + task.title() + "' has already had "
+                    + task.instructedRepairRounds() + " repair round(s) on an instruction in "
+                    + "this build, and " + InstructedRepair.limit() + " is the most a task is "
+                    + "given (-D" + InstructedRepair.LIMIT_PROPERTY + " changes it). Send the "
+                    + "story back, or change something and retry";
+            }
+        }
+        return null;
+    }
+
+    /** Why this question cannot be answered {@code journey}, or null when it can. */
+    static String whyNoJourney(ArtifactStore store, Decision decision, List<Task> tasks) {
+        String common = whyNoVerdict(store, decision, tasks);
+        if (common != null) {
+            return common;
+        }
+        for (Task task : tasks) {
+            if (JourneyVerdict.correctable(task).isEmpty()) {
+                return "the journey(s) of task '" + task.title() + "' this question is about "
+                    + "have already gone back to their author on an instruction in this "
+                    + "build, and " + JourneyVerdict.limit() + " is the most a journey is "
+                    + "given (-D" + JourneyVerdict.LIMIT_PROPERTY + " changes it). Correct "
+                    + "the journey by hand on the run's tests branch and retry, or send the "
+                    + "story back";
+            }
+        }
+        return null;
+    }
+
+    private static String whyNoVerdict(ArtifactStore store, Decision decision,
+                                       List<Task> tasks) {
+        if (decision.kind() != DecisionKind.BLOCKED_TASK) {
+            return "this kind of question is not about a journey";
+        }
+        if (decision.state() != DecisionState.PENDING) {
+            return "that question has already been answered";
+        }
+        if (tasks.isEmpty()) {
+            return "this question is not one about a failed journey that names a task of its "
+                + "build: the build did not stop at final integration on a journey, or no "
+                + "one task could be named for the journey that failed";
+        }
+        Run run = store.root().runs.get(decision.runId());
+        if (run == null || run.parkedAt() == null) {
+            return "the build this question came from is not stopped waiting on it";
+        }
+        return null;
+    }
+
+    private static String disputed(List<Task> tasks) {
+        return tasks.stream().flatMap(task -> task.disputedJourneys().stream()).distinct()
+            .toList().toString();
+    }
+
+    private static String correctable(List<Task> tasks) {
+        return tasks.stream().flatMap(task -> JourneyVerdict.correctable(task).stream())
+            .distinct().toList().toString();
+    }
+
+    private static String correctionsLeft(List<Task> tasks) {
+        int used = 0;
+        for (Task task : tasks) {
+            for (String path : JourneyVerdict.correctable(task)) {
+                used = Math.max(used, JourneyVerdict.given(task, path));
+            }
+        }
+        return "Time " + (used + 1) + " of the " + JourneyVerdict.limit()
+            + " a journey goes back on an instruction per build.";
+    }
+
+    private static String capitalised(String text) {
+        return text.isEmpty() ? text
+            : text.substring(0, 1).toUpperCase(Locale.ROOT) + text.substring(1);
     }
 
     /**
@@ -363,6 +508,34 @@ public final class DecisionAnswers {
                     + "new to go on, the author has no reason to write it differently.");
             }
         }
+        List<Task> screening = List.of();
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && word.equals(JourneyVerdict.SCREEN)) {
+            screening = screenTasks(store, decision);
+            String whyNot = whyNoScreen(store, decision, screening);
+            if (whyNot != null) {
+                return failed("Not recorded: " + whyNot + ". The answers this question accepts "
+                    + "are " + options.stream().map(Option::token).toList());
+            }
+            if (text == null || text.isBlank()) {
+                return failed("Not recorded: screen needs text. It is what the workers are "
+                    + "told the screen must do; a ruling with no reason gives them nothing to "
+                    + "build from.");
+            }
+        }
+        List<Task> correcting = List.of();
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && word.equals(JourneyVerdict.JOURNEY)) {
+            correcting = journeyTasks(store, decision);
+            String whyNot = whyNoJourney(store, decision, correcting);
+            if (whyNot != null) {
+                return failed("Not recorded: " + whyNot + ". The answers this question accepts "
+                    + "are " + options.stream().map(Option::token).toList());
+            }
+            if (text == null || text.isBlank()) {
+                return failed("Not recorded: journey needs text. It is how the journey's "
+                    + "author is told to correct it; sent back with nothing new to go on, the "
+                    + "author answers as it did before.");
+            }
+        }
         if (options.stream().noneMatch(option -> option.token().equals(word))) {
             return failed("'" + token + "' is not an answer this question accepts; the answers are "
                 + options.stream().map(Option::token).toList());
@@ -402,6 +575,49 @@ public final class DecisionAnswers {
                 + "author with the text as the instruction; the task is then verified again "
                 + "from the candidates it has. " + retestsLeft(retesting) + " ";
         }
+        if (!screening.isEmpty()) {
+            // The verdict of whoever answers outranks the journey's author (section 88). On
+            // the task before the answer is recorded: the instruction the engine gives the
+            // repair round, the journeys now ruled right, and a sentence that says so.
+            String who = actor == null || actor.isBlank() ? "operator" : actor;
+            for (Task task : screening) {
+                List<String> journeys = task.disputedJourneys();
+                task.setRepairInstruction(JourneyVerdict.screenInstruction(journeys, who, text));
+                List<String> upheld = new ArrayList<>(task.journeysUpheld());
+                journeys.stream().filter(path -> !upheld.contains(path)).forEach(upheld::add);
+                task.setJourneysUpheld(upheld);
+                String noted = task.journeyReviewNote();
+                task.setJourneyReviewNote((noted == null || noted.isBlank() ? ""
+                    : noted + " ") + JourneyVerdict.upheldNote(journeys, who, text));
+                store.saveTask(task);
+            }
+            raised = "Recorded as a ruling that the journey is right and the screen is wrong; "
+                + "it outranks the answer of the journey's author. " + capitalised(
+                    titles(screening)) + " get" + (screening.size() == 1 ? "s" : "")
+                + " one repair round with the text as the workers' instruction. "
+                + roundsLeft(screening) + " ";
+        }
+        if (!correcting.isEmpty()) {
+            // On the task before the answer is recorded and the build handed back: the stage
+            // merges and verifies the build again, the journey fails again, and it then goes
+            // to its author with this text; the workflow clears it.
+            String who = actor == null || actor.isBlank() ? "operator" : actor;
+            String journeys = correctable(correcting);
+            for (Task task : correcting) {
+                List<String> sentBack = JourneyVerdict.correctable(task);
+                task.setJourneyInstruction(text.strip());
+                task.setJourneyInstructionBy(who);
+                task.setJourneysUpheld(task.journeysUpheld().stream()
+                    .filter(path -> !sentBack.contains(path)).toList());
+                store.saveTask(task);
+            }
+            raised = "Recorded as a ruling that the journey is wrong. The journey(s) "
+                + journeys + " go back to their author with the text as the instruction, once "
+                + "the stage has merged and verified the build again; a correction that asks "
+                + "for less is taken when the browser shows it fails before the story and "
+                + "gets further after it, and what it drops is recorded. "
+                + correctionsLeft(correcting) + " ";
+        }
         try {
             new ControlServiceImpl().recordAnswer(id.toString(),
                 responseFor(decision.kind(), word, text, actor));
@@ -423,7 +639,9 @@ public final class DecisionAnswers {
      * build's question whose text starts with repair, where that answer is offered, is answered
      * as that option with the rest of the text as the workers' instruction; one whose text
      * starts with retest, where that is offered, as that option with the rest as the
-     * instruction to the author of the task's acceptance test (section 86).
+     * instruction to the author of the task's acceptance test (section 86). One whose text
+     * starts with screen or journey, where a failed journey's question offers that verdict, is
+     * answered as it with the rest as the instruction (section 88).
      */
     public static Outcome answerFromConsole(String decisionId, String text) {
         ConsoleContext context = ConsoleContext.get();
@@ -457,6 +675,19 @@ public final class DecisionAnswers {
                 && whyNoRetest(context.store(), decision,
                     retestTasks(context.store(), decision)) == null) {
             // The same answer again, with the rest as the instruction to the test's author.
+            return answerAndResume(decisionId, first, said.substring(first.length())
+                .replaceFirst("^[\\s:.,;]+", ""), "operator");
+        }
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(JourneyVerdict.SCREEN)
+                && whyNoScreen(context.store(), decision,
+                    screenTasks(context.store(), decision)) == null) {
+            // The ruling on a failed journey (section 88), with the rest as the instruction.
+            return answerAndResume(decisionId, first, said.substring(first.length())
+                .replaceFirst("^[\\s:.,;]+", ""), "operator");
+        }
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(JourneyVerdict.JOURNEY)
+                && whyNoJourney(context.store(), decision,
+                    journeyTasks(context.store(), decision)) == null) {
             return answerAndResume(decisionId, first, said.substring(first.length())
                 .replaceFirst("^[\\s:.,;]+", ""), "operator");
         }
