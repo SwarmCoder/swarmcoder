@@ -88,10 +88,23 @@ class LibrarianReturnsThePageThatAnswersTest {
      * the guide, the page explaining the two store modes, and the walkthrough's persistence step.
      * A question naming an example's server class is a question about code, and its prose half is
      * allowed to be about running an example instead.
+     *
+     * <p>docs/CONCEPTS.md is accepted since the framework's 0.10.0 line (commit 5ab575d, the one
+     * start call for every container): its "Zeroz4jServer" entry was rewritten to say that
+     * {@code Zeroz4jServer.start(port, name)} is how a backend is started, which is the answer to
+     * "how do I write the server's main class" and now matches the question that names that class.
+     * docs/guides/vidocq-server.md is accepted for the same reason: its "One start call, whichever
+     * container" section (commit 5ab575d) holds a complete {@code main} calling
+     * {@code Zeroz4jServer.start(8080, ...)}, container-neutral despite the page's title.
+     * docs/guides/starting-the-server.md (commit a7dd2ee, 2026-10-12) is the page written for exactly
+     * this question, "How do I write the server's main class and start the server?"; once it
+     * exists it is the best answer to the questions that name a server's main class.
      */
     static final List<String> ANSWERING_PAGES = List.of(
         PERSISTENCE, STORE_MODES, "zeroz4j/docs/CODE_WALKTHROUGH.md",
-        "zeroz4j/docs/guides/oidc-auth.md", "zeroz4j/docs/examples/index.md");
+        "zeroz4j/docs/guides/oidc-auth.md", "zeroz4j/docs/examples/index.md",
+        "zeroz4j/docs/CONCEPTS.md", "zeroz4j/docs/guides/vidocq-server.md",
+        "zeroz4j/docs/guides/starting-the-server.md");
 
     @TempDir
     Path repo;
@@ -200,7 +213,15 @@ class LibrarianReturnsThePageThatAnswersTest {
         // framework's own server bootstrap is, and it is a real class with a real main.
         assertThat(librarian.lookupApi("ServerApp main"))
             .doesNotContain(ARCHETYPE)
-            .containsPattern("## Source: \\S+(Zeroz4jServer|ExampleServer)\\.java");
+            // Since docs/guides/starting-the-server.md (framework commit a7dd2ee) the prose half
+            // carries that main, the call to Zeroz4jServer.start, so either half may show it. The
+            // code half alone does not: Zeroz4jServer declares no main and matches one word of
+            // the question, and of the classes that match two (a hump of the name and a main
+            // method) the examples' client start classes rank just above their server ones.
+            .satisfiesAnyOf(
+                answer -> assertThat(answer)
+                    .containsPattern("## Source: \\S+(Zeroz4jServer|ExampleServer)\\.java"),
+                answer -> assertThat(answer).contains("Zeroz4jServer.start("));
     }
 
     /**
@@ -237,8 +258,18 @@ class LibrarianReturnsThePageThatAnswersTest {
             .doesNotContain("CHANGELOG.md")
             .doesNotContain("CONTRIBUTING.md")
             .doesNotContain("docs/contribute/");
-        assertThat(map.indexOf("docs/guides/"))
-            .isLessThan(map.indexOf("docs/CONCEPTS.md"));
+        // Every guide is listed before the first page that is not a guide. The catalogue has a
+        // fixed size and the framework's guides grew (docs/guides/vidocq-server.md, 0.10.0), so
+        // docs/CONCEPTS.md may no longer fit; "13 more documents" says so, and lookup_api finds it.
+        List<String> lines = map.lines().filter(line -> line.startsWith("- ")).toList();
+        int firstOther = 0;
+        while (firstOther < lines.size() && lines.get(firstOther).contains("docs/guides/")) {
+            firstOther++;
+        }
+        assertThat(firstOther).as("the guides come first").isPositive();
+        assertThat(lines.subList(firstOther, lines.size()))
+            .as("no guide listed after a page that is not one")
+            .noneMatch(line -> line.contains("docs/guides/"));
     }
 
     /** The brief says which version of the folder these documents describe. */

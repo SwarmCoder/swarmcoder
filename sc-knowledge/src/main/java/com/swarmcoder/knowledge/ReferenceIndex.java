@@ -24,6 +24,7 @@ import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.Term;
@@ -105,7 +106,7 @@ final class ReferenceIndex {
      * indexed or HOW it is analysed builds a new index instead of searching an old one under new
      * rules, which returns nothing at all and says nothing about why.
      */
-    private static final String INDEX_FORMAT = "v1-fielded-bm25";
+    private static final String INDEX_FORMAT = "v2-fielded-bm25-compounds";
 
     /**
      * Field boosts, documentation.
@@ -274,16 +275,104 @@ final class ReferenceIndex {
             max, referenceOnly);
     }
 
-    /** The source files that answer {@code query}, best first. Tests rank below real code. */
+    /**
+     * The source files that answer {@code query}, best first. Tests rank below real code, and a
+     * file's score is multiplied by the share of the question it covers ({@link #coverage}).
+     */
     List<SrcHit> searchSources(String query, int max) {
+        List<Scored> candidates = search("src", query, srcFields(), Set.of());
+        Map<Integer, Double> coverage = coverage(candidates, terms(query));
         List<SrcHit> hits = new ArrayList<>();
-        for (Scored scored : search("src", query, srcFields(), Set.of())) {
+        for (Scored scored : candidates) {
             Document document = scored.document();
             FileKinds.Kind kind = kindOf(document);
             hits.add(new SrcHit(document.get("file"), Path.of(document.get("abs")), kind,
-                document.get("outline"), scored.score() * kindWeight(kind)));
+                document.get("outline"),
+                scored.score() * kindWeight(kind) * coverage.getOrDefault(scored.doc(), 1.0)));
         }
         return rank(hits, SrcHit::kind, SrcHit::score, SrcHit::address, hit -> "", max, false);
+    }
+
+    /**
+     * For each candidate source file, the share of the question's distinct terms it matches: 1.0
+     * for a file that matches every term some candidate matches, 0.25 for one that matches a
+     * quarter of them.
+     *
+     * <p><b>Why.</b> The score of a file is a sum over terms, and a rare word in a short field is
+     * worth a great deal, so one word of the question, matched in a short class name, outscored a
+     * file that matched two or three of the question's words more weakly. Measured 2026-10-12 on a
+     * reference checkout of 718 source files, for a two-word question naming a server's start
+     * class and its {@code main} method: first came a class of text constants and second a client
+     * class, each for one hump of the first word in its own name; the server classes that declare
+     * a {@code main}, matching both words, were tenth and lower and never shown. A question is
+     * several words because all of them matter; a file that answers one of them is not half an
+     * answer to the rest.
+     *
+     * <p><b>A term counts only where it tells files apart.</b> A term found in one field of more
+     * than half of all source files says nothing about any of them there: every file under
+     * {@code src/main/java} has "main" in its path, and counting that would give every file the
+     * question's word "main". The score already ignores such a match (its weight is near zero);
+     * the count has to ignore it too. The same term in a field where it is rare still counts.
+     *
+     * <p>Terms no candidate matches are left out of the total, since they are the same for every
+     * file and change no order. Nothing here reads a file: it asks the index which of the
+     * candidates hold which term.
+     */
+    private Map<Integer, Double> coverage(List<Scored> candidates, List<String> terms) {
+        IndexSearcher current = searcher;
+        if (current == null || candidates.size() < 2 || terms.size() < 2) {
+            return Map.of();
+        }
+        Map<Integer, Integer> matched = new HashMap<>();
+        int answered = 0;
+        try {
+            IndexReader index = current.getIndexReader();
+            int sourceFiles = Math.max(1, index.getDocCount("namepart"));
+            BooleanQuery.Builder among = new BooleanQuery.Builder();
+            for (Scored candidate : candidates) {
+                among.add(new TermQuery(new Term("file", candidate.document().get("file"))),
+                    BooleanClause.Occur.SHOULD);
+            }
+            BooleanQuery theCandidates = among.build();
+            for (String term : terms) {
+                BooleanQuery.Builder anyField = new BooleanQuery.Builder();
+                boolean tellsFilesApart = false;
+                for (String field : new java.util.TreeSet<>(srcFields().keySet())) {
+                    Term inField = new Term(field, term);
+                    int holders = index.docFreq(inField);
+                    if (holders > 0 && 2L * holders <= sourceFiles) {
+                        anyField.add(new TermQuery(inField), BooleanClause.Occur.SHOULD);
+                        tellsFilesApart = true;
+                    }
+                }
+                if (!tellsFilesApart) {
+                    continue;
+                }
+                BooleanQuery.Builder holding = new BooleanQuery.Builder();
+                holding.add(new TermQuery(new Term("unit", "src")), BooleanClause.Occur.FILTER);
+                holding.add(theCandidates, BooleanClause.Occur.FILTER);
+                holding.add(anyField.build(), BooleanClause.Occur.FILTER);
+                ScoreDoc[] holders = current.search(holding.build(), candidates.size()).scoreDocs;
+                if (holders.length > 0) {
+                    answered++;
+                }
+                for (ScoreDoc holder : holders) {
+                    matched.merge(holder.doc, 1, Integer::sum);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Counting the terms each source file matches failed: {}", e.getMessage());
+            return Map.of();
+        }
+        if (answered < 2) {
+            return Map.of();
+        }
+        Map<Integer, Double> coverage = new HashMap<>();
+        for (Scored candidate : candidates) {
+            coverage.put(candidate.doc(),
+                matched.getOrDefault(candidate.doc(), 0) / (double) answered);
+        }
+        return coverage;
     }
 
     // --- ranking -------------------------------------------------------------------------------
@@ -370,7 +459,7 @@ final class ReferenceIndex {
 
     // --- searching -----------------------------------------------------------------------------
 
-    private record Scored(Document document, double score) {}
+    private record Scored(int doc, Document document, double score) {}
 
     /** The section level: which part of a page answers. Title and path are the page's, not its. */
     private static Map<String, Float> sectionFields() {
@@ -413,7 +502,7 @@ final class ReferenceIndex {
         try {
             TopDocs top = current.search(builder.build(), CANDIDATES);
             for (ScoreDoc hit : top.scoreDocs) {
-                out.add(new Scored(current.storedFields().document(hit.doc), hit.score));
+                out.add(new Scored(hit.doc, current.storedFields().document(hit.doc), hit.score));
             }
         } catch (Exception e) {
             log.warn("Reference search for '{}' failed: {}", query, e.getMessage());
@@ -456,7 +545,29 @@ final class ReferenceIndex {
                 }
             }
         }
+        terms.addAll(compounds(query == null ? "" : query));
         return List.copyOf(terms);
+    }
+
+    /**
+     * Names written with hyphens or underscores, joined into one term: "inventory-crud-server"
+     * gives "inventorycrudserver". The parts alone cannot tell a module from its sibling (the
+     * client and the server of one example share every part but the last, and that last part is
+     * the commonest word in the folder), while the joined name is a folder's name and matches only
+     * that folder. The same joining runs at index time on every path segment.
+     */
+    static List<String> compounds(String text) {
+        Set<String> joined = new LinkedHashSet<>();
+        for (String raw : text.split("[^A-Za-z0-9_-]+")) {
+            if (raw.indexOf('-') < 0 && raw.indexOf('_') < 0) {
+                continue;
+            }
+            String name = raw.replaceAll("[-_]", "").toLowerCase(Locale.ROOT);
+            if (name.length() >= 3 && !STOP.contains(name)) {
+                joined.add(name);
+            }
+        }
+        return List.copyOf(joined);
     }
 
     /** A token and its camel-case humps, all lower case: "DataRoot" -> data, root, dataroot. */
@@ -487,6 +598,14 @@ final class ReferenceIndex {
         for (String raw : text.split("[^A-Za-z0-9]+")) {
             for (String part : expand(raw)) {
                 sb.append(part).append(' ');
+            }
+        }
+        // Each folder or file name written with hyphens or underscores, joined, the way a
+        // question writing it is joined (see compounds).
+        for (String segment : text.split("[/\\\\]")) {
+            int dot = segment.lastIndexOf('.');
+            for (String joined : compounds(dot > 0 ? segment.substring(0, dot) : segment)) {
+                sb.append(joined).append(' ');
             }
         }
         return sb.toString();

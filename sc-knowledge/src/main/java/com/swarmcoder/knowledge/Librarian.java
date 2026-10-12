@@ -1349,6 +1349,13 @@ public class Librarian {
      * room with the files that do it.
      */
     private static final int FILL_MIN_WORDS = 3;
+    /**
+     * How far down the ranking the fill looks for files to show. It stops at the first few with
+     * names of their own, so this only matters when many files share one name: with a window of
+     * nine, eight examples' classes of one name used the window up and an answer with room for
+     * three files showed two.
+     */
+    private static final int FILL_WINDOW = 60;
     /** Below this much room a shaped file is all note and no signatures; it is named instead. */
     private static final int MIN_SHAPED_CHARS = 900;
 
@@ -1413,7 +1420,7 @@ public class Librarian {
         // spends the worker's context on material it did not ask for, and the whole point of
         // shaping an answer to the size of its question was not to do that.
         if (files.isEmpty() || contentWords(query) >= FILL_MIN_WORDS) {
-            for (ReferenceIndex.SrcHit hit : curator.sourceHits(query, 3 * MAX_NAMED_FILES)) {
+            for (ReferenceIndex.SrcHit hit : curator.sourceHits(query, FILL_WINDOW)) {
                 if (files.size() > MAX_NAMED_FILES) {
                     break;
                 }
@@ -1434,6 +1441,7 @@ public class Librarian {
         Set<String> names = new java.util.HashSet<>();
         named.forEach(hit -> names.add(simpleName(hit)));
         int alsoNamedLine = files.size() > 1 ? 140 : 0;
+        List<String> pointers = new ArrayList<>();
         int shaped = 0;
         for (SourceIndex.Hit hit : files) {
             String source = read(hit);
@@ -1444,9 +1452,17 @@ public class Librarian {
                 notShown.add(simpleName(hit));
                 continue;
             }
+            // The line pointing at other files with this name is kept for a file the question
+            // NAMED: which of several the worker meant is a real doubt. For a file the ranking
+            // filled in it is a courtesy, and it is added only when it takes no room from code.
+            // Measured 2026-10-12: it is three full paths, about 500 characters, and reserving
+            // it for a filled-in file left that file under the minimum, so an example's own
+            // implementation was "not shown for room" while 500 characters went on pointers.
+            boolean askedFor = named.contains(hit);
             String others = otherFilesNamed(hit);
             // What the file's own heading and fence cost, and the line naming files not shown.
-            int overhead = others.length() + hit.address().length() + 40 + alsoNamedLine;
+            int overhead = (askedFor ? others.length() : 0) + hit.address().length() + 40
+                + alsoNamedLine;
             int room = maxChars - sb.length() - overhead;
             // Under this, a surface has room for its note and nothing else — say so instead.
             if (room < MIN_SHAPED_CHARS) {
@@ -1456,13 +1472,26 @@ public class Librarian {
             Set<String> otherTypes = new java.util.HashSet<>(names);
             otherTypes.remove(simpleName(hit));
             String block = SourceShaper.shape(hit.address(), source, query, room, otherTypes)
-                .render(hit.address()) + others;
+                .render(hit.address());
+            if (askedFor) {
+                block += others;
+            }
             if (sb.length() + block.length() + alsoNamedLine > maxChars) {
                 notShown.add(simpleName(hit));
                 continue;
             }
             sb.append(block);
+            if (!askedFor && !others.isEmpty()) {
+                pointers.add(others);
+            }
             shaped++;
+        }
+        // After every file that fits has been shown, and only into room no file could use.
+        int alsoNamedRoom = notShown.isEmpty() ? 0 : alsoNamedLine;
+        for (String pointer : pointers) {
+            if (sb.length() + pointer.length() + alsoNamedRoom <= maxChars) {
+                sb.append(pointer);
+            }
         }
         if (!notShown.isEmpty()) {
             sb.append("[Also named, not shown for room: ").append(String.join(", ", notShown))

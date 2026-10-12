@@ -133,6 +133,19 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **The documentation search tells sibling modules apart.** A question that writes a module's
+  name with hyphens or underscores, such as `inventory-crud-server`, now also matches the folder
+  of that name as one word. Before, only its parts matched, so the example's client files
+  outranked its server files for a question about the server. The search index is rebuilt once
+  after the upgrade.
+- **The code part of a documentation answer shows the files that match the question.** A source
+  file is now ranked by how many of the question's words it matches as well as by how strongly:
+  a file that matches one word in its own short name no longer comes before a file that matches
+  two or three. A word found in more than half of all source files, such as `main` in every
+  path under `src/main/java`, does not count. A file the ranking chose is no longer left out
+  "for room" because space was kept for a line listing other files with its name; that line is
+  kept for a file the question named and otherwise added only when room is left. When many
+  files share one name, the answer now looks further down the ranking for a third file.
 - **The application's own settings file no longer blocks accepting a delivery.** Saving a
   project's settings or reference folders writes `.swarmcoder/project.yaml` into the project's
   repository, and accepting was then refused for "changes that are not committed". That file
