@@ -1491,9 +1491,9 @@ over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a
 | `apply_proposals` | yes | Accepts all proposals but those in `reject`, and applies them. |
 | `agree_requirements` | yes | `BrdService.promoteRequirement` / `promoteAllDrafts`. A gate a person normally passes. |
 | `promote_story`, `start_story` | yes | `BacklogService.promoteStory` / `startSession`. |
-| `accept_delivery` | yes | Accepts a story back for a verdict; the story records `acceptedBy = supervisor`. A gate a person normally passes. |
+| `accept_delivery` | yes | Accepts a story back for a verdict; the story records `acceptedBy = supervisor`. A gate a person normally passes. Slow: the merge and the whole project's build and test are made before it answers; the answer says what was done and how long it took. |
 | `send_back` | yes | `BacklogService.retryStory` with the note. |
-| `answer_question` | yes | Answers a question a build stopped to ask and hands the parked run back to its engine (`DecisionAnswers.answerAndResume`). |
+| `answer_question` | yes | Answers a question a build stopped to ask and hands the parked run back to its engine (`DecisionAnswers.answerAndResume`). Where the question lists `repair`, that answer with a text gives the named task one more repair round with the text as the workers' instruction (section 84 of the corrections). |
 
 **One item** (`AttentionItem`) carries `kind`, `project`, `story`, `question`, `options`, `evidence`
 and `answerWith` (the tool call that answers it, ids filled in). Its texts are cut to 1,300 characters

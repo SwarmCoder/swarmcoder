@@ -631,6 +631,10 @@ public class FinalIntegrator {
      */
     private Result makeJourneys(Run run, TaskGraph graph, Path worktree, String integrationBranch,
                                 Map<String, String> held, VerificationReport verification) {
+        // Counted on the run for whoever is asked to accept the delivery (section 84). Zero
+        // until journeys have really been made in this pass.
+        run.setJourneysMade(0);
+        run.setJourneysFailed(0);
         if (held.isEmpty()) {
             return null;
         }
@@ -672,6 +676,8 @@ public class FinalIntegrator {
                 + "delivers without journeys.)", verification);
         }
         List<JourneyFile.Result> failed = outcome.failed();
+        run.setJourneysMade(journeys.size());
+        run.setJourneysFailed(failed.size());
         log.info("Run {}: {} journey(s) made in the browser after the last merge, {} failed",
             run.id(), journeys.size(), failed.size());
         if (failed.isEmpty()) {

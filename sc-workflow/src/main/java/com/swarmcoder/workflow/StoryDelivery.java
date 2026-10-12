@@ -149,6 +149,14 @@ public final class StoryDelivery {
             return new Result(tip, null);   // already delivered; accepting twice must not fail
         }
 
+        // Asked before the merge and its verification, not only when the branch is moved: the
+        // answer is the same either way, and a person told after several minutes of building that
+        // a file of theirs is in the way has waited for nothing.
+        String uncommitted = git.uncommittedWorkRefusal();
+        if (uncommitted != null) {
+            return new Result(null, uncommitted);
+        }
+
         String key = story == null || story.key() == null ? "story" : story.key();
         UUID id = story == null || story.id() == null ? UUID.randomUUID() : story.id();
         String deliveryBranch = "swarm/delivery/" + id;

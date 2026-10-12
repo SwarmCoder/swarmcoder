@@ -254,7 +254,11 @@ final class SupervisorMcpTools {
         tools.add(SwarmMcpTools.tool("accept_delivery",
             "CHANGES SOMETHING. A GATE A PERSON NORMALLY PASSES. Accepts a story that came back "
                 + "for a verdict: its code goes onto the delivery branch the next story is cut "
-                + "from.",
+                + "from. SLOW: before it answers, the story is merged with the delivery branch "
+                + "on a copy and the whole project is built and tested there, which takes as "
+                + "long as one full build of the project (minutes). The answer says what was "
+                + "done and how long it took. If no answer arrives, read list_backlog: the "
+                + "story is delivered when the acceptance went through.",
             SwarmMcpTools.schema("""
                 {"story": {"type":"string","description":"A key such as S3."}}""", "story"),
             args -> done(supervisor.acceptDelivery(SwarmMcpTools.str(args, "story")),
@@ -273,11 +277,14 @@ final class SupervisorMcpTools {
         tools.add(SwarmMcpTools.tool("answer_question",
             "CHANGES SOMETHING. Answers a question a build stopped to ask AND hands the stopped "
                 + "build back to its engine, which runs the stage it stopped in again. The reply "
-                + "says whether the build was restarted.",
+                + "says whether the build was restarted. Where the question lists the answer "
+                + "repair, that answer gives the named task's workers one more repair round "
+                + "with text as their instruction, before the stage runs again; it is counted "
+                + "per task and capped.",
             SwarmMcpTools.schema("""
                 {"decision_id": {"type":"string"},
                  "answer": {"type":"string","description":"One of the answer tokens the question lists."},
-                 "text": {"type":"string","description":"Free text, where the answer takes it."}}""",
+                 "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change."}}""",
                 "decision_id", "answer"),
             args -> done(supervisor.answerDecision(SwarmMcpTools.str(args, "decision_id"),
                 SwarmMcpTools.str(args, "answer"), SwarmMcpTools.str(args, "text")), "Recorded.")));

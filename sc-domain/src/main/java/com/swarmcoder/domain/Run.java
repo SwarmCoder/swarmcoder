@@ -178,6 +178,16 @@ public class Run {
      * existed.
      */
     private boolean nothingToBuild;
+    /**
+     * What the last final integration of this run counted (section 84): acceptance tests that
+     * passed on the merged tree, journeys made in a browser after the last merge, and how many
+     * of those failed. Written so a delivery can be described from what was measured. Each is
+     * null on a run stored before the fields existed and on a run whose final integration did
+     * not get that far; the journey counts are 0 for a project that has no journey.
+     */
+    private Integer acceptanceTestsPassed;
+    private Integer journeysMade;
+    private Integer journeysFailed;
 
     public Run() {}
 
@@ -257,6 +267,10 @@ public class Run {
         next.baselineFailingTests = this.baselineFailingTests;
         next.alreadySatisfiedTests = this.alreadySatisfiedTests;
         next.nothingToBuild = this.nothingToBuild;
+        // Carried so the run that ends DELIVERED still says what its final integration counted.
+        next.acceptanceTestsPassed = this.acceptanceTestsPassed;
+        next.journeysMade = this.journeysMade;
+        next.journeysFailed = this.journeysFailed;
         return next;
     }
 
@@ -356,6 +370,17 @@ public class Run {
     public boolean nothingToBuild() { return nothingToBuild; }
     public boolean getNothingToBuild() { return nothingToBuild; }
     public void setNothingToBuild(boolean nothingToBuild) { this.nothingToBuild = nothingToBuild; }
+    public Integer acceptanceTestsPassed() { return acceptanceTestsPassed; }
+    public Integer getAcceptanceTestsPassed() { return acceptanceTestsPassed; }
+    public void setAcceptanceTestsPassed(Integer acceptanceTestsPassed) {
+        this.acceptanceTestsPassed = acceptanceTestsPassed;
+    }
+    public Integer journeysMade() { return journeysMade; }
+    public Integer getJourneysMade() { return journeysMade; }
+    public void setJourneysMade(Integer journeysMade) { this.journeysMade = journeysMade; }
+    public Integer journeysFailed() { return journeysFailed; }
+    public Integer getJourneysFailed() { return journeysFailed; }
+    public void setJourneysFailed(Integer journeysFailed) { this.journeysFailed = journeysFailed; }
     public String parkReason() { return parkReason; }
     public String getParkReason() { return parkReason; }
     public void setParkReason(String parkReason) { this.parkReason = parkReason; }

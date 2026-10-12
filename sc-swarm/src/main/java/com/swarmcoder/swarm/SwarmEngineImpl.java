@@ -1586,7 +1586,7 @@ public class SwarmEngineImpl implements SwarmEngine {
                         notYetRun.writer());
                     markTaskState(task, TaskState.BLOCKED);
                     queueBlockedDecision(task, runId, archivePool,
-                        TestOfATaskNotYetRun.planBlame(task, notYetRun));
+                        TestOfATaskNotYetRun.planBlame(task, notYetRun), false);
                     archiveCandidates(archivePool, null);
                     return null;
                 }
@@ -1639,7 +1639,7 @@ public class SwarmEngineImpl implements SwarmEngine {
                         wrongOrder.files().keySet(), wrongOrder.owners());
                     markTaskState(task, TaskState.BLOCKED);
                     queueBlockedDecision(task, runId, archivePool,
-                        FileOfATaskNotYetRun.planBlame(task, wrongOrder));
+                        FileOfATaskNotYetRun.planBlame(task, wrongOrder), false);
                     archiveCandidates(archivePool, null);
                     return null;
                 }
@@ -1751,13 +1751,20 @@ public class SwarmEngineImpl implements SwarmEngine {
                 // Named after the attempt it is fixing, not after its rank in the sort above:
                 // w120 and w121 are the two goes at what w2 got wrong. The rank is an internal
                 // fact and encoding it produced numbers nothing outside this method could read.
-                int indexOffset = RepairIndex.of(seed.workerIndex(), 0);
+                // An instructed round (section 84) takes the attempt numbers after the ordinary
+                // round's, so its workers' branches are never those of an earlier repair of the
+                // same seed - which may itself be a seed of this round.
+                Instructed told = instructedRepairs.get(task.id());
+                int indexOffset = RepairIndex.of(seed.workerIndex(),
+                    told == null ? 0 : InstructedRepair.firstAttemptOf(told.round()));
                 // A seed that passed its own verification and is repaired because a journey
                 // failed has no failure of its own to show: the journey's is the evidence.
                 String journey = journeyFailures.get(task.id());
+                String evidence =
+                    journey != null ? journey : failureEvidence(seed) + reviewEvidence(task);
                 for (CompletableFuture<WorkerResult> future : dispatcher.dispatchRepair(
                         task, runId, seed.branch(),
-                        journey != null ? journey : failureEvidence(seed) + reviewEvidence(task),
+                        told == null ? evidence : InstructedRepair.brief(told.text()) + evidence,
                         REPAIR_WORKERS_PER_SEED, indexOffset, signal, executor, knowledgeBrief,
                         workerRulesText)) {
                     chained.add(future.thenAccept(result -> {
@@ -2215,6 +2222,116 @@ public class SwarmEngineImpl implements SwarmEngine {
                 }
             }
         }
+    }
+
+    /** The instruction a task's repair round was started on, and which instructed round it is. */
+    private record Instructed(String text, int round) {}
+
+    /** By task, while its instructed repair round runs. */
+    private final Map<UUID, Instructed> instructedRepairs =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * One more repair round for a task of a stopped run, with the instruction of whoever
+     * answered the run's question {@code repair} (section 84, {@link InstructedRepair}).
+     *
+     * <p>A task that has a chosen candidate stopped at final integration: the round is the one
+     * {@link #repairAfterFinalIntegration} gives, seeded from that choice, and the question the
+     * run stopped on is the workers' evidence. A task with no choice is BLOCKED: the round is
+     * seeded from the best of the candidates it already has, each with its own failure as
+     * evidence. In both the instruction is put before the evidence, the repaired candidates are
+     * verified like any other, and a survivor is finished and chosen as usual.
+     *
+     * <p>The round is counted on the task before it starts. Whether another may be given is
+     * decided where the answer is taken, not here: an instruction that is waiting is carried
+     * out.
+     *
+     * @return true when the task has a candidate chosen in this round; false when the task is
+     *         where it was - still BLOCKED with a question raised, or still on its earlier choice
+     */
+    public boolean repairOnInstruction(Task task, UUID runId, String instruction) {
+        int round = task.instructedRepairRounds() + 1;
+        task.setInstructedRepairRounds(round);
+        try {
+            artifactStore.storeChanged(task).get();
+        } catch (Exception e) {
+            log.warn("Failed to persist task '{}' instructed repair round {}: {}", task.title(),
+                round, e.getMessage());
+        }
+        log.info("Task '{}': repair round {} on an instruction ({} allowed per task per run)",
+            task.title(), round, InstructedRepair.limit());
+        instructedRepairs.put(task.id(), new Instructed(instruction, round));
+        try {
+            if (archivedWinner(task) != null) {
+                Decision asked = task.repairOfferedBy() == null ? null
+                    : artifactStore.root().decisions.get(task.repairOfferedBy());
+                return repairAfterFinalIntegration(task, runId,
+                    asked == null ? "" : asked.briefMarkdown()) != null;
+            }
+            return repairBlockedOnInstruction(task, runId);
+        } finally {
+            instructedRepairs.remove(task.id());
+        }
+    }
+
+    private boolean repairBlockedOnInstruction(Task task, UUID runId) {
+        List<CandidateSolution> previous = new ArrayList<>();
+        for (Lazy<Object> lazy : artifactStore.root().candidateArchives.values()) {
+            if (Lazy.get(lazy) instanceof CandidateSolution candidate
+                    && task.id().equals(candidate.taskId()) && seedsARepair(candidate)) {
+                previous.add(candidate);
+            }
+        }
+        String headline = "Task BLOCKED after the repair round it was given on an instruction: '"
+            + task.title() + "'\n\n";
+        if (previous.isEmpty() || gitService == null || !gitService.isEnabled()) {
+            log.warn("Task '{}': no candidate with a branch and a verification report to start "
+                + "an instructed repair round from", task.title());
+            markTaskState(task, TaskState.BLOCKED);
+            queueBlockedDecision(task, runId, List.of(), headline + "No repair worker was "
+                + "started: the task has no candidate with a branch and a verification report "
+                + "to start one from.\n", false);
+            return false;
+        }
+        String knowledgeBrief = resolveBrief(task);
+        String guidelines = guidelinesProvider == null ? null : guidelinesProvider.get();
+        List<GuidelineCheck> guidelineChecks = guidelineChecksProvider.get();
+        List<WorkerResult> allResults = Collections.synchronizedList(new ArrayList<>());
+        // No wave base in hand to build the task again from, as in resumeAfterTestRepair.
+        noSiblingRepair.add(task.id());
+        try {
+            final long repairStarted = System.currentTimeMillis();
+            List<CandidateSolution> repaired = repairRound(task, runId, previous, allResults,
+                knowledgeBrief, guidelines, guidelineChecks);
+            com.swarmcoder.inference.RunMeter.span("repair round|" + task.id(), repairStarted);
+            List<CandidateSolution> survivors = filterSurvived(repaired);
+            if (survivors.isEmpty()) {
+                failIfLostToOutage(task, repaired);
+                log.warn("Task '{}': zero survivors after the instructed repair round - BLOCKED",
+                    task.title());
+                markTaskState(task, TaskState.BLOCKED);
+                queueBlockedDecision(task, runId, repaired, headline);
+                archiveCandidates(repaired, null);
+                return false;
+            }
+            List<CandidateSolution> archivePool = new ArrayList<>(repaired);
+            return finishTask(task, runId, survivors, archivePool, knowledgeBrief, guidelines,
+                guidelineChecks, allResults) != null;
+        } finally {
+            noSiblingRepair.remove(task.id());
+            synchronized (allResults) {
+                for (WorkerResult result : allResults) {
+                    if (result.workspace() != null && gitService.isEnabled()) {
+                        gitService.removeWorktree(result.workspace());
+                    }
+                }
+            }
+        }
+    }
+
+    /** What {@link #repairRound} can start a repair worker from. */
+    private static boolean seedsARepair(CandidateSolution candidate) {
+        return candidate != null && candidate.verification() != null && candidate.branch() != null;
     }
 
     /** What the test author answered about a suspect test, by task, while its repair round runs. */
@@ -2888,7 +3005,8 @@ public class SwarmEngineImpl implements SwarmEngine {
             + "({}). No repair round - it could not succeed. BLOCKED: the plan is at fault, not "
             + "the candidates.", task.title(), outside.candidates(), outside.file(), whyNot);
         markTaskState(task, TaskState.BLOCKED);
-        queueBlockedDecision(task, runId, pool, RepairCannotHelp.planBlame(task, outside, whyNot));
+        queueBlockedDecision(task, runId, pool, RepairCannotHelp.planBlame(task, outside, whyNot),
+            false);
         archiveCandidates(pool, null);
     }
 
@@ -3180,6 +3298,17 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     private void queueBlockedDecision(Task task, UUID runId, List<CandidateSolution> evidence,
                                       String headline) {
+        queueBlockedDecision(task, runId, evidence, headline, true);
+    }
+
+    /**
+     * @param repairable false when one more repair round could not succeed whatever its workers
+     *                   were told - the plan is at fault, or there is nothing to start one from.
+     *                   Then the question does not take the answer {@code repair}. Stated by
+     *                   the caller, which knows why the task stopped; never read from the text
+     */
+    private void queueBlockedDecision(Task task, UUID runId, List<CandidateSolution> evidence,
+                                      String headline, boolean repairable) {
         StringBuilder brief = new StringBuilder();
         brief.append(headline);
         // The reason, once and before the list of workers (section 83): a reader shown only
@@ -3210,20 +3339,38 @@ public class SwarmEngineImpl implements SwarmEngine {
             return;
         }
         String text = brief.toString();
+        boolean seeded = repairable && evidence.stream().anyMatch(SwarmEngineImpl::seedsARepair);
         for (Decision open : new ArrayList<>(artifactStore.root().decisions.values())) {
             if (open != null && open.state() == DecisionState.PENDING
                     && open.kind() == DecisionKind.BLOCKED_TASK && runId.equals(open.runId())
                     && text.equals(open.briefMarkdown())) {
+                offerRepair(task, seeded ? open.id() : null);
                 return; // the same question of the same run is already open
             }
         }
         UUID decisionId = UUID.randomUUID();
+        // The task is marked first, so whoever reads the new question finds what it accepts.
+        offerRepair(task, seeded ? decisionId : null);
         artifactStore.append(() -> {
             artifactStore.root().decisions.put(decisionId, new Decision(decisionId, runId,
                 DecisionKind.BLOCKED_TASK, brief.toString(), DecisionState.PENDING,
                 null, Instant.now()));
             return null;
         });
+    }
+
+    /** Records on the task which open question may be answered {@code repair} for it, or none. */
+    private void offerRepair(Task task, UUID decisionId) {
+        if (java.util.Objects.equals(task.repairOfferedBy(), decisionId)) {
+            return;
+        }
+        task.setRepairOfferedBy(decisionId);
+        try {
+            artifactStore.storeChanged(task).get();
+        } catch (Exception e) {
+            log.warn("Failed to persist which question offers task '{}' a repair round: {}",
+                task.title(), e.getMessage());
+        }
     }
 
     /**

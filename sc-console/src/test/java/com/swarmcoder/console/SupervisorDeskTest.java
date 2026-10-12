@@ -80,7 +80,7 @@ class SupervisorDeskTest {
             assertThat(item.answerWith()).contains("accept_delivery story=S1");
             assertThat(item.chars()).isLessThanOrEqualTo(AttentionItem.MAX_CHARS);
 
-            assertThat(desk.acceptDelivery("s1")).isEmpty();
+            assertThat(desk.acceptDelivery("s1")).isEqualTo("Accepted.");
 
             Story after = store.getStory(story.id());
             assertThat(after.state()).isEqualTo(StoryState.DONE);
@@ -450,6 +450,58 @@ class SupervisorDeskTest {
             .withStoryRuns(starter)
             .withUnattended(() -> unattended)
             .withSupervised(() -> supervised);
+    }
+
+    /**
+     * Section 84: the delivery of a story whose every test and journey had passed was described
+     * as "its build has not finished", because its run was still at the stage that had just
+     * put the story back. What is said now is what was counted.
+     */
+    @Test
+    void aDeliveryIsDescribedByWhatWasCountedEvenWhileItsBuildWritesItsOwnEnd(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store, false, false, null);
+            Story story = delivered(store, "S1", "Lend a book");
+            UUID runId = story.runIds().get(0);
+            store.append(() -> {
+                Run run = store.root().runs.get(runId).withState(RunState.FINAL_INTEGRATION);
+                run.setAcceptanceTestsPassed(14);
+                run.setJourneysMade(3);
+                run.setJourneysFailed(0);
+                store.root().runs.put(runId, run);
+                store.root().cloudSpend().put(runId,
+                    new com.swarmcoder.domain.CloudSpendRecord(runId, "RUN", 120_500, 8_200, 0));
+                return null;
+            }).get();
+
+            AttentionItem item = desk.nextAttention(0);
+
+            assertThat(item.kind()).isEqualTo("DELIVERY");
+            assertThat(item.evidence())
+                .doesNotContain("has not finished").doesNotContain("cannot vouch")
+                .contains("Every check it promised (1) was proved")
+                .contains("Delivered commit 01234567.")
+                .contains("14 acceptance test(s) passed on the merged tree.")
+                .contains("3 journey(s) were made in a browser, 0 failed.")
+                .contains("Cloud tokens of this build: 120500 in, 8200 out.");
+            assertThat(item.chars()).isLessThanOrEqualTo(AttentionItem.MAX_CHARS);
+        }
+    }
+
+    /** A run stored before the counts existed says only what is on record. */
+    @Test
+    void aDeliveryOfABuildWithNoCountsOnRecordClaimsNone(@TempDir Path dir) throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store, false, false, null);
+            delivered(store, "S1", "Lend a book");
+
+            String evidence = desk.nextAttention(0).evidence();
+
+            assertThat(evidence).contains("Delivered commit 01234567.")
+                .doesNotContain("acceptance test(s) passed").doesNotContain("journey")
+                .doesNotContain("Cloud tokens");
+        }
     }
 
     private Story delivered(ArtifactStore store, String key, String title) {

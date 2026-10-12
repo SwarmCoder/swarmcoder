@@ -20,9 +20,12 @@ package com.swarmcoder.console;
 import com.swarmcoder.domain.Decision;
 import com.swarmcoder.domain.DecisionKind;
 import com.swarmcoder.domain.DecisionState;
+import com.swarmcoder.domain.InstructedRepair;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.RunState;
 import com.swarmcoder.domain.Story;
+import com.swarmcoder.domain.Task;
+import com.swarmcoder.domain.TaskGraph;
 import com.swarmcoder.store.ArtifactStore;
 import com.swarmcoder.store.SupersededRuns;
 import org.slf4j.Logger;
@@ -127,6 +130,83 @@ public final class DecisionAnswers {
         return options;
     }
 
+    /**
+     * The answers the product can act on for THIS question: those of its kind, and for a
+     * stopped build's question {@code repair} when one more repair round is sound for it
+     * (section 84, {@link InstructedRepair}). That is decided from what the engine recorded
+     * when it raised the question - which tasks it may be answered {@code repair} for - and
+     * from the count on each task, never from the question's words.
+     */
+    public static List<Option> optionsFor(ArtifactStore store, Decision decision) {
+        List<Option> options = optionsFor(decision.kind());
+        List<Task> tasks = repairTasks(store, decision);
+        if (whyNoRepair(store, decision, tasks) == null) {
+            options.add(new Option(InstructedRepair.TOKEN, "give the workers of "
+                + titles(tasks) + " one more repair round, started from the candidates the "
+                + "task already has. text is REQUIRED: it is what the repair workers are told "
+                + "to change. " + roundsLeft(tasks) + " Use it when the cause is something the "
+                + "workers must change; retry repeats the same stop", true));
+        }
+        return options;
+    }
+
+    /** The tasks of the question's build that it may be answered {@code repair} for. */
+    static List<Task> repairTasks(ArtifactStore store, Decision decision) {
+        if (decision == null || decision.kind() != DecisionKind.BLOCKED_TASK
+                || decision.runId() == null) {
+            return List.of();
+        }
+        Run run = store.root().runs.get(decision.runId());
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : store.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || graph.tasks() == null) {
+            return List.of();
+        }
+        return graph.tasks().stream()
+            .filter(task -> decision.id().equals(task.repairOfferedBy())).toList();
+    }
+
+    /** Why this question cannot be answered {@code repair}, or null when it can. */
+    static String whyNoRepair(ArtifactStore store, Decision decision, List<Task> tasks) {
+        if (decision.kind() != DecisionKind.BLOCKED_TASK) {
+            return "this kind of question has no repair round to give";
+        }
+        if (decision.state() != DecisionState.PENDING) {
+            return "that question has already been answered";
+        }
+        if (tasks.isEmpty()) {
+            return "one more repair round could not succeed here: the build did not stop on "
+                + "one task that has a candidate to repair (it stopped for a fault of the plan, "
+                + "or on something that is not one task's)";
+        }
+        Run run = store.root().runs.get(decision.runId());
+        if (run == null || run.parkedAt() == null || run.state() == RunState.DELIVERED
+                || run.state() == RunState.ABORTED || run.state() == RunState.ABANDONED) {
+            return "the build this question came from is not stopped waiting on it";
+        }
+        for (Task task : tasks) {
+            if (!InstructedRepair.roundLeft(task)) {
+                return "task '" + task.title() + "' has already had "
+                    + task.instructedRepairRounds() + " repair round(s) on an instruction in "
+                    + "this build, and " + InstructedRepair.limit() + " is the most a task is "
+                    + "given (-D" + InstructedRepair.LIMIT_PROPERTY + " changes it). Send the "
+                    + "story back, or change something and retry";
+            }
+        }
+        return null;
+    }
+
+    private static String titles(List<Task> tasks) {
+        return (tasks.size() == 1 ? "task " : "tasks ") + String.join(", ",
+            tasks.stream().map(task -> "'" + task.title() + "'").toList());
+    }
+
+    private static String roundsLeft(List<Task> tasks) {
+        int used = tasks.stream().mapToInt(Task::instructedRepairRounds).max().orElse(0);
+        return "Round " + (used + 1) + " of the " + InstructedRepair.limit()
+            + " a task is given per build.";
+    }
+
     /** What is written on the decision for an answer, in the form the product's own code reads. */
     public static String responseFor(DecisionKind kind, String token, String text, String actor) {
         String word = token == null ? "" : token.strip().toLowerCase(Locale.ROOT);
@@ -177,7 +257,21 @@ public final class DecisionAnswers {
             return failed("that question has already been answered");
         }
         String word = token == null ? "" : token.strip().toLowerCase(Locale.ROOT);
-        List<Option> options = optionsFor(decision.kind());
+        List<Option> options = optionsFor(store, decision);
+        List<Task> repairing = List.of();
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && word.equals(InstructedRepair.TOKEN)) {
+            repairing = repairTasks(store, decision);
+            String whyNot = whyNoRepair(store, decision, repairing);
+            if (whyNot != null) {
+                return failed("Not recorded: " + whyNot + ". The answers this question accepts "
+                    + "are " + options.stream().map(Option::token).toList());
+            }
+            if (text == null || text.isBlank()) {
+                return failed("Not recorded: repair needs text. It is what the repair workers "
+                    + "are told to change, and a round with nothing new to go on repeats the "
+                    + "one that failed.");
+            }
+        }
         if (options.stream().noneMatch(option -> option.token().equals(word))) {
             return failed("'" + token + "' is not an answer this question accepts; the answers are "
                 + options.stream().map(Option::token).toList());
@@ -193,6 +287,18 @@ public final class DecisionAnswers {
                 return failed("Not extended: " + result.substring("error:".length()).strip());
             }
             raised = result + " ";
+        }
+        if (!repairing.isEmpty()) {
+            // On the task before the answer is recorded and the build handed back: the engine
+            // gives the round when it takes the run up again, and clears the instruction.
+            for (Task task : repairing) {
+                task.setRepairInstruction(text.strip());
+                store.saveTask(task);
+            }
+            raised = titles(repairing).substring(0, 1).toUpperCase(Locale.ROOT)
+                + titles(repairing).substring(1) + " get" + (repairing.size() == 1 ? "s" : "")
+                + " one more repair round with the text as the workers' instruction. "
+                + roundsLeft(repairing) + " ";
         }
         try {
             new ControlServiceImpl().recordAnswer(id.toString(),
@@ -211,7 +317,9 @@ public final class DecisionAnswers {
      * The Console's own answer: the person's free text. A spending-limit question whose text starts
      * with extend or stop is answered as that option; any other text is recorded as written (the
      * rule-question parser reads its own first word) and the stopped build, if there is one, is
-     * handed back, as it is for the same answer given over the supervisor connection.
+     * handed back, as it is for the same answer given over the supervisor connection. A stopped
+     * build's question whose text starts with repair, where that answer is offered, is answered
+     * as that option with the rest of the text as the workers' instruction.
      */
     public static Outcome answerFromConsole(String decisionId, String text) {
         ConsoleContext context = ConsoleContext.get();
@@ -233,6 +341,13 @@ public final class DecisionAnswers {
                 && (first.equals("extend") || first.equals("stop"))) {
             return answerAndResume(decisionId, first, said.substring(first.length()).strip(),
                 "operator");
+        }
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(InstructedRepair.TOKEN)
+                && whyNoRepair(context.store(), decision,
+                    repairTasks(context.store(), decision)) == null) {
+            // The same answer the supervisor connection gives, with the rest as the instruction.
+            return answerAndResume(decisionId, first, said.substring(first.length())
+                .replaceFirst("^[\\s:.,;]+", ""), "operator");
         }
         new ControlServiceImpl().recordAnswer(decisionId, text);
         if (decision.kind() == DecisionKind.BUDGET_EXTENSION) {

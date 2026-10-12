@@ -130,6 +130,12 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
 
         Run run = fx.store.root().runs.get(fx.runId);
         assertThat(run.state()).isEqualTo(RunState.DELIVERED);
+        assertThat(run.acceptanceTestsPassed())
+            .as("what the merged tree's verification counted is kept on the run that ended, "
+                + "for whoever is asked to accept the delivery (section 84)")
+            .isEqualTo(1);
+        assertThat(run.journeysMade()).as("the merged tree holds no journey").isZero();
+        assertThat(run.journeysFailed()).isZero();
     }
 
     @Test
