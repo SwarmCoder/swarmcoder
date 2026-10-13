@@ -100,6 +100,18 @@ final class AlreadySatisfied {
      */
     static Evidence assess(Path tree, DesignDocument design, Task task, List<Task> planTasks,
                            TestResults results) {
+        return assess(tree, design, task, task == null ? null : task.authoredTestPaths(),
+            planTasks, results);
+    }
+
+    /**
+     * {@link #assess(Path, DesignDocument, Task, List, TestResults)} for test files the task
+     * does not claim yet: a draft its author is still writing (section 98).
+     *
+     * @param paths the test files that ran, relative to {@code tree}
+     */
+    static Evidence assess(Path tree, DesignDocument design, Task task, List<String> paths,
+                           List<Task> planTasks, TestResults results) {
         if (task == null || results == null || tree == null) {
             return Evidence.refused("there is no tree or no result to read the evidence from");
         }
@@ -107,7 +119,6 @@ final class AlreadySatisfied {
                 || results.failed() > 0 || results.errored() > 0) {
             return Evidence.refused("the acceptance stage did not run the tests to a clean pass");
         }
-        List<String> paths = task.authoredTestPaths();
         if (paths == null || paths.isEmpty()) {
             return Evidence.refused("the task claims no test file");
         }

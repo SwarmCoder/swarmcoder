@@ -426,6 +426,11 @@ public final class SupervisorDesk implements SupervisorService {
         // A story the existing code already meets (section 89): said first, because what is
         // being accepted is then tests and no code.
         boolean unchanged = run.nothingToBuild();
+        // What this build took over from an earlier build of the story and what it made
+        // itself (section 98), as it was decided when the build started.
+        for (String line : run.reuseRecord()) {
+            facts.append(' ').append(line);
+        }
         if (unchanged) {
             facts.append(" No change was needed: the code the build started from already meets "
                 + "every check of this story, so the delivered commit changes no code. "
@@ -1281,6 +1286,12 @@ public final class SupervisorDesk implements SupervisorService {
 
     @Override
     public String sendBack(String story, String note) {
+        String result = sendBack(story, note, null);
+        return failed(result) ? result : "";
+    }
+
+    @Override
+    public String sendBack(String story, String note, String redoFrom) {
         Story found = story(story);
         if (found == null) {
             return "error: this project has no story " + story;
@@ -1288,15 +1299,35 @@ public final class SupervisorDesk implements SupervisorService {
         if (nn(note).isBlank()) {
             return "error: say why it is being sent back; the note is what the next build is told";
         }
-        String was = found.state() == null ? "" : found.state().label();
-        String result = new BacklogServiceImpl().retryStoryAs(found.id().toString(), note.strip(),
-            ACTOR);
-        if (!failed(result)) {
-            record(AutonomousDecisionKind.SENT_BACK_DELIVERY, name(found),
-                "It was " + was + ". Build it again?", "Sent back: " + note.strip(), true, null,
-                null);
+        com.swarmcoder.domain.RunState stated;
+        try {
+            stated = com.swarmcoder.domain.RebuildFrom.stated(redoFrom);
+        } catch (IllegalArgumentException e) {
+            return "error: " + e.getMessage();
         }
-        return result;
+        com.swarmcoder.domain.StoryState stood = found.state();
+        String was = stood == null ? "" : stood.label();
+        String result = new BacklogServiceImpl().retryStoryAs(found.id().toString(), note.strip(),
+            ACTOR, stated);
+        if (failed(result)) {
+            return result;
+        }
+        record(AutonomousDecisionKind.SENT_BACK_DELIVERY, name(found),
+            "It was " + was + ". Build it again?", "Sent back: " + note.strip(), true, null,
+            null);
+        // What the next build keeps, said now, so nothing is kept without the sender knowing
+        // (section 98). The stage the last build ended at is read after it has been ended.
+        ConsoleContext context = ConsoleContext.get();
+        Story now = story(story);
+        Run last = context == null || now == null || now.sentBackAfterRunId() == null ? null
+            : context.store().root().runs.get(now.sentBackAfterRunId());
+        return "Sent back; it is ready to be built again. "
+            + com.swarmcoder.domain.RebuildFrom.inWords(
+                com.swarmcoder.domain.RebuildFrom.afterASendBack(stood,
+                    last == null ? null : last.lastStage(), stated))
+            + (stated == null ? " To have more done again, send it back naming redo_from ("
+                + com.swarmcoder.domain.RebuildFrom.STAGE_WORDS + ")." : "")
+            + " The note is told to the architect when the design is made again.";
     }
 
     // --- a build that stopped to ask -------------------------------------------------------------

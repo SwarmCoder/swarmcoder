@@ -10014,3 +10014,163 @@ this project's delivered stories count. Run with it and unchanged:
   given the titles.
 - The effect figures are proportions of a stored run, not a measurement.
 - The full test suite was not run; the classes above were.
+
+## 98. Every build of a story started from nothing, and a story that already worked was found out last (audit of a five-story local build, 2026-10-13)
+
+**What was observed** (`docs/AGENT_USAGE_AUDIT.md`, sections 3 and 5, section 7 items 1 and 2).
+
+- 46.4 of 87.2 million tokens went to five builds that ended early. The build that followed
+  each of them made the design, the plan and the tests again from nothing.
+- The test author spent 7.76 million tokens on a story whose result was "already satisfied by
+  the existing implementation, no changes". Section 89 delivers such a story, but only after
+  its tests are written, reviewed and corrected.
+
+**Cause.**
+
+- *A build knew nothing of the build before it.* `BacklogServiceImpl.start` appends a new run
+  at INTAKE, and INTAKE went to DESIGN. A run that is ended is saved as `ABORTED`
+  (`SupersededRuns.supersede`, section 82), which overwrote the stage it had reached, so
+  nothing recorded how far it got. Nothing recorded what a design, a plan or a test had been
+  made from.
+- *A send-back's note went nowhere.* `retryStoryAs` wrote it into the change journal. The
+  next build was not told it, although the supervisor's tool said it would be.
+- *A correct test was called broken.* The test author's `compile_test` runs the red check on
+  a draft (`GreenfieldWorkflow.draftVerdict`). For a draft that passes on the tree the build
+  starts from it answered "BROKEN TEST: it passes on the code as it is now ... A test must
+  fail until the task is implemented" and asked for another draft. For a story the code
+  already meets, every correct test passes, so the author was asked to rewrite a correct test.
+  How the 130 calls of that story divide between drafts was not measured. The
+  red check after hand-in already accepted the same result as "already satisfied"
+  (`AlreadySatisfied.assess`); the draft check did not ask.
+
+**Decisions.**
+
+1. *"Not changed" has two parts, and both are checked without a model* (`EarlierBuild`).
+   - *What was asked.* One SHA-256 over the kind of run, the goal, the story's title and
+     narrative, each requirement and check it answers for (id, handle, title, text, the test
+     a check names), the quality gates it inherits, and the project's rules as the roles are
+     told them. Each field is written with its length in front. It is written on every run of
+     a story at INTAKE (`Run.inputsFingerprint`). The design, the plan and the tests all read
+     all of it, so a difference anywhere makes all three again. An earlier build without a
+     fingerprint is not reused.
+   - *The project's tree.* The same start commit is the same tree. On another commit the
+     files that differ are listed (`git diff --name-only`, `GitService.changedPaths`) and
+     held against what each result refers to. The design refers to the types its contracts
+     name: it is stale when a differing file is named after one of them. The plan refers to
+     the paths its tasks may write and read: it is stale when a differing file lies under
+     one. The tests and every chosen candidate are commits cut from the earlier start commit
+     and were measured there: they are kept on the same commit only. A run that changes
+     existing code (bug fix, enhancement) is told about the code around the change, which no
+     list of names covers: on another commit it keeps nothing. When the difference cannot be
+     read, nothing is kept.
+2. *How far the earlier build got is recorded* (`Run.lastStage`, kept by `Run.withState` when
+   a run is ended). What it finished before that stage can be taken over: ended at PLAN, the
+   design; at TEST_AUTHORING, design and plan; at EXECUTING or later, design, plan, tests and
+   every task that has a chosen candidate. Only the build directly before is looked at.
+3. *A send-back is never read for what it is about* (`RebuildFrom`). The note is free text.
+   What it objects to comes from stored facts and one optional statement:
+   - The sender names the stage: `send_back` takes `redo_from` (design, plan, tests, code).
+     That stage and every later one are made again.
+   - A delivery that came back for a verdict is refused and no stage is named: what was
+     looked at is the finished result, which design, plan, tests and code made together.
+     Nothing is kept.
+   - A build that stopped is sent back and no stage is named: what was in front of the
+     sender is the stop. The stages before the one that stopped passed the product's own
+     checks and are kept; the stage that stopped is made again. A build that stopped while
+     building keeps its tests and its finished tasks. A build whose final integration failed
+     had code that did not hold together: its code is made again.
+   - `send_back` answers with what the next build will keep and how to have more made again,
+     so nothing is kept without the sender having been told. An unknown `redo_from` is
+     refused and nothing is changed.
+   - A send-back counts for the build that follows it and for no later one
+     (`Story.sentBackAfterRunId`).
+4. *A plan cannot be kept without the results its tasks carry.* A chosen candidate is found
+   by its task (`SwarmEngineImpl.archivedWinner`), and its branch is named after the task. So
+   when the tests or the code are made again and a task of the earlier plan already has a
+   result, the plan is made again too and only the design is kept. The record says so.
+5. *A build that has not stopped shares nothing but its design.* A build that was replaced
+   runs its stage to the end (section 82). While a thread of this process is still in the
+   earlier build (`GreenfieldWorkflow.driving`), the new build keeps the design and makes the
+   plan, the tests and the tasks itself.
+6. *The earliest point at which the product can know a story is already met is the first
+   draft of its test that compiles and passes on the start tree.* A check is a sentence;
+   nothing but a test of it can be run. Before a test exists there is nothing to measure,
+   and "the design names no change" is a model's opinion, not a measurement. So the order
+   stays design, plan, test, and the stop moves from the end of TEST_AUTHORING to the first
+   passing draft inside the author's first session. A second build of such a story does not
+   reach the author at all: decision 2 takes over the tests and the record that nothing is
+   to be built.
+
+**What changed.**
+
+1. *INTAKE* (`GreenfieldWorkflow.startFromEarlierBuild`). Writes the fingerprint, finds the
+   build before, asks `EarlierBuild.decide`, and starts the run at the first stage it has to
+   do itself: PLAN with the earlier design; TEST_AUTHORING with design and plan; EXECUTING
+   with design, plan, the tests commit (the run's own `swarm/tests/<runId>` is pointed at it,
+   `GitService.branchAt`), the merged progress, the baseline of failing tests, the
+   already-satisfied tests and `nothingToBuild`. From there the stage does what it does for a
+   run picked up again: a task with a chosen candidate is not dispatched, a task recorded as
+   needing no change gets no worker. If the tests commit is gone from the repository, only
+   the design is kept.
+2. *The record.* `Run.reuseRecord`: a sentence each for design, plan, tests and tasks, with
+   "reused", "made by this build" (the earlier build never finished it) or "made again,
+   because ..." and the reason. Logged at INTAKE, stored on the run with
+   `Run.reusedFromRunId`, and part of what the supervisor is shown about a delivery
+   (`SupervisorDesk.deliveryFacts`).
+3. *Send-back.* `BacklogServiceImpl.retryStoryAs` writes the note, the state the story was
+   in, the build it was sent back after and the stage named on the story.
+   `SupervisorService.sendBack(story, note, redoFrom)` and the `redo_from` argument of the
+   `send_back` tool. The note is put after the goal in the architect's brief
+   (`GreenfieldWorkflow.briefFor`, `Run.sentBackNote`); it is not part of the fingerprint.
+4. *The draft check* (`GreenfieldWorkflow.draftVerdict`, `draftShowsTheCheckIsMet`). A draft
+   that passes on the start tree is held to the evidence the red check uses: tests ran to a
+   clean pass, each file ran, asserts, and names a type the project declares outside its
+   tests, the test does not implement the contract itself (`AlreadySatisfied.assess`, now
+   also for files a task does not claim yet), and every contract the task delivers is in the
+   tree. When it holds the answer is "ALREADY MET ... Do not change the test to make it fail.
+   Hand it in as it is". The red check after hand-in records the task as before (section 89)
+   and no worker is started. A passing draft without that evidence is a broken test, as
+   before.
+
+**Stored differently.** New fields, no new enum constant: `Run.lastStage`,
+`inputsFingerprint`, `reusedFromRunId`, `reuseRecord`, `sentBackNote`; `Story.sentBackNote`,
+`sentBackFrom`, `sentBackAfterRunId`, `sentBackRedoFrom`. All null on a store from before. A
+run ended before this change has no `lastStage` and nothing of it is reused.
+`RebuildFrom.Keep` is worked out each time and never stored.
+
+**Tests.** New: `ARebuiltStoryStartsFromItsEarlierBuildTest` (sc-workflow; through the
+workflow: unchanged inputs go straight to the swarm with the earlier design, plan and tests
+and no model call; a changed narrative makes the design again. On the decision: a changed
+check or rule changes the fingerprint; each send-back case; a send-back counts for the next
+build only; an interrupted build at each stage; another commit),
+`AStoryAlreadyMetIsFoundAtItsFirstPassingDraftTest` (sc-workflow; a passing draft that
+measures the project's code is "ALREADY MET"; one that measures nothing is still broken).
+Extended: `AStoryHasOneBuildTest` (sc-console; what a send-back writes and answers, an
+unknown `redo_from`). Run with them: `OnlyAStorysCurrentBuildIsDrivenTest`,
+`ACheckTheCodeAlreadySatisfiesIsRecordedNotParkedOnTest`,
+`TheTestAuthorLooksThingsUpAndCompilesItsDraftTest`, `SupervisorDeskTest`.
+
+**Not checked, and not done:**
+
+- Nothing was run against a model, a container or a live build. No saving was measured; the
+  figures at the top are the audit's.
+- A build taken over at EXECUTING relies on what a run picked up again at EXECUTING already
+  does. The test hands the run to a stand-in for the swarm; a real swarm skipping the
+  finished tasks of an adopted plan was not run.
+- "The code is made again, the plan and the tests are kept" is not possible (decision 4). It
+  needs a way to take a task's chosen candidate back in the swarm.
+- The note reaches the architect only. A build that keeps its design tells the note to no
+  role; the answer of `send_back` says so. The test author and the workers are not told it.
+- The Console has no control for `redo_from`. A person who sends a stopped story back there
+  gets the default of decision 3, and the Console does not show them what will be kept.
+- On another commit a design is held against the files named after the types it names. A
+  new file that does the same job under another name is not seen.
+- The tests are not carried to another start commit, although the files could be copied.
+- A story whose checks name test classes that the tree already holds could be measured
+  before DESIGN. That was not built: nothing says such a class tests this story's check.
+- The rules review of a test (`TestsVersusRules`) still runs for a test of a story that is
+  already met: the test is delivered with the story and must keep the project's rules.
+- The run report of the usage ledger does not print the reuse record; it is in the run's log,
+  on the run, and in the delivery's facts.
+- Opening a store written before the new fields was not tested.
+- The full test suite was not run; the classes above were.

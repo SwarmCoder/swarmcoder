@@ -298,13 +298,20 @@ final class SupervisorMcpTools {
 
         tools.add(SwarmMcpTools.tool("send_back",
             "CHANGES SOMETHING. Sends a delivery, or a stopped story, back to be built again. The "
-                + "note is what the next build is told was wrong.",
+                + "note is what the next build is told was wrong. The next build keeps what "
+                + "the earlier build finished and nothing has changed under: by default "
+                + "nothing of a delivery that is refused, and of a build that stopped the "
+                + "stages before the one that stopped. Name redo_from to say what you object "
+                + "to; that stage and every later one are made again. The answer says what "
+                + "will be kept.",
             SwarmMcpTools.schema("""
                 {"story": {"type":"string","description":"A key such as S3."},
-                 "note": {"type":"string","description":"Why, and what to do differently."}}""",
+                 "note": {"type":"string","description":"Why, and what to do differently."},
+                 "redo_from": {"type":"string","description":"Optional. The first stage to make again: design, plan, tests or code."}}""",
                 "story", "note"),
             args -> done(supervisor.sendBack(SwarmMcpTools.str(args, "story"),
-                SwarmMcpTools.str(args, "note")), "Sent back; it is ready to be built again.")));
+                SwarmMcpTools.str(args, "note"), SwarmMcpTools.str(args, "redo_from")),
+                "Sent back; it is ready to be built again.")));
 
         tools.add(SwarmMcpTools.tool("answer_question",
             "CHANGES SOMETHING. Answers a question a build stopped to ask AND hands the stopped "

@@ -873,6 +873,67 @@ public class GitService {
         runGitCli(worktreePath, "clean", "-q", "-fd", "--", dir);
     }
 
+    /**
+     * Points {@code branch} at {@code commit}, creating the branch when it is not there. For a
+     * ref that belongs to SwarmCoder (a run's tests branch), never for a branch a person works
+     * on: nothing is checked out and no working tree is touched.
+     *
+     * @return true when the branch now points at the commit
+     */
+    public boolean branchAt(String branch, String commit) {
+        if (repoDir == null || branch == null || branch.isBlank() || commit == null
+                || commit.isBlank()) {
+            return false;
+        }
+        try {
+            runGitCli(requireRepo(), "branch", "-f", branch, commit);
+            return true;
+        } catch (IOException e) {
+            log.warn("Could not point {} at {}: {}", branch, commit, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * The paths that differ between two commits, added, changed and removed alike, or null when
+     * that cannot be read (no repository, a commit that is gone). An empty list is the answer
+     * "the two trees are the same"; null is "not known", and the two must not be confused.
+     */
+    public List<String> changedPaths(String from, String to) {
+        if (repoDir == null || from == null || from.isBlank() || to == null || to.isBlank()) {
+            return null;
+        }
+        try {
+            ProcessBuilder pb = new ProcessBuilder(List.of("git", "diff", "--name-only",
+                "--no-renames", from, to));
+            pb.directory(requireRepo().toFile());
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            String output = new String(process.getInputStream().readAllBytes());
+            if (!process.waitFor(60, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+            if (process.exitValue() != 0) {
+                log.warn("git diff {} {} failed: {}", from, to, output.trim());
+                return null;
+            }
+            List<String> paths = new ArrayList<>();
+            for (String line : output.split("\\R")) {
+                if (!line.isBlank()) {
+                    paths.add(line.trim().replace('\\', '/'));
+                }
+            }
+            return paths;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            log.warn("git diff {} {} failed: {}", from, to, e.getMessage());
+            return null;
+        }
+    }
+
     private static void runGitCli(Path repo, String... args) throws IOException {
         List<String> command = new ArrayList<>();
         command.add("git");

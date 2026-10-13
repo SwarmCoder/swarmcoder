@@ -141,6 +141,16 @@ public interface SupervisorService {
     /** Sends a delivery, or a stopped story, back to be built again. The note says why. */
     String sendBack(String story, String note);
 
+    /**
+     * {@link #sendBack(String, String)} naming what is objected to: {@code redoFrom} is one of
+     * design, plan, tests, code, or blank. The stage named and every later one are done again
+     * by the next build; with none named the rule of {@code RebuildFrom} decides from where
+     * the story stood. Returns what the next build keeps, in a sentence, or "error: ...".
+     */
+    default String sendBack(String story, String note, String redoFrom) {
+        return sendBack(story, note);
+    }
+
     // --- a build that stopped to ask -------------------------------------------------------------
 
     /** The answers a stopped build's question accepts, each as "token: what it does". */
