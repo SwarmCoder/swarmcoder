@@ -49,6 +49,22 @@ class ARepairRoundFillsThePlacesAndFollowsProgressTest {
     // --- how many, and how they differ ---------------------------------------------------------
 
     @Test
+    void aRepairRoundIsNeverSmallerThanItWasBeforeSection91() {
+        // Workers per task 1 or 2, one seed: the former two.
+        assertThat(RepairRound.workers(1, 1)).isEqualTo(2);
+        assertThat(RepairRound.workers(2, 1)).isEqualTo(2);
+        // Workers per task 4: what a first round gets.
+        assertThat(RepairRound.workers(4, 1)).isEqualTo(4);
+        // Two seeds: the former four, whatever the task is set to.
+        assertThat(RepairRound.workers(1, 2)).isEqualTo(4);
+        assertThat(RepairRound.workers(8, 2)).isEqualTo(8);
+        // A ceiling of one worker at once does not lower the count: the second waits for a place.
+        assertThat(RepairRound.workers(1, 1)).isEqualTo(2);
+        assertThat(RepairRound.spread(RepairRound.workers(1, 1), new int[] {10}))
+            .containsExactly(2);
+    }
+
+    @Test
     void theWorkersOfARoundAreDealtOutOverItsSeeds() {
         assertThat(RepairRound.spread(4, new int[] {10})).as("one seed gets them all")
             .containsExactly(4);

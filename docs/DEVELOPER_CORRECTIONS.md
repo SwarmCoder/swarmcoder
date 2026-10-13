@@ -8988,8 +8988,13 @@ declared libraries only, one writer), `APageUnderTestLoadsFromThisComputerOnlyTe
    | two seeds | 4 (2 + 2) | 4 (2 + 2) |
    | one seed (final integration, instruction with a chosen candidate, one verified candidate) | 2 | 4 |
 
-   With workers per task 2 a round of two seeds gets 2 (1 + 1) where it had 4; with 8 it gets
-   8. The number is the task's, never the repair round's own.
+   With workers per task 2 a round of two seeds would get 2 (1 + 1) where it had 4; with 8 it
+   gets 8. **Floor (added the same day):** the count is the larger of that and the former rule,
+   two workers for each of at most two seeds (`RepairRound.workers`, called from
+   `SwarmDispatcher.repairWorkers(task, seeds)`), so a round is never smaller than before: with
+   workers per task 1 and one seed it gets 2, with 4 and one seed 4, with 1 and two seeds 4.
+   The ceiling on workers at once does not lower it: the workers over the ceiling wait for a
+   place, as a first round's do (item 2).
 2. *Places* (`SwarmDispatcher.repairPlaces`). As for a first round's candidates
    (`CandidateGroup`): the round's first worker waits its turn and may ask a spare candidate
    of another task for its place; every further one starts only on a place that is free with

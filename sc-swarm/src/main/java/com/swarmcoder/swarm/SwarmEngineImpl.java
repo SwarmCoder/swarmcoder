@@ -1890,10 +1890,10 @@ public class SwarmEngineImpl implements SwarmEngine {
             return List.of();
         }
 
-        // How many workers (section 91): what a first round of this task gets, never a number
-        // of the repair round's own - two workers on a server with four places left half of
+        // How many workers (section 91): what a first round of this task gets, never fewer than
+        // the two per seed a repair round always had - two workers on a server with four places left half of
         // it empty for a whole round. Dealt out over the seeds in turn.
-        int wanted = dispatcher.repairWorkers(task);
+        int wanted = dispatcher.repairWorkers(task, seeds.size());
         int[] firstAttempt = new int[seeds.size()];
         int[] room = new int[seeds.size()];
         for (int i = 0; i < seeds.size(); i++) {
