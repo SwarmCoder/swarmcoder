@@ -35,6 +35,13 @@ import org.slf4j.LoggerFactory;
  * different work comes first. The most recently started spare is the one stopped, because it has
  * the least work to lose. It stops at its next turn, with {@link KillReason#PLACE_NEEDED}.
  *
+ * <p><b>Duplicates go first</b> (section 98). A candidate still in its session after another
+ * candidate of its task has passed verification is a duplicate, whether it was started as the
+ * task's first candidate or as a spare. It is the first to give its place up, and it gives it
+ * up to more than a task with nothing running: a further candidate of a task that has nothing
+ * through verification yet may ask for it too ({@link #giveUpADuplicateFor}), which an ordinary
+ * spare is never asked for. It stops with {@link KillReason#SUPERSEDED}.
+ *
  * <p>Process-wide for the reason {@link WorkerSlots} is: the places belong to the machine and its
  * model server, not to a task or a project.
  */
@@ -47,12 +54,17 @@ final class SpareCandidates {
         final String profileId;
         final String label;
         final GroupSignal signal;
-        final long startedAt = System.nanoTime();
+        /** True when another candidate of its task has already passed verification. */
+        final boolean duplicate;
+        final long startedAt;
 
-        private Entry(String profileId, String label, GroupSignal signal) {
+        private Entry(String profileId, String label, GroupSignal signal, boolean duplicate,
+                      long startedAt) {
+            this.startedAt = startedAt;
             this.profileId = profileId;
             this.label = label;
             this.signal = signal;
+            this.duplicate = duplicate;
         }
     }
 
@@ -62,11 +74,39 @@ final class SpareCandidates {
 
     /** A spare candidate has started its session and may be asked to give its place up. */
     static Entry started(String profileId, String label, GroupSignal signal) {
-        Entry entry = new Entry(profileId, label, signal);
+        Entry entry = new Entry(profileId, label, signal, false, System.nanoTime());
         synchronized (RUNNING) {
             RUNNING.add(entry);
         }
         return entry;
+    }
+
+    /**
+     * A candidate is in its session and another candidate of its task has passed verification:
+     * its place is the first to be given up.
+     *
+     * @param startedAt when its session began ({@link System#nanoTime}): of two duplicates the
+     *                  one that began later has less to lose
+     */
+    static Entry duplicate(String profileId, String label, GroupSignal signal, long startedAt) {
+        Entry entry = new Entry(profileId, label, signal, true, startedAt);
+        synchronized (RUNNING) {
+            RUNNING.add(entry);
+        }
+        return entry;
+    }
+
+    /** How many duplicates are in their session right now. */
+    static int duplicatesRunning() {
+        synchronized (RUNNING) {
+            int n = 0;
+            for (Entry entry : RUNNING) {
+                if (entry.duplicate) {
+                    n++;
+                }
+            }
+            return n;
+        }
     }
 
     /**
@@ -91,30 +131,59 @@ final class SpareCandidates {
 
     /**
      * Asks one spare candidate to give its place up for {@code neededBy}, which has no place and
-     * has to wait: the most recently started one on the same model, or on any model when that
-     * model has none (the machine's own ceiling is shared by all of them).
+     * has to wait: a duplicate before any other spare, then the most recently started one, on
+     * the same model, or on any model when that model has none (the machine's own ceiling is
+     * shared by all of them).
      *
-     * @return true when one was told to stop; it frees its place at its next turn
+     * @return true when one was told to stop; its request to the model is abandoned
      */
     static boolean giveUpOneFor(String profileId, String neededBy) {
+        return giveUp(profileId, neededBy, false);
+    }
+
+    /**
+     * Asks one duplicate - and never an ordinary spare - to give its place up for
+     * {@code neededBy}: a further candidate of a task that has nothing through verification
+     * yet. Such a candidate takes only places nothing else wants, so it may not stop a spare
+     * candidate of another task that is still looking; a candidate whose task already has what
+     * it needs is another matter.
+     *
+     * @return true when one was told to stop
+     */
+    static boolean giveUpADuplicateFor(String profileId, String neededBy) {
+        return giveUp(profileId, neededBy, true);
+    }
+
+    private static boolean giveUp(String profileId, String neededBy, boolean duplicatesOnly) {
         Entry chosen = null;
         synchronized (RUNNING) {
             for (int pass = 0; pass < 2 && chosen == null; pass++) {
                 for (Entry entry : RUNNING) {
                     boolean sameModel = profileId != null && profileId.equals(entry.profileId);
-                    if ((pass == 1 || sameModel) && !entry.signal.isSuperseded()
-                            && (chosen == null || entry.startedAt >= chosen.startedAt)) {
+                    if ((pass != 1 && !sameModel) || entry.signal.isSuperseded()
+                            || (duplicatesOnly && !entry.duplicate)) {
+                        continue;
+                    }
+                    if (chosen == null || (entry.duplicate && !chosen.duplicate)
+                            || (entry.duplicate == chosen.duplicate
+                                && entry.startedAt >= chosen.startedAt)) {
                         chosen = entry;
                     }
                 }
             }
-            if (chosen == null || !chosen.signal.stop(KillReason.PLACE_NEEDED)) {
+            if (chosen == null || !chosen.signal.stop(
+                    chosen.duplicate ? KillReason.SUPERSEDED : KillReason.PLACE_NEEDED)) {
                 return false;
             }
             RUNNING.remove(chosen);
         }
-        log.info("{} is a spare attempt and gives its place up: {} has nothing running and is "
-            + "waiting for a place. It stops at its next turn.", chosen.label, neededBy);
+        if (chosen.duplicate) {
+            log.info("{} is stopped: another attempt on its task has already passed, and {} is "
+                + "waiting for a place.", chosen.label, neededBy);
+        } else {
+            log.info("{} is a spare attempt and gives its place up: {} has nothing running and "
+                + "is waiting for a place. It stops at its next turn.", chosen.label, neededBy);
+        }
         return true;
     }
 }

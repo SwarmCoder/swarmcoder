@@ -498,6 +498,7 @@ public class SwarmDispatcher {
     private Places placesFor(CandidateGroup group, CandidateGroup.Seat seat, WaveBoard board,
                              String profileId, String label, int reservedTokens)
             throws InterruptedException {
+        boolean asked = false;
         while (true) {
             if (seat.withdrawn()) {
                 return null;
@@ -507,6 +508,11 @@ public class SwarmDispatcher {
                 places = waitingItsTurn(profileId, label, reservedTokens);
             } else if (board == null || board.allFirstsPlaced()) {
                 places = onlyIfFree(profileId, reservedTokens);
+                if (places == null && !asked && !group.passed()) {
+                    // Its task has nothing through verification yet. A candidate of a task
+                    // that has is worth less than this one: it is asked for its place, once.
+                    asked = SpareCandidates.giveUpADuplicateFor(profileId, label);
+                }
             }
             if (places != null) {
                 if (seat.begins(profileId, label)) {
@@ -708,6 +714,7 @@ public class SwarmDispatcher {
     private Places repairPlaces(RepairRound round, int ordinal, int workerIndex,
                                 GroupSignal signal, String profileId, String label,
                                 int reservedTokens) throws InterruptedException {
+        boolean asked = false;
         while (true) {
             if (signal.isSuperseded()) {
                 if (ordinal == 0) {
@@ -723,6 +730,10 @@ public class SwarmDispatcher {
                     places = round.nobodyInSession()
                         ? waitingItsTurn(profileId, label, reservedTokens)
                         : onlyIfFree(profileId, reservedTokens);
+                    if (places == null && !asked) {
+                        // A repair round's task has nothing that passed (section 98).
+                        asked = SpareCandidates.giveUpADuplicateFor(profileId, label);
+                    }
                 }
                 if (places != null) {
                     if (signal.isSuperseded()) {

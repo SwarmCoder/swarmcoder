@@ -10014,3 +10014,138 @@ this project's delivered stories count. Run with it and unchanged:
   given the titles.
 - The effect figures are proportions of a stored run, not a measurement.
 - The full test suite was not run; the classes above were.
+
+## 98. Candidates that ran on after their task had passed, old build output and drafts carried on every call, and a whole request for a turn that did nothing (audit of the five-story local build, 2026-10-13)
+
+**What was observed.** `docs/AGENT_USAGE_AUDIT.md`, section 7, items 8, 5 and 10: 183 calls
+that 23 candidates began after a candidate of their task had finished and passed (up to 3.7
+million tokens; 22 first-round sessions, 7.11 million tokens, ended "stopped because a sibling
+had passed"); a session's own earlier drafts and the output of builds it had since run again,
+carried on every later call (up to 7.2 million); and 77 calls made only to answer a turn that
+called no tool (up to 2.5 million).
+
+**What was established**, by reading the code. Nothing was run against a model.
+
+*1. How a winner is chosen, and what stopped a candidate.* The product compares candidates on
+purpose. Every candidate that ends is verified; the ones that pass are judged; `SelectionLogic`
+orders them by verification, kept rules, judge score, how many candidates produced the same
+behaviour, files outside the write set, size of the change. So a candidate that passes later can
+be chosen over the one that passed first, and "how many produced the same behaviour" needs more
+than one to pass. A first round (`SwarmEngineImpl.firstRound`) therefore did not stop a task's
+other candidates when one passed. It withdrew those that had not started, and let those in their
+session run on for as long as any other task of the wave was still looking for its first passing
+candidate, "on places that would otherwise be idle". Only when no other task was still looking
+were they stopped (`SUPERSEDED`), and a stop already abandons the request in flight
+(`GroupSignal.onStop` to `AgentSession.cancel`, run 74). A repair round is different and was
+already right: its first passing repair stops the rest at once.
+
+The defect is in "otherwise idle". It was not checked. A candidate still in its session could
+be asked for its place only if it had been started as a spare and only by a task with nothing
+running at all (`SpareCandidates.giveUpOneFor`). So:
+
+- the task's first candidate, and a candidate that had stopped being spare because the earlier
+  ones failed, could never be asked, whatever passed afterwards;
+- a further candidate of a task that had nothing through verification yet could not ask anyone:
+  it takes only a place that is free. It waited while a candidate of a task that already had
+  what it needed held the place.
+
+Part of the 183 calls cannot be removed: a candidate is known to have passed only when its
+verification ends, and the audit counted from the end of its session.
+
+*2. What was already cut, and what was not.* `HistoryTrim.tidy` cuts old results once they add
+up to more than a mark (12,000 tokens for a worker, 20,000 for a role), superseded ones first,
+and then the bodies of old `write_file` and `apply_diff` calls, oldest first. Below the mark
+nothing is cut. A draft given to `check_design`, `check_plan`, `compile_test` or
+`check_journey` is an argument of a tool that was not on that list, so it was never cut at all:
+every draft of a design stayed whole in the conversation, beside the result each one got. A
+build run again with the same command was "superseded" only as an order of cutting, once the
+mark was reached.
+
+*3. What a turn without a tool call is.* `KoogAgentRuntime.turns`: the model answers with text
+and no call. The session adds a user message ("Continue using your tools...") and asks again,
+which sends the whole conversation with that turn and the reminder at its end. Two such turns
+in a row end the session with the text as its answer. A session that called a tool in between
+could be reminded any number of times, and each turn that did nothing and each reminder stayed
+in the conversation for every later call. Nothing before the reminder is rewritten by it, so
+the server's cached reading was already intact for that one request.
+
+**What changed.**
+
+*1. A candidate whose task has passed keeps its place only while nothing waits for one.* The
+comparison of several passing candidates is kept: while nothing waits, they run on and the judge
+chooses among what passes. From the moment a task has a candidate through verification
+(`CandidateGroup.hasPassingCandidate`, called by `firstRound` in the same pass that withdraws
+the candidates not yet started) every candidate of it still in its session is a duplicate,
+whatever it was started as. A duplicate is the first to be stopped for a task with nothing
+running (`SpareCandidates.giveUpOneFor`: a duplicate before any spare, then the one whose
+session began last). It is also stopped for a further candidate of a task that has nothing
+through verification, first round or repair round (`SpareCandidates.giveUpADuplicateFor`, asked
+once by each waiting candidate in `SwarmDispatcher.placesFor` and `repairPlaces`); an ordinary
+spare is still never stopped for one. It stops with `SUPERSEDED`, its request is abandoned, and
+its place is taken by whoever waited. No candidate count and no wave size was changed, and no
+place is emptied that has nothing waiting for it.
+
+*2. What a later call replaced is cut to a note before the next request* (`Superseded`, called
+every turn by `KoogAgentRuntime` after the tidy, for every role and worker). A tool says what
+it is on its own method, and nothing is read from the text of a call or a result:
+
+- `@AgentRuntime.RunAgain` on a tool's method: each call is a fresh run. A later call with the
+  same arguments that got an answer replaces the earlier result. On `exec` and `problems_in`.
+  A later call answered "unchanged" (section 59) replaces nothing.
+- `@AgentRuntime.Draft` on a parameter: that argument is a draft, and the other arguments say
+  of what. A later call of the same tool with the same other arguments replaces the earlier
+  draft and the result it got. On `write_file` (content, by path), `replace_member` (newText, by
+  member), `check_design`, `check_plan` (the one argument: any later call), `compile_test` and
+  `check_journey` (content, by path).
+
+The earlier result becomes one line: which tool, how many characters, that a later call
+replaced it, and its first line (a build's is `exit=N`). The earlier draft becomes one line in
+the same JSON, its other arguments as they were. The latest of each stays whole. Results and
+drafts of 400 characters or fewer are left. Nothing before a session's first call is touched,
+so the opening that candidates of one task share is the same text for all of them.
+
+*3. A turn without a call costs one request that leaves nothing behind.* The reminder is sent
+as before, with the model's text before it, so a model that wrote its answer as text can hand
+it in. When its next turn calls a tool, that turn and the reminder are taken out of the
+conversation (`KoogAgentRuntime.withoutTheTurnThatCalledNothing`): what stood before them is
+unchanged, so the server's reading of it stays good. A session is reminded at most three times
+(`-Dswarmcoder.session.turnsWithoutACall`); the next turn without a call ends it as two in a
+row always did - completed, with what the model said as its answer - and the session's trace
+and the log say which of the two ended it.
+
+**Tests.** No model. `ACandidateOfATaskThatHasPassedGivesItsPlaceUpFirstTest` (sc-swarm):
+the task's first candidate and its spare both become duplicates; nothing is stopped while
+nothing waits; the one that began last goes first; a duplicate goes before a newer spare; a
+spare is not stopped for a further candidate. `WhatALaterCallReplacedIsCutToANoteTest`
+(sc-runtime, the real runtime against a scripted server, then the rule alone): the first draft
+of a file and its result are notes in the request after the second draft, another file's draft
+and the latest are whole; the first build's result is a note that keeps `exit=1` after the
+second build; the first two messages of every request are equal; "unchanged" replaces nothing;
+an unmarked tool and a call with other arguments are left alone.
+`ATurnThatCallsNoToolIsNotCarriedOnTest` (sc-runtime, same server): the reminding request is
+the one before it plus two messages; neither is in any later request; three reminders, then
+the fourth such turn ends the session with its text; two in a row end it as before. Run with
+them and unchanged: `SparePlacesTest`, `PlacesGoToDifferentWorkFirstTest`,
+`ThinkingTheServerCountsAgainIsLetGoTest`.
+
+**Not checked.**
+
+- Nothing was run against a model or a model server. How many of the 183 calls go depends on
+  how often something is waiting for a place when a task passes; the next run's concurrency
+  section shows it as candidates cancelled `SUPERSEDED` while their wave was still going.
+- A whole first round with one task passed and another still looking (`firstRound` with a
+  `WaveBoard`) was not run; the group, the register of duplicates and the two askers were tested
+  on their own.
+- A cut rewrites one earlier message, so the server reads the conversation again from that
+  message on, once. For a draft or a build replaced a few turns later that is little. For one
+  replaced many turns later it can be more than the cut saves on a server that caches; this was
+  not measured.
+- A later draft that its tool refused still replaces the earlier one in the conversation. The
+  note says a later call replaced it; the file can be read.
+- `apply_diff` is not a draft (a diff is a change, not a text that a later diff replaces) and
+  is cut as before, by the tidy.
+- A model that says something it needs in a turn without a call loses that text once it calls
+  a tool again.
+- A chat template that refuses the textual tool history was not tried; the cuts keep every
+  call and result and their order.
+- The full test suite was not run; the classes above were.
