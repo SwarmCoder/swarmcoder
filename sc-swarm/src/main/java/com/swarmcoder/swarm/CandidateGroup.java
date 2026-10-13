@@ -43,7 +43,11 @@ import java.util.List;
  *   <li>a spare candidate in its session is stopped when a task with nothing running needs its
  *       place ({@link SpareCandidates}), or when its own task has a passing candidate and nothing
  *       else in the wave is still looking for one (the engine decides that; see
- *       {@link #stopRunning}).
+ *       {@link #stopRunning});
+ *   <li>once the task has a passing candidate, <b>every</b> candidate still in its session is a
+ *       duplicate ({@link #hasPassingCandidate}): it runs on only while nothing at all is waiting
+ *       for its place, and is stopped the moment anything is - a first candidate, or a further
+ *       candidate of a task that has none through verification yet (section 98).
  * </ul>
  *
  * <p>The swarm is not made smaller by any of this. A server with places to spare runs every
@@ -88,6 +92,9 @@ final class CandidateGroup {
         private boolean needed;
         private Start startedAs;
         private SpareCandidates.Entry spare;
+        private String profileId;
+        private String label;
+        private long startedAt;
 
         private Seat(int index, SamplingConfig sampling) {
             this.index = index;
@@ -118,8 +125,14 @@ final class CandidateGroup {
                     return false;
                 }
                 state = State.RUNNING;
+                this.profileId = profileId;
+                this.label = label;
+                this.startedAt = System.nanoTime();
                 startedAs = index == 0 ? Start.FIRST : needed ? Start.NEEDED : Start.SPARE;
-                if (startedAs == Start.SPARE) {
+                if (passed) {
+                    // It got its places in the instant its task got a passing candidate.
+                    spare = SpareCandidates.duplicate(profileId, label, signal, startedAt);
+                } else if (startedAs == Start.SPARE) {
                     spare = SpareCandidates.started(profileId, label, signal);
                 }
                 changed(); // a candidate waiting to look for a place looks now
@@ -137,6 +150,8 @@ final class CandidateGroup {
     private final List<Seat> seats = new ArrayList<>();
     private final List<Thread> threads = new ArrayList<>();
     private final Listener listener;
+    /** True once a candidate of this task is through verification. */
+    private boolean passed;
 
     CandidateGroup(List<SamplingConfig> samplings, Listener listener) {
         for (int i = 0; i < samplings.size(); i++) {
@@ -247,6 +262,43 @@ final class CandidateGroup {
             changed();
         }
         return gone;
+    }
+
+    /**
+     * The task has a candidate through verification (section 98). Every candidate still in its
+     * session is a duplicate from now on, whatever it was started as: its place is the first to
+     * be given up when anything waits for one ({@link SpareCandidates#giveUpOneFor},
+     * {@link SpareCandidates#giveUpADuplicateFor}). While nothing waits it runs on, on a place
+     * that would otherwise be empty, and the judge compares it with what passed if it passes
+     * too.
+     *
+     * @return the worker indices that became duplicates by this call
+     */
+    List<Integer> hasPassingCandidate() {
+        List<Integer> duplicates = new ArrayList<>();
+        synchronized (this) {
+            if (passed) {
+                return duplicates;
+            }
+            passed = true;
+            for (Seat seat : seats) {
+                if (seat.state == State.RUNNING && !seat.signal.isSuperseded()) {
+                    SpareCandidates.ended(seat.spare);
+                    seat.spare = SpareCandidates.duplicate(seat.profileId, seat.label,
+                        seat.signal, seat.startedAt);
+                    duplicates.add(seat.index);
+                }
+            }
+            changed();
+        }
+        return duplicates;
+    }
+
+    /** True once a candidate of this task is through verification. */
+    boolean passed() {
+        synchronized (this) {
+            return passed;
+        }
     }
 
     /**

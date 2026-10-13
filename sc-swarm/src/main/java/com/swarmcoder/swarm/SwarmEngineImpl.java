@@ -1360,8 +1360,11 @@ public class SwarmEngineImpl implements SwarmEngine {
      * candidates still in their session are stopped ({@code SUPERSEDED}) and wind down behind it.
      * While another task of the wave is still looking, the wave could not end anyway, so the
      * further candidates run on - on places that would otherwise be idle - and the judge gets to
-     * choose among whatever passed. A candidate whose session has ended is always verified and
-     * waited for: its work is done and paid for.
+     * choose among whatever passed. "Otherwise idle" is kept true (section 98): from the moment
+     * the task has a passing candidate, a candidate of it that is still in its session is
+     * stopped as soon as anything waits for a place, a further candidate of a task still
+     * looking included ({@link CandidateGroup#hasPassingCandidate}). A candidate whose session
+     * has ended is always verified and waited for: its work is done and paid for.
      *
      * @return every candidate that ended and was verified, in worker order
      */
@@ -1446,6 +1449,16 @@ public class SwarmEngineImpl implements SwarmEngine {
                         // Nothing is started just to have two.
                         withdrewWaiting = true;
                         group.withdrawWaiting();
+                        // And what is still in its session is a duplicate from here on: it
+                        // keeps its place only while nothing at all is waiting for one
+                        // (section 98).
+                        List<Integer> duplicates = group.hasPassingCandidate();
+                        if (!duplicates.isEmpty()) {
+                            log.info("Task '{}' has a candidate that passed verification: "
+                                + "worker(s) {} run on only while nothing is waiting for a "
+                                + "place, and are stopped the moment something is.",
+                                task.title(), duplicates);
+                        }
                     }
                     if (!round.passed && round.verifying == 0 && !group.handingIn()
                             && round.verified.size() > failedSoFar) {

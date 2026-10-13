@@ -744,6 +744,7 @@ public final class WorkerToolbox {
      * worktree; it does nothing about what it read, sent over the network, or wrote elsewhere on
      * the machine. With {@code sandbox.enabled=false} that remains unbounded.
      */
+    @com.swarmcoder.runtime.AgentRuntime.RunAgain
     public String exec(String command) {
         if (command != null && REVERSE_ENGINEERING.matcher(command).find()) {
             // Counted, so a worker cannot spend its whole allowance being refused, and steered,
@@ -1121,7 +1122,8 @@ public final class WorkerToolbox {
         return answer;
     }
 
-    public String replaceMember(String member, String newText) {
+    public String replaceMember(String member,
+                                @com.swarmcoder.runtime.AgentRuntime.Draft String newText) {
         // The parameter names are the tool schema (-parameters) - do not rename them.
         return logEdit("replace_member", member, editMember(
             com.swarmcoder.knowledge.CheckoutCode.replaceMember(worktree, member, newText)));
@@ -1246,7 +1248,8 @@ public final class WorkerToolbox {
      * Small models mangle unified-diff hunk headers routinely; writing the whole file is the
      * reliable path for small files. Same mechanical write-set enforcement as apply_diff.
      */
-    public String writeFile(String path, String content) {
+    public String writeFile(String path,
+                            @com.swarmcoder.runtime.AgentRuntime.Draft String content) {
         // The parameter names are the tool schema (-parameters) — do not rename them.
         boolean existed = false;
         try {
@@ -1946,6 +1949,7 @@ public final class WorkerToolbox {
         return inCheckout("organize_imports", file, null);
     }
 
+    @com.swarmcoder.runtime.AgentRuntime.RunAgain
     public String problemsIn(String file) {
         return inCheckout("problems", file, null);
     }

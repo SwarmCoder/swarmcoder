@@ -248,6 +248,29 @@ public interface AgentRuntime {
     }
 
     /**
+     * On a tool's method: every call is a fresh run of something (a build, a test run, a compile
+     * check), so a later call of the tool with the same arguments replaces the result of an
+     * earlier one. The earlier result is then cut to a short note before the next request; the
+     * latest stays whole. See {@link Superseded}.
+     */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(java.lang.annotation.ElementType.METHOD)
+    @interface RunAgain {
+    }
+
+    /**
+     * On a {@code String} parameter of a tool's method: the argument is a draft the session
+     * writes (a file's content, a design, a plan), and the tool's other arguments say what it
+     * is a draft of. A later call of the same tool with the same other arguments replaces it:
+     * the earlier draft and the result it got are then cut to a short note before the next
+     * request, and the latest stays whole. See {@link Superseded}.
+     */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @java.lang.annotation.Target(java.lang.annotation.ElementType.PARAMETER)
+    @interface Draft {
+    }
+
+    /**
      * Consulted after every assistant turn — the early-kill hook (spec §11.3). Returning a
      * KillReason terminates the session immediately with that reason.
      */

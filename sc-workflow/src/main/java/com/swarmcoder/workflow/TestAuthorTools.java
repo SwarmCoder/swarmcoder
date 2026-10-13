@@ -416,7 +416,8 @@ public final class TestAuthorTools {
     }
 
     /** Parameter names are the tool's schema (the build compiles with {@code -parameters}). */
-    public String checkJourney(String path, String content) {
+    public String checkJourney(String path,
+                               @com.swarmcoder.runtime.AgentRuntime.Draft String content) {
         return session.runOwnTool("check_journey", path, () -> {
             String target = journeyOnly && reviewPath != null ? reviewTarget(path)
                 : accepted(path, JourneyFile.SUFFIX);
@@ -581,7 +582,8 @@ public final class TestAuthorTools {
     }
 
     /** Parameter names are the tool's schema (the build compiles with {@code -parameters}). */
-    public String compileTest(String path, String content) {
+    public String compileTest(String path,
+                              @com.swarmcoder.runtime.AgentRuntime.Draft String content) {
         return session.runOwnTool("compile_test", path, () -> {
             String target = accepted(path);
             if (target == null) {

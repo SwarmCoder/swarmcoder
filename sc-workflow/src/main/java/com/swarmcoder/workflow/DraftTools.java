@@ -134,12 +134,12 @@ public final class DraftTools {
     }
 
     /** {@code check_design}. The parameter name is the tool's schema - do not rename it. */
-    public String checkDesign(String design) {
+    public String checkDesign(@com.swarmcoder.runtime.AgentRuntime.Draft String design) {
         return checkDraft(design);
     }
 
     /** {@code check_plan}. The parameter name is the tool's schema - do not rename it. */
-    public String checkPlan(String plan) {
+    public String checkPlan(@com.swarmcoder.runtime.AgentRuntime.Draft String plan) {
         return checkDraft(plan);
     }
 

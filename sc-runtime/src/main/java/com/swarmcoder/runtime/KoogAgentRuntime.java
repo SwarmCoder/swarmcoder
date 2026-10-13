@@ -87,6 +87,50 @@ public final class KoogAgentRuntime implements AgentRuntime {
      */
     static final String GO_ON = "Those are the results of your calls. Go on with your work.";
 
+    /** What a turn that called no tool is answered with. */
+    static final String USE_YOUR_TOOLS =
+        "Continue using your tools. When the task is complete, call " + DONE_TOOL + ".";
+
+    /**
+     * How many turns of one session may call no tool and be answered with
+     * {@link #USE_YOUR_TOOLS} (section 98). Each such answer is a whole request more, and the
+     * session's allowance of two in a row never ran out for a session that called a tool in
+     * between. The next turn without a call after these ends the session, as two in a row
+     * always did: with what the model said as its answer.
+     */
+    static final int MAX_TURNS_WITHOUT_A_CALL =
+        Math.max(1, Integer.getInteger("swarmcoder.session.turnsWithoutACall", 3));
+
+    /**
+     * The conversation without a turn that called no tool and the reminder it was answered
+     * with, once the model has gone on to call one (section 98). Expects the last three
+     * messages to be that turn, the reminder exactly as this runtime sent it, and the answer
+     * to it; anything else is returned as it is, the same list. What comes before those three
+     * is not touched, so the server's reading of it stays good, and every later request is
+     * shorter by the two.
+     */
+    static List<Message> withoutTheTurnThatCalledNothing(List<Message> messages) {
+        int size = messages.size();
+        if (size < 3 || !(messages.get(size - 1) instanceof Message.Assistant)
+                || !(messages.get(size - 2) instanceof Message.User reminder)
+                || !(messages.get(size - 3) instanceof Message.Assistant idle)) {
+            return messages;
+        }
+        if (reminder.getParts().size() != 1
+                || !(reminder.getParts().get(0) instanceof MessagePart.Text said)
+                || !USE_YOUR_TOOLS.equals(said.getText())) {
+            return messages;
+        }
+        for (MessagePart part : idle.getParts()) {
+            if (part instanceof MessagePart.Tool.Call) {
+                return messages;
+            }
+        }
+        List<Message> kept = new ArrayList<>(messages.subList(0, size - 3));
+        kept.add(messages.get(size - 1));
+        return List.copyOf(kept);
+    }
+
     private final TraceHub traceHub;
 
     public KoogAgentRuntime() {
@@ -493,6 +537,8 @@ public final class KoogAgentRuntime implements AgentRuntime {
         /** The worker loop (spec §11.2 shape), with the TurnGuard consulted every turn. */
         private String turns(AIAgentFunctionalContext ctx, String input) {
             int consecutiveTextTurns = 0;
+            int turnsWithoutACall = 0;
+            boolean remindedLastTurn = false;
             Message.Assistant response = ask(ctx, () -> ctx.requestLLM(input));
 
             while (true) {
@@ -512,19 +558,36 @@ public final class KoogAgentRuntime implements AgentRuntime {
 
                 if (calls.isEmpty()) {
                     consecutiveTextTurns++;
+                    turnsWithoutACall++;
                     if (consecutiveTextTurns >= 2) {
                         // Two turns without tool use and without report_done: the model has
                         // stopped making progress through the sanctioned interface.
+                        endedWithoutACall("the second in a row");
                         keepConversation(ctx);
                         return textOf(response);
                     }
-                    String nudge = "Continue using your tools. When the task is complete, call " + DONE_TOOL + ".";
-                    tracer.nudge(nudge);
-                    final String text = nudge;
-                    response = ask(ctx, () -> ctx.requestLLM(text));
+                    if (turnsWithoutACall > MAX_TURNS_WITHOUT_A_CALL) {
+                        // Each reminder is a whole request more (section 98).
+                        endedWithoutACall("turn number " + turnsWithoutACall + " of this session "
+                            + "that did so; a session is reminded " + MAX_TURNS_WITHOUT_A_CALL
+                            + " time(s)");
+                        keepConversation(ctx);
+                        return textOf(response);
+                    }
+                    // Nothing is rewritten before this request: it is the last one with one
+                    // message more, so the server reads only that.
+                    tracer.nudge(USE_YOUR_TOOLS);
+                    remindedLastTurn = true;
+                    response = ask(ctx, () -> ctx.requestLLM(USE_YOUR_TOOLS));
                     continue;
                 }
                 consecutiveTextTurns = 0;
+                if (remindedLastTurn) {
+                    // The model is working again: the turn that did nothing and the reminder
+                    // are not carried on every later request.
+                    remindedLastTurn = false;
+                    forgetTheTurnThatCalledNothing(ctx);
+                }
 
                 // An argument its tool lets a caller leave out is the empty string (run 103).
                 calls = OmittedArguments.filled(calls, spec.tools());
@@ -550,11 +613,83 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 compactIfNeeded(ctx);
                 boolean tidied = tidyIfAsked(ctx);
                 final List<ReceivedToolResult> toSend = withoutRepeatedContent(ctx, calls, results);
+                shortenSuperseded(ctx, calls, toSend);
                 if (countedNotSent.newMessageDue(tidied, spec.options().tidyAboveTokens())) {
                     response = askInANewMessage(ctx, toSend);
                 } else {
                     response = ask(ctx, () -> ctx.sendToolResults(toSend));
                 }
+            }
+        }
+
+        /** Says, in the log and in the session's trace, why a turn without a call ended it. */
+        private void endedWithoutACall(String which) {
+            String sentence = "Session ended at turn " + turns.get() + ": the model answered "
+                + "without calling a tool or handing in (" + which + "). What it said is taken "
+                + "as its answer.";
+            log.info("Session '{}': {}", spec.role(), sentence);
+            tracer.nudge(sentence);
+        }
+
+        /** See {@link KoogAgentRuntime#withoutTheTurnThatCalledNothing}. */
+        private void forgetTheTurnThatCalledNothing(AIAgentFunctionalContext ctx) {
+            try {
+                ctx.llm().<Void>writeSession(session -> {
+                    Prompt current = session.getPrompt();
+                    List<Message> messages = current.getMessages();
+                    List<Message> kept = withoutTheTurnThatCalledNothing(messages);
+                    if (kept != messages) {
+                        session.setPrompt(new Prompt(kept, current.getId(), current.getParams()));
+                    }
+                    return null;
+                });
+            } catch (RuntimeException e) {                                 // noqa
+                log.debug("Session '{}': the turn without a call stays in the conversation: {}",
+                    spec.role(), e.toString());
+            }
+        }
+
+        /**
+         * Cuts what this turn's calls have replaced - an earlier run of the same build or
+         * test, an earlier draft of the same file or design - to a short note, before the
+         * results are sent (section 98; see {@link Superseded}). Never stops a session.
+         *
+         * @param toSend this turn's results as they will be sent, one for each of {@code calls}
+         */
+        private void shortenSuperseded(AIAgentFunctionalContext ctx,
+                                       List<MessagePart.Tool.Call> calls,
+                                       List<ReceivedToolResult> toSend) {
+            try {
+                if (calls.size() != toSend.size()) {
+                    return;
+                }
+                List<Superseded.Now> now = new ArrayList<>();
+                for (int i = 0; i < calls.size(); i++) {
+                    MessagePart.Tool.Call call = calls.get(i);
+                    now.add(new Superseded.Now(call.getId(), call.getTool(), call.getArgs(),
+                        toSend.get(i).getOutput()));
+                }
+                Superseded.Result result = ctx.llm().writeSession(session -> {
+                    Prompt current = session.getPrompt();
+                    Superseded.Result cut = Superseded.shorten(current.getMessages(),
+                        spec.tools(), now);
+                    if (cut.changed()) {
+                        session.setPrompt(new Prompt(cut.messages(), current.getId(),
+                            current.getParams()));
+                    }
+                    return cut;
+                });
+                if (result.changed()) {
+                    promptTokens.set(result.tokensAfter());
+                    log.info("Session '{}': at turn {} {} result(s) of an earlier run and {} "
+                        + "earlier draft(s) that a later call replaced were cut to a note, "
+                        + "{} -> {} tokens (estimated)", spec.role(), turns.get(),
+                        result.results(), result.drafts(), result.tokensBefore(),
+                        result.tokensAfter());
+                }
+            } catch (RuntimeException e) {                                 // noqa
+                log.debug("Session '{}': replaced results and drafts left whole: {}",
+                    spec.role(), e.toString());
             }
         }
 
