@@ -57,7 +57,13 @@ public class DocsIndex {
         this.analyzer = new StandardAnalyzer();
     }
 
-    public void indexDocs(String libraryId, String content) {
+    /**
+     * Adds one library's documentation. One caller at a time: Lucene allows a folder one writer,
+     * and the background warm-up threads and a role's own lookup each opened one at the same
+     * moment - every writer but the first failed with {@code LockObtainFailedException} and its
+     * library's documentation was not in this index. A second caller now waits for the first.
+     */
+    public synchronized void indexDocs(String libraryId, String content) {
         IndexWriterConfig config = new IndexWriterConfig(analyzer);
         try (IndexWriter writer = new IndexWriter(directory, config)) {
             Document doc = new Document();

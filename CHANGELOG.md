@@ -11,6 +11,15 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Breaking
 
+- **Nothing is sent outside for a lookup unless the settings file says `outsideLookups: true`.**
+  Until now a set `CONTEXT7_API_KEY` was enough for library names and question words to go to
+  the documentation server, the Researcher could search the web and fetch pages, and a
+  documentation site listed among a project's reference folders was fetched. All of that is now
+  off until the one line is written, and the log says so at start ("Outside lookups are off:
+  ..."). With it off, `sandbox.network: bridge` is not applied either, and a page under test in
+  the headless browser loads from this computer only. The table of everything that can leave
+  the computer is in the user manual, "What leaves this computer".
+
 - **SwarmCoder now needs Java 25 to run.** It is built on ZeroZ Stack 0.10.0 and its window is
   served by that release's Vidocq server binding in place of Helidon, and the binding needs
   Java 25. The build still compiles for Java 21, the start command and `run.bat` are unchanged,
@@ -166,6 +175,20 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   back.
 
 ### Fixed
+
+- **The documentation server was asked about the project's own name, and the answer was kept.**
+  The background warm-up sent the artifact id of every entry in the root build file, the
+  project's own modules included, and a worker's lookup sent the first word of its question as
+  a library name. For a project named after an everyday word, the documentation of an unrelated
+  library of that name came back and was indexed. A library is now looked up only when the
+  build files declare it as a dependency and it is not a module of the build; the server's
+  list of candidates is read entry by entry (it used to be passed on whole as if it were one
+  library id) and only a candidate that can be tied to the declared name is fetched. Every
+  sending is logged with the words that went.
+- **Two writers on the documentation index.** The warm-up started a thread per library and each
+  opened its own writer on the same index; all but one failed with
+  `LockObtainFailedException` and their libraries were missing from that index. The warm-up is
+  one thread and the index takes one writer at a time.
 
 - **A story the existing code already met ended stopped, with no reason and nothing to
   answer.** Its one task was built on code earlier stories had delivered. Every worker changed

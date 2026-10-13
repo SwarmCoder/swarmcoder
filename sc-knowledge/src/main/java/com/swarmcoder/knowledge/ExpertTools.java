@@ -563,9 +563,15 @@ public final class ExpertTools {
             if (librarian == null) {
                 return "No documentation server is configured for this project.";
             }
+            Optional<String> refusal = librarian.outsideLookupRefusal(library);
+            if (refusal.isPresent()) {
+                return refusal.get();
+            }
             Optional<String> docs = librarian.fetchLibraryDocs(library, query);
             return docs.filter(text -> !text.isBlank())
-                .orElse("The documentation server had nothing for " + library + " on: " + query);
+                .map(text -> Librarian.OUTSIDE_SOURCE_NOTE + text)
+                .orElse("The documentation server had nothing it could tie to " + library
+                    + " on: " + query);
         });
     }
 
@@ -938,9 +944,13 @@ public final class ExpertTools {
                     this, method("skeletonFor", String.class))));
             if (librarian != null && librarian.documentationServerConfigured()) {
                 tools.add(new ToolBinding("library_docs",
-                    "Published documentation for a third-party library, from the documentation "
-                        + "server. Use it only for a library that is NOT in this project's own "
-                        + "reference material.",
+                    "Published documentation for a third-party library, from a documentation "
+                        + "server OUTSIDE this computer: what you put in `library` and `query` "
+                        + "is sent there, and the answer was not checked against this project. "
+                        + "`library` must be a dependency the build files declare (artifact id "
+                        + "or group:artifact, as build_of prints it); any other name is refused "
+                        + "and nothing is sent. Use it only for a library that is NOT in this "
+                        + "project's own reference material.",
                     this, method("libraryDocs", String.class, String.class)));
             }
             if (user != null && librarian != null) {

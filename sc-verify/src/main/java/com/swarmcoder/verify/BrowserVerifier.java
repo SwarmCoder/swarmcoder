@@ -17,6 +17,7 @@
  */
 package com.swarmcoder.verify;
 
+import com.swarmcoder.domain.OutsideLookups;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Locator;
@@ -469,11 +470,28 @@ public final class BrowserVerifier {
 
     private BrowserCheckResults checkPages(VerifySpec.BrowserSpec spec, String baseUrl, StringBuilder fullLog) {
         List<PageCheck> checks = new ArrayList<>();
-        try (Playwright playwright = Playwright.create();
+        // The page under test is code a model wrote, in a browser on this computer. Unless the
+        // owner allowed outside lookups it may load from this computer only: every request to
+        // another host is aborted, and the browser driver is told not to fetch a browser.
+        boolean outside = OutsideLookups.process().enabled();
+        Playwright.CreateOptions driver = new Playwright.CreateOptions();
+        if (!outside) {
+            driver.setEnv(java.util.Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1"));
+        }
+        try (Playwright playwright = Playwright.create(driver);
              Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true))) {
             try (var context = browser.newContext(new Browser.NewContextOptions()
                     .setViewportSize(1440, 900)
                     .setReducedMotion(ReducedMotion.REDUCE))) {
+                if (!outside) {
+                    context.route("**/*", route -> {
+                        if (mayLoad(route.request().url())) {
+                            route.resume();
+                        } else {
+                            route.abort();
+                        }
+                    });
+                }
                 for (VerifySpec.PageCheckSpec pageSpec : spec.checks()) {
                     checks.add(checkPage(context.newPage(), pageSpec, baseUrl, fullLog));
                 }
@@ -489,6 +507,21 @@ public final class BrowserVerifier {
                 + "check on; until then the browser stage proves nothing either way.");
         }
         return BrowserCheckResults.executed(checks);
+    }
+
+    /**
+     * Whether a page under test may load an address while outside lookups are off: anything that
+     * is not a network request ({@code data:}, {@code blob:}, {@code about:}), and anything on
+     * this computer.
+     */
+    static boolean mayLoad(String url) {
+        if (url == null) {
+            return false;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        boolean network = lower.startsWith("http:") || lower.startsWith("https:")
+            || lower.startsWith("ws:") || lower.startsWith("wss:") || lower.startsWith("ftp:");
+        return !network || OutsideLookups.isLoopback(url);
     }
 
     private PageCheck checkPage(Page page, VerifySpec.PageCheckSpec spec, String baseUrl, StringBuilder fullLog) {

@@ -36,6 +36,7 @@ import com.swarmcoder.store.ArtifactStore;
 import com.swarmcoder.swarm.SwarmDispatcher;
 import com.swarmcoder.swarm.WorkerSlots;
 import com.swarmcoder.swarm.WorkerPersonas;
+import com.swarmcoder.domain.OutsideLookups;
 import com.swarmcoder.knowledge.Context7Client;
 import com.swarmcoder.knowledge.DocsIndex;
 import com.swarmcoder.knowledge.Librarian;
@@ -221,10 +222,27 @@ public class DependencyGraph {
         //    the SAFE ones: no network, sandbox required.
         SandboxConfig sbx = config.sandbox() != null
             ? config.sandbox() : new SandboxConfig(2, 4, 2);
+        // The one switch for everything sent to a host that is not a configured model endpoint
+        // or this computer. Decided here, before anything that could send is built, and handed
+        // to each such thing. Off unless the settings file says `outsideLookups: true`.
+        OutsideLookups outsideLookups = config.outsideLookupsAllowed()
+            ? OutsideLookups.on(line -> log.info(line)) : OutsideLookups.off();
+        OutsideLookups.process(outsideLookups);
+        // A container on Docker's bridge can reach any host, and what runs in it is code a model
+        // wrote, with the project in front of it. That is an outside sending like any other.
+        DockerSandboxManager.NetworkPolicy sandboxNetwork = sbx.networkPolicy();
+        boolean bridgeRefused = !outsideLookups.enabled()
+            && sandboxNetwork == DockerSandboxManager.NetworkPolicy.BRIDGE;
+        if (bridgeRefused) {
+            sandboxNetwork = DockerSandboxManager.NetworkPolicy.NONE;
+            log.warn("sandbox.network: bridge in {} is not applied because outside lookups are "
+                + "off: the safety box has no network. Put `outsideLookups: true` in the same "
+                + "file to give it one.", ConfigLoader.configPath());
+        }
         this.sandboxManager = new DockerSandboxManager(
             System.getProperty("swarmcoder.sandbox.image", "swarmcoder-worker:latest"),
             Math.max(1, sbx.cpus()), Math.max(1, sbx.memGb()),
-            sbx.pidsLimitOrDefault(), sbx.networkPolicy(), sbx.allowedHosts(),
+            sbx.pidsLimitOrDefault(), sandboxNetwork, sbx.allowedHosts(),
             sbx.requiredOrDefault(),
             System.getProperty("swarmcoder.sandbox.dockerHost"),
             System.getProperty("swarmcoder.sandbox.m2",
@@ -373,20 +391,41 @@ public class DependencyGraph {
         // practice this deliberately does not extend. Read once, here, at startup: a process that
         // was already running when the variable was set will not see it.
         String context7Key = System.getenv("CONTEXT7_API_KEY");
-        this.context7Client = new Context7Client(context7Url, context7Key, context7Configured);
+        this.context7Client = new Context7Client(context7Url, context7Key, context7Configured,
+            outsideLookups);
         // Its own subfolder, matching HistoryRag's "rag/history" convention just above — sharing the
         // "rag" root itself with HistoryRag meant a fresh install's docs lookup opened a directory
         // that held nothing of its own but a "history" folder belonging to a different Lucene index
         // entirely, which is not what "no segments file found" was actually reporting.
         this.docsIndex = new DocsIndex(
             Paths.get(System.getProperty("user.home"), ".swarmcoder", "rag", "docs"));
-        McpServers mcpServers = new McpServers(mcpList);
+        McpServers mcpServers = new McpServers(mcpList, outsideLookups);
+        // Said once, here, where every component the switch governs has just been built.
+        List<String> governed = new ArrayList<>();
+        governed.add("the documentation server (" + OutsideLookups.hostOf(context7Url) + ")");
+        governed.add("web search and web pages for the Researcher");
+        for (McpServers.Server server : mcpList) {
+            if (!server.url().equals(context7Url)) {
+                governed.add("the MCP server '" + server.name() + "' ("
+                    + OutsideLookups.hostOf(server.url()) + ")");
+            }
+        }
+        governed.add("documentation sites listed among a project's reference folders");
+        governed.add("a network for the safety box");
+        governed.add("other hosts for a page under test in the headless browser");
+        String outsideLine = outsideLookups.startLine(governed,
+            String.valueOf(ConfigLoader.configPath()));
+        if (outsideLookups.enabled()) {
+            log.warn(outsideLine);
+        } else {
+            log.info(outsideLine);
+        }
 
         // 7. Shared services bundle — everything a project's ProjectContext builds on.
         this.shared = new SharedServices(this.artifactStore, this.inferenceScheduler,
             this.agentRuntime, modelProfiles, this.cloudGate, blobSink, this.vllmClient,
             this.sandboxManager, this.historyRag, this.context7Client, this.docsIndex, mcpServers,
-            concurrency);
+            concurrency, outsideLookups);
         this.maxGuidelineChars = (this.config.guidelines() != null ? this.config.guidelines().maxPrefixTokens() : 3000) * 4;
         this.sandboxEnabled = resolveSandboxEnabled(this.config);
         announceSandboxPosture(this.sandboxEnabled, this.config, this.sandboxManager);
