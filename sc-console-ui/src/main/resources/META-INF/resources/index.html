@@ -4,11 +4,12 @@
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
         <meta name="viewport" content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, viewport-fit=cover"/>
         <title>SwarmCoder Console</title>
-        <script src="https://cdn.tailwindcss.com"></script>
+        <!-- Served from this application, not from a CDN: the Console loads nothing from the internet. -->
+        <script src="/vendor/tailwindcss-3.4.17.js"></script>
         <script>
             tailwind.config = { corePlugins: { preflight: false } }
         </script>
-        <link href="https://cdn.jsdelivr.net/npm/daisyui@5.6.14/daisyui.css" rel="stylesheet" type="text/css" />
+        <link href="/vendor/daisyui-5.6.14.css" rel="stylesheet" type="text/css" />
         <style>
             /*
               The dark theme's elevation, widened so it can be seen.
