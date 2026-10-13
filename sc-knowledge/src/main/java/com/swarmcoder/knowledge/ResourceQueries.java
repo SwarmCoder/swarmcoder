@@ -138,6 +138,17 @@ final class ResourceQueries {
             + outline(text, name) + "Ask for " + address + "#<part> for one part.\n";
     }
 
+    /** True for a file this class can outline by its own structure: XML, properties, YAML. */
+    static boolean hasOutline(String name, String text) {
+        return isXml(name, text) || name.endsWith(".properties") || name.endsWith(".yml")
+            || name.endsWith(".yaml");
+    }
+
+    /** The outline {@link #file} answers a large resource with, for a file read by address. */
+    static String outlineOf(String text, String name) {
+        return outline(text.replace("\r\n", "\n"), name);
+    }
+
     private static String outline(String text, String name) {
         if (isXml(name, text)) {
             String xml = xmlOutline(text);

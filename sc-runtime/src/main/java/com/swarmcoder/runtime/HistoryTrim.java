@@ -407,15 +407,37 @@ public final class HistoryTrim {
      */
     public static Result tidy(List<Message> messages, int aboveTokens, int toTokens,
                               int digestChars) {
+        return tidy(messages, aboveTokens, toTokens, digestChars, -1);
+    }
+
+    /**
+     * {@link #tidy(List, int, int, int)} with a bound on what results asked for a second time
+     * may hold uncut (section 95).
+     *
+     * <p>A result the session asked for again is left whole and not counted (run 79, a room of
+     * 32,768 tokens, where a compaction cut it in the end). In a room of a million tokens
+     * nothing ever did: one architect's fifteen such results were 74,214 characters on every
+     * later call. With a bound, the results asked for exactly twice stay whole newest first
+     * while they add up to no more than {@code askedAgainTokens}; the older ones are counted
+     * and cut like any other result. <b>A result asked for a third time or more is always left
+     * whole</b>, so the bound cannot start the reading-again it was made against: each call is
+     * given back in full at most twice after a cut, and the third copy stays.
+     *
+     * @param askedAgainTokens the bound, in estimated tokens; negative is no bound
+     */
+    public static Result tidy(List<Message> messages, int aboveTokens, int toTokens,
+                              int digestChars, int askedAgainTokens) {
         int before = estimateTokens(messages);
         if (aboveTokens <= 0) {
             return new Result(messages, 0, 0, before, before);
         }
         // A result the session asked for a second time is what it works from: a tidy leaves
         // it whole and does not count it (run 79). A compaction, at the real room, may cut it.
-        Set<String> askedAgain = askedAgainCalls(messages);
         Set<String> superseded = supersededCalls(messages);
-        askedAgain.removeAll(superseded);
+        Set<String> askedAgainAll = askedAgainCalls(messages);
+        askedAgainAll.removeAll(superseded);
+        Set<String> askedAgain = askedAgainTokens < 0 ? askedAgainAll
+            : askedAgainKept(messages, askedAgainAll, askedAgainTokens);
         int droppable = 0;
         // What cutting them would take off the conversation: less than their size, because
         // each leaves its first lines or a line naming its call (section 94).
@@ -666,6 +688,49 @@ public final class HistoryTrim {
             }
         }
         return again;
+    }
+
+    /**
+     * Which of the asked-again results stay whole under a bound of {@code allowanceTokens}:
+     * every one whose call the conversation holds three times or more (a call answered
+     * "unchanged" counts, as it does toward a toolbox's stop on repeats), and of those asked
+     * for twice the newest, while they add up to no more than the bound.
+     */
+    static Set<String> askedAgainKept(List<Message> messages, Set<String> askedAgain,
+                                      int allowanceTokens) {
+        Map<String, Integer> times = new HashMap<>();
+        Map<String, Integer> timesOfCall = new HashMap<>();
+        Map<String, Integer> length = new HashMap<>();
+        List<String> order = new ArrayList<>();
+        for (Message message : messages) {
+            for (MessagePart part : message.getParts()) {
+                if (part instanceof MessagePart.Tool.Call call && call.getId() != null) {
+                    String args = call.getArgs() == null ? "" : call.getArgs();
+                    timesOfCall.put(call.getId(),
+                        times.merge(call.getTool() + "\n" + args, 1, Integer::sum));
+                    order.add(call.getId());
+                } else if (part instanceof MessagePart.Tool.Result result
+                        && result.getId() != null) {
+                    length.put(result.getId(), result.getOutput().length());
+                }
+            }
+        }
+        Set<String> kept = new HashSet<>();
+        int held = 0;
+        for (int i = order.size() - 1; i >= 0; i--) {
+            String id = order.get(i);
+            if (!askedAgain.contains(id)) {
+                continue;
+            }
+            int tokens = length.getOrDefault(id, 0) / CHARS_PER_TOKEN;
+            if (timesOfCall.getOrDefault(id, 0) >= 3) {
+                kept.add(id);
+            } else if (held + tokens <= Math.max(0, allowanceTokens)) {
+                kept.add(id);
+                held += tokens;
+            }
+        }
+        return kept;
     }
 
     /**

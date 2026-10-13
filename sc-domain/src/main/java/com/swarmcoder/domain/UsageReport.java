@@ -245,6 +245,81 @@ public final class UsageReport {
         return sb.toString();
     }
 
+    /**
+     * A paid role is warned about when whole files were more than this share, in percent, of
+     * the characters its lookups returned. A whole file is the last resort (CLAUDE.md section
+     * 1); in the build of section 94 whole files were 51% of the architect's characters.
+     */
+    public static final int WARN_WHOLE_FILE_SHARE = 25;
+
+    /**
+     * A paid role is warned about when lookups about the reference material - the source and
+     * documents of what the project builds on - returned more than this share, in percent, of
+     * its characters: it is learning the framework, not designing or checking this project. In
+     * the build of section 94 it was 63% for the architect and 61% for the reviewer.
+     */
+    public static final int WARN_REFERENCE_SHARE = 50;
+
+    /** Below this many characters looked up, a role's shares say nothing and are not judged. */
+    public static final int WARN_SHARES_FROM_CHARS = 20_000;
+
+    /** The kind whose characters are whole files, as {@code LookupMeter} names it. */
+    public static final String WHOLE_FILE_KIND = "WHOLE_FILE";
+
+    /**
+     * {@link #warnings(Collection)} and, for each paid role, one line when whole files or
+     * reference material were more than their stated share of the characters its lookups
+     * returned (section 95). A role with no paid row is not judged: local tokens are not money.
+     */
+    public static String warnings(Collection<ModelUsageRecord> models,
+                                  List<LookupUsageRecord> lookups) {
+        StringBuilder sb = new StringBuilder(warnings(models));
+        Set<String> paid = new LinkedHashSet<>();
+        for (Row row : rowsOf(models)) {
+            if (row.sum().paid()) {
+                paid.add(row.role());
+            }
+        }
+        for (String role : paid) {
+            long all = 0;
+            long whole = 0;
+            int wholeCalls = 0;
+            long reference = 0;
+            int referenceCalls = 0;
+            for (LookupUsageRecord count : lookups == null ? List.<LookupUsageRecord>of() : lookups) {
+                if (!role.equals(count.role())) {
+                    continue;
+                }
+                all += count.chars();
+                reference += count.referenceChars();
+                referenceCalls += count.referenceCalls();
+                if (WHOLE_FILE_KIND.equals(count.kind())) {
+                    whole += count.chars();
+                    wholeCalls += count.calls();
+                }
+            }
+            if (all < WARN_SHARES_FROM_CHARS) {
+                continue;
+            }
+            if (whole * 100 > all * WARN_WHOLE_FILE_SHARE) {
+                sb.append("WARNING: whole files were ").append(whole * 100 / all)
+                    .append("% of what the ").append(role).append(" looked up on a paid server (")
+                    .append(wholeCalls).append(" files, ").append(whole).append(" of ").append(all)
+                    .append(" characters); above ").append(WARN_WHOLE_FILE_SHARE)
+                    .append("% a query is missing or is not being used.\n");
+            }
+            if (reference * 100 > all * WARN_REFERENCE_SHARE) {
+                sb.append("WARNING: reference material was ").append(reference * 100 / all)
+                    .append("% of what the ").append(role).append(" looked up on a paid server (")
+                    .append(referenceCalls).append(" lookups, ").append(reference).append(" of ")
+                    .append(all).append(" characters); above ").append(WARN_REFERENCE_SHARE)
+                    .append("% the role is learning what the project builds on, not the "
+                        + "project.\n");
+            }
+        }
+        return sb.toString();
+    }
+
     private static String perToken(ModelUsageRecord sum) {
         return String.format(Locale.ROOT, "%.1f",
             sum.requestChars() / (double) sum.sizedInputTokens());
@@ -294,14 +369,16 @@ public final class UsageReport {
             sb.append(' ').append(kind.label()).append(" |");
         }
         sb.append(" share of characters from the tree, the language server and document "
-            + "sections |\n|---|");
-        sb.append("---|".repeat(kinds.size() + 1)).append("\n");
+            + "sections | of all these, about the reference material |\n|---|");
+        sb.append("---|".repeat(kinds.size() + 2)).append("\n");
         Set<String> roles = new LinkedHashSet<>();
         counts.forEach(c -> roles.add(c.role()));
         for (String role : roles) {
             sb.append("| ").append(role).append(" |");
             long all = 0;
             long tree = 0;
+            int referenceCalls = 0;
+            long reference = 0;
             for (Kind kind : kinds) {
                 int calls = 0;
                 long chars = 0;
@@ -309,6 +386,8 @@ public final class UsageReport {
                     if (count.role().equals(role) && kind.name().equals(count.kind())) {
                         calls += count.calls();
                         chars += count.chars();
+                        referenceCalls += count.referenceCalls();
+                        reference += count.referenceChars();
                     }
                 }
                 all += chars;
@@ -316,10 +395,15 @@ public final class UsageReport {
                 sb.append(' ').append(calls == 0 ? "0" : calls + " call(s), " + chars + " chars")
                     .append(" |");
             }
-            sb.append(' ').append(all == 0 ? "0%" : (tree * 100 / all) + "%").append(" |\n");
+            sb.append(' ').append(all == 0 ? "0%" : (tree * 100 / all) + "%").append(" | ")
+                .append(referenceCalls == 0 ? "0" : referenceCalls + " call(s), " + reference
+                    + " chars, " + (all == 0 ? 0 : reference * 100 / all) + "%").append(" |\n");
         }
         sb.append("\nCharacters are what came back into the role's conversation, where every "
-            + "later call sends them again. Workers are one row together. An acceptance-test read is a worker's acceptance_test call. A journey check is the test author's check_journey call. A shell read is a "
+            + "later call sends them again. The last column is the lookups of every kind that "
+            + "were about the reference material - the source and documents of what the "
+            + "project builds on - and not about the project; a worker's are not told apart. "
+            + "Workers are one row together. An acceptance-test read is a worker's acceptance_test call. A journey check is the test author's check_journey call. A shell read is a "
             + "worker's exec command that begins with find, grep, cat, ls or their like.\n");
         return sb.toString();
     }
@@ -334,17 +418,22 @@ public final class UsageReport {
         }
         StringBuilder sb = new StringBuilder("Lookups per role, by kind, as calls/characters "
             + "returned; structured is the share of characters from the tree, the language "
-            + "server and document sections:\n");
+            + "server and document sections; reference is what was about the reference "
+            + "material and not the project:\n");
         Set<String> roles = new LinkedHashSet<>();
         counts.forEach(c -> roles.add(c.role()));
         for (String role : roles) {
             Map<String, long[]> byLabel = new LinkedHashMap<>();
             long all = 0;
             long structured = 0;
+            int referenceCalls = 0;
+            long reference = 0;
             for (LookupUsageRecord count : counts) {
                 if (!count.role().equals(role)) {
                     continue;
                 }
+                referenceCalls += count.referenceCalls();
+                reference += count.referenceChars();
                 long[] sums = byLabel.computeIfAbsent(
                     count.label() == null ? String.valueOf(count.kind()) : count.label(),
                     k -> new long[2]);
@@ -356,7 +445,12 @@ public final class UsageReport {
             sb.append("- ").append(role).append(": ");
             byLabel.forEach((label, sums) -> sb.append(label).append(' ').append(sums[0])
                 .append('/').append(sums[1]).append("; "));
-            sb.append("structured ").append(all == 0 ? 0 : structured * 100 / all).append("%\n");
+            sb.append("structured ").append(all == 0 ? 0 : structured * 100 / all).append('%');
+            if (referenceCalls > 0) {
+                sb.append("; reference ").append(referenceCalls).append('/').append(reference)
+                    .append(" (").append(all == 0 ? 0 : reference * 100 / all).append("%)");
+            }
+            sb.append('\n');
         }
         return sb.toString();
     }
@@ -378,7 +472,7 @@ public final class UsageReport {
                 + "recorded one by one.\n");
         } else {
             sb.append(spendLine(models)).append(".\n\n");
-            sb.append(warnings(models));
+            sb.append(warnings(models, lookups));
             sb.append(roleTable(rowsOf(models), true));
             sb.append("\nCounts are each call's own usage as the model server reported it; a "
                 + "session's calls are counted one by one. Input per call is what one call was "
@@ -406,6 +500,7 @@ public final class UsageReport {
                     + lookup.kind(), k -> new LookupUsageRecord(lookup.role(), lookup.kind(),
                         lookup.label(), lookup.structured(), 0, 0));
                 sum.add(lookup.calls(), lookup.chars());
+                sum.addReference(lookup.referenceCalls(), lookup.referenceChars());
             }
         }
         return new ArrayList<>(sums.values());

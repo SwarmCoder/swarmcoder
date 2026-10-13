@@ -188,6 +188,23 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A role's lookups come back at the size of the question.** In the same paid build the
+  architect looked up 487,401 characters: 43 whole files were 248,177 of them, and one listing
+  of a framework package was 30,723. Now `read_file` with a bare path answers a long file with
+  its outline (a Java file's types and members with their lines, a document's sections, what a
+  build file declares, the parts of an XML, properties or YAML file, the first lines of anything
+  else) and its last line says how to get one part or all of it; the whole file is the range of
+  all its lines, which that line spells out. A file of up to 1,500 characters is still returned
+  as it is. `types_in` lists more than 40 types by name, 60 at a time, with
+  `types_in <where>:<N>` for the next ones. `outline_of` answers for a file of the reference
+  folder; it used to say there was no such file. A range of lines cuts a line at 1,000
+  characters and says how to get it in full. In a large room the results a role asked for a
+  second time are kept whole up to 4,000 tokens through a tidy
+  (`-Dswarmcoder.roles.askedAgainTokens`, `-1` for no bound); one asked for a third time always
+  stays. On the stored sessions of that build this takes 217,724 of the architect's
+  characters and 214,395 of the reviewer's 848,006 out of what they were sent, if they do not
+  then ask for the whole file. Section 95 of `docs/DEVELOPER_CORRECTIONS.md`.
+
 - **One small story cost 15.1 million paid tokens; the reviewer alone made 121 calls.** With the
   planning roles on a paid server, each of the reviewer's four readings of a story (the design
   against the rules, the revised design, the plan, the tests) opened a lookup session of its own
@@ -537,6 +554,18 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   by step.
 
 ### Changed
+
+- **A run's report tells reference lookups from the project's, and warns about whole files.**
+  The lookups table of `run_report`, `project_report` and the harness report has a last column
+  for the lookups that were about the reference material (the source and documents of what the
+  project builds on), and each role's line ends with them. Two more `WARNING:` lines for a paid
+  role: whole files were more than 25% of the characters it looked up, and reference material
+  was more than 50%. A whole-file request answered with an outline counts as a tree query; the
+  range of all a file's lines counts as a whole file.
+
+- **The end-to-end harness runs the reviewer as the application does**: as an agent with the
+  roles' lookups, not as one question a reading. A harness run now shows the reviewer's calls
+  and lookups before a paid build does.
 
 - **`accept_delivery` says what it did and how long it took.** Accepting merges the story with
   the delivery branch on a copy and builds and tests the whole project before it answers, which

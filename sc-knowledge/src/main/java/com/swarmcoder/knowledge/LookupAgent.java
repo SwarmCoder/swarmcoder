@@ -98,6 +98,15 @@ public final class LookupAgent {
      */
     static final int TIDY_ABOVE_TOKENS = Integer.getInteger("swarmcoder.roles.tidyAboveTokens", 20_000);
     static final int TIDY_TO_TOKENS = Integer.getInteger("swarmcoder.roles.tidyToTokens", 8_000);
+
+    /**
+     * How much the results a role asked for a second time may hold whole through a tidy: half
+     * of what a tidy cuts down to (section 95; {@code HistoryTrim.tidy}). A result asked for a
+     * third time always stays whole. {@code -Dswarmcoder.roles.askedAgainTokens=-1} is no
+     * bound, as before.
+     */
+    static final int ASKED_AGAIN_TOKENS =
+        Integer.getInteger("swarmcoder.roles.askedAgainTokens", 4_000);
     static final int DIGEST_CHARS = 600;
 
     /** How a role's session is run: tidied as above, and told of a turn's calls before the first. */
@@ -128,16 +137,22 @@ public final class LookupAgent {
             java.util.function.BiConsumer<String, String> upcoming, int workingContextTokens) {
         int above = Math.max(0, TIDY_ABOVE_TOKENS);
         int to = Math.max(0, Math.min(TIDY_TO_TOKENS, above));
+        // In a room the tidy figures fit as they stand, the results asked for a second time
+        // are bounded: no compaction ever comes there to cut them (section 95). In a small
+        // room they stay unbounded, as run 79 made them: the compaction is their bound.
+        int askedAgain = ASKED_AGAIN_TOKENS < 0 ? -1 : Math.min(ASKED_AGAIN_TOKENS, to);
         if (above > 0 && workingContextTokens > 0
                 && workingContextTokens / TIDY_SHARE_OF_ROOM < above) {
             above = Math.max(2_000, workingContextTokens / TIDY_SHARE_OF_ROOM);
             // Half, not a third (run 79): cut to a third, a 32,768 room kept 2,700 tokens of
             // results whole - two files - and the planner read the others again after every tidy.
             to = Math.min(to, above / 2);
+            askedAgain = -1;
         }
         // The same mark on a server that reports prompt-cache hits (section 67, reversing the
         // cache exception of section 53): the owner judges a run by raw input tokens.
-        return new AgentRuntime.SessionOptions(above, above == 0 ? 0 : to, DIGEST_CHARS, upcoming);
+        return new AgentRuntime.SessionOptions(above, above == 0 ? 0 : to, DIGEST_CHARS, upcoming,
+            above == 0 ? -1 : askedAgain);
     }
 
     /** How much of what the lookups returned {@link Outcome#material} holds, at the baseline room. */
@@ -312,8 +327,10 @@ public final class LookupAgent {
             + "doc_section <document>#<number or heading> for ONE section, doc_search for the "
             + "sections on a subject.\n"
             + "- A WHOLE FILE IS THE LAST RESORT: read_file, for a resource or a script, or "
-            + "for lines no query returns (<path>:LINE, <path>:FROM-TO). Any file may be read "
-            + "whole when the whole file is what you need.\n"
+            + "for lines no query returns (<path>:LINE, <path>:FROM-TO). A long file asked "
+            + "for by its bare path is answered with its outline; the last line of that answer "
+            + "says how to get one part, or the whole file when the whole file is what you "
+            + "need.\n"
             + "- SEVERAL AT ONCE. Put every lookup you can already name into ONE reply, as "
             + "several tool calls: they are all answered together. Each further reply sends this "
             + "whole conversation to the model again, so five files asked for one by one cost "

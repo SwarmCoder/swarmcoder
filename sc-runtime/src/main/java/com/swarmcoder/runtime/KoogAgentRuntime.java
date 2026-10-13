@@ -861,7 +861,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
             HistoryTrim.Result result = ctx.llm().writeSession(session -> {
                 Prompt current = session.getPrompt();
                 HistoryTrim.Result tidied = HistoryTrim.tidy(current.getMessages(),
-                    above, to, options.digestChars());
+                    above, to, options.digestChars(), options.askedAgainTokens());
                 if (tidied.changed()) {
                     session.setPrompt(new Prompt(tidied.messages(), current.getId(), current.getParams()));
                 }

@@ -91,8 +91,19 @@ public final class LookupMeter {
         }
     }
 
-    /** One role's lookups of one kind. */
-    public record Count(String role, Kind kind, int calls, long chars) {}
+    /**
+     * One role's lookups of one kind.
+     *
+     * @param referenceCalls how many of {@code calls} were about the reference material
+     * @param referenceChars how many of {@code chars} those returned
+     */
+    public record Count(String role, Kind kind, int calls, long chars, int referenceCalls,
+                        long referenceChars) {
+
+        public Count(String role, Kind kind, int calls, long chars) {
+            this(role, kind, calls, chars, 0, 0);
+        }
+    }
 
     private static final Map<String, long[]> COUNTS = new LinkedHashMap<>();
 
@@ -105,13 +116,24 @@ public final class LookupMeter {
      * @param chars how many characters came back
      */
     public static void record(String role, Kind kind, int chars) {
+        record(role, kind, chars, false);
+    }
+
+    /**
+     * One lookup was answered.
+     *
+     * @param reference true when it was about the reference material - the source and
+     *                  documents of what the project builds on - and not about the project
+     */
+    public static void record(String role, Kind kind, int chars, boolean reference) {
         if (kind == null) {
             return;
         }
         RunMeter.Recorder recorder = RunMeter.recorder();
         if (recorder != null) {
             try {
-                recorder.lookup(role == null || role.isBlank() ? "untagged" : role, kind, chars);
+                recorder.lookup(role == null || role.isBlank() ? "untagged" : role, kind, chars,
+                    reference);
             } catch (RuntimeException e) {                                 // noqa
                 // Counting must never fail the lookup it counts.
             }
@@ -121,9 +143,13 @@ public final class LookupMeter {
         }
         String key = (role == null || role.isBlank() ? "untagged" : role) + "\u0000" + kind.name();
         synchronized (COUNTS) {
-            long[] sums = COUNTS.computeIfAbsent(key, k -> new long[2]);
+            long[] sums = COUNTS.computeIfAbsent(key, k -> new long[4]);
             sums[0]++;
             sums[1] += Math.max(0, chars);
+            if (reference) {
+                sums[2]++;
+                sums[3] += Math.max(0, chars);
+            }
         }
     }
 
@@ -134,7 +160,7 @@ public final class LookupMeter {
             for (Map.Entry<String, long[]> entry : COUNTS.entrySet()) {
                 String[] key = entry.getKey().split("\u0000");
                 all.add(new Count(key[0], Kind.valueOf(key[1]), (int) entry.getValue()[0],
-                    entry.getValue()[1]));
+                    entry.getValue()[1], (int) entry.getValue()[2], entry.getValue()[3]));
             }
         }
         return all;

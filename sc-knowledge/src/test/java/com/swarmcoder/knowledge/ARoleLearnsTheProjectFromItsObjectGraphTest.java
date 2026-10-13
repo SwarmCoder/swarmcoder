@@ -268,6 +268,12 @@ class ARoleLearnsTheProjectFromItsObjectGraphTest {
         assertThat(LookupAgent.toolGuide(List.of("search")))
             .contains("OBJECT GRAPH FIRST")
             .contains("SEVERAL AT ONCE")
-            .contains("Any file may be read whole");
+            .contains("is answered with its outline")
+            .contains("or the whole file when the whole file is what you need");
+        // Section 95: in a large room the results asked for twice are bounded through a tidy;
+        // in a room small enough to shrink the tidy figures the compaction is their bound.
+        assertThat(options.askedAgainTokens()).isEqualTo(LookupAgent.ASKED_AGAIN_TOKENS)
+            .isEqualTo(4_000);
+        assertThat(LookupAgent.sessionOptions(null, 32_768).askedAgainTokens()).isEqualTo(-1);
     }
 }

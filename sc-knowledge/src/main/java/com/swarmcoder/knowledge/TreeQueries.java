@@ -49,8 +49,6 @@ public final class TreeQueries {
 
     /** A member whose overloads add up to more than this are listed, not all quoted. */
     static final int OVERLOADS_QUOTED_CHARS = 6_000;
-    /** How many types one answer lists; the rest are counted. */
-    static final int MAX_TYPES_LISTED = 150;
     /** How long a type's one-line shape may be. */
     static final int ONE_LINE_SHAPE = 170;
     private static final int MAX_REFS = 20;
@@ -148,16 +146,38 @@ public final class TreeQueries {
         return sb.toString();
     }
 
+    /** Up to this many types, each is listed with the head of its members and its file. */
+    static final int TYPES_WITH_SHAPES = 40;
+    /** How many names one answer lists when there are more than {@link #TYPES_WITH_SHAPES}. */
+    static final int TYPE_NAMES_A_PAGE = 60;
+    /** How many packages are named with their counts before the rest are counted. */
+    static final int PACKAGES_NAMED = 40;
+
+    /** {@code <where>:<N>}: the names from the N-th on, as a continuation line prints it. */
+    private static final java.util.regex.Pattern FROM_NTH =
+        java.util.regex.Pattern.compile("^(.*\\S)\\s*:\\s*(\\d{1,6})$");
+
     /**
-     * What a package, a module or a folder contains: its types by package, each on one line with
-     * its kind, what it extends or implements, the head of its members, and its file and line.
+     * What a package, a module or a folder contains, at the size of the question (section 95).
+     * Up to {@link #TYPES_WITH_SHAPES} types: each on one line with its kind, what it extends
+     * or implements, the head of its members, and its file and line. More than that: the
+     * packages with their counts, then {@link #TYPE_NAMES_A_PAGE} types by name, one line
+     * each, and a last line saying how to get the next ones or one package in full. A live
+     * build's architect was sent 235 types of a framework package as 30,723 characters.
      */
     public String typesIn(String where) {
         SemanticIndex index = index();
         if (index == null) {
             return NO_TREE;
         }
-        List<SemanticIndex.Declared> found = index.typesIn(where);
+        String asked = where == null ? "" : where.strip();
+        int from = 1;
+        java.util.regex.Matcher nth = FROM_NTH.matcher(asked);
+        if (nth.matches() && index.typesIn(asked).isEmpty()) {
+            asked = nth.group(1);
+            from = Math.max(1, Integer.parseInt(nth.group(2)));
+        }
+        List<SemanticIndex.Declared> found = index.typesIn(asked);
         if (found.isEmpty()) {
             return "No types in `" + where + "` in this project's material. Give a package "
                 + "(com.example.server), or a module or folder as a path.";
@@ -168,25 +188,76 @@ public final class TreeQueries {
             byPackage.computeIfAbsent(cut < 0 ? "(no package)" : type.fqn().substring(0, cut),
                 p -> new ArrayList<>()).add(type);
         }
-        StringBuilder sb = new StringBuilder("`" + where + "` declares " + found.size()
+        StringBuilder sb = new StringBuilder("`" + asked + "` declares " + found.size()
             + " type(s) in " + byPackage.size() + " package(s):\n");
-        int listed = 0;
+        if (found.size() > TYPES_WITH_SHAPES) {
+            return namesOf(sb, asked, found.size(), byPackage, from);
+        }
         for (Map.Entry<String, List<SemanticIndex.Declared>> entry : byPackage.entrySet()) {
             sb.append(entry.getKey()).append(" (").append(entry.getValue().size()).append(")\n");
             for (SemanticIndex.Declared type : entry.getValue()) {
-                if (listed++ >= MAX_TYPES_LISTED) {
-                    continue;
-                }
                 sb.append("  ").append(oneLine(type)).append("  ")
                     .append(address(type.rootLabel(), type.file())).append(':')
                     .append(type.line()).append('\n');
             }
         }
-        if (listed > MAX_TYPES_LISTED) {
-            sb.append("... ").append(listed - MAX_TYPES_LISTED)
-                .append(" more are not listed: ask for one of the packages above\n");
-        }
         return sb.toString();
+    }
+
+    /** The packages with their counts, one page of names, and how to ask for the rest. */
+    private static String namesOf(StringBuilder sb, String asked, int all,
+                                  Map<String, List<SemanticIndex.Declared>> byPackage, int from) {
+        if (from > all) {
+            return "`" + asked + "` declares " + all + " type(s), so none is number " + from
+                + ". types_in " + asked + " lists them from the first.";
+        }
+        int named = 0;
+        for (Map.Entry<String, List<SemanticIndex.Declared>> entry : byPackage.entrySet()) {
+            if (named++ < PACKAGES_NAMED) {
+                sb.append("  ").append(entry.getKey()).append(" (")
+                    .append(entry.getValue().size()).append(")\n");
+            }
+        }
+        if (named > PACKAGES_NAMED) {
+            sb.append("  ... and ").append(named - PACKAGES_NAMED).append(" more package(s)\n");
+        }
+        int last = Math.min(all, from + TYPE_NAMES_A_PAGE - 1);
+        sb.append("Types ").append(from).append('-').append(last).append(" of ").append(all)
+            .append(", by name:\n");
+        int at = 0;
+        for (Map.Entry<String, List<SemanticIndex.Declared>> entry : byPackage.entrySet()) {
+            boolean headed = false;
+            for (SemanticIndex.Declared type : entry.getValue()) {
+                at++;
+                if (at < from || at > last) {
+                    continue;
+                }
+                if (!headed) {
+                    sb.append(entry.getKey()).append('\n');
+                    headed = true;
+                }
+                sb.append("  ").append(nameLine(type)).append('\n');
+            }
+        }
+        sb.append("[Names only").append(last < all ? ", " + (all - last) + " not listed yet: "
+                + "types_in " + asked + ":" + (last + 1) + " for the next ones" : "")
+            .append(". types_in <one package above> lists a package of up to ")
+            .append(TYPES_WITH_SHAPES).append(" types with members and files; public_shape "
+                + "<Type> one type's members and where it is declared.]\n");
+        return sb.toString();
+    }
+
+    /** {@code class Table is-a Component, 12 members}: a type as a name, on one line. */
+    private static String nameLine(SemanticIndex.Declared type) {
+        String simple = type.fqn().substring(type.fqn().lastIndexOf('.') + 1);
+        StringBuilder sb = new StringBuilder(type.kind()).append(' ').append(simple);
+        if (!type.isA().isEmpty()) {
+            List<String> parents = new ArrayList<>();
+            type.isA().forEach(p -> parents.add(p.substring(p.lastIndexOf('.') + 1)));
+            sb.append(" is-a ").append(String.join(", ", parents));
+        }
+        return sb.append(", ").append(type.members())
+            .append(type.members() == 1 ? " member" : " members").toString();
     }
 
     private static String oneLine(SemanticIndex.Declared type) {

@@ -92,6 +92,57 @@ class UsageReportWarningsTest {
         assertThat(UsageReport.render("One run:", models, List.of())).doesNotContain("WARNING");
     }
 
+    private static LookupUsageRecord lookups(String role, String kind, int calls, long chars,
+                                             int referenceCalls, long referenceChars) {
+        LookupUsageRecord row = new LookupUsageRecord(role, kind, kind, "TREE".equals(kind),
+            calls, chars);
+        row.addReference(referenceCalls, referenceChars);
+        return row;
+    }
+
+    @Test
+    void wholeFilesAndReferenceMaterialAboveTheirShareAreWarnedAbout() {
+        // The architect of the build of 2026-10-13 (section 95), by kind and by root.
+        List<ModelUsageRecord> models = List.of(row("architect", true, 30, 24_000, 96_000),
+            row("worker", false, 300, 12_000, 48_000));
+        List<LookupUsageRecord> lookups = List.of(
+            lookups("architect", "TREE", 61, 94_426, 53, 80_561),
+            lookups("architect", "WHOLE_FILE", 43, 248_177, 35, 213_839),
+            lookups("architect", "FILE_PART", 23, 40_744, 20, 10_292),
+            lookups("architect", "SEARCH", 40, 104_054, 0, 0),
+            lookups("worker", "WHOLE_FILE", 90, 400_000, 80, 390_000));
+
+        String warnings = UsageReport.warnings(models, lookups);
+
+        assertThat(warnings)
+            .contains("WARNING: whole files were 50% of what the architect looked up on a paid "
+                + "server (43 files, 248177 of 487401 characters); above 25%")
+            .contains("WARNING: reference material was 62% of what the architect looked up on a "
+                + "paid server (108 lookups, 304692 of 487401 characters); above 50%");
+        assertThat(warnings).as("local tokens are not money").doesNotContain("worker");
+        String report = UsageReport.render("One run:", models, lookups);
+        assertThat(report).contains("WARNING: whole files were 50%")
+            .contains("- architect: ").contains("reference 108/304692 (62%)");
+        assertThat(UsageReport.lookupTable(lookups, List.of(
+                new UsageReport.Kind("TREE", "tree and graph queries", true),
+                new UsageReport.Kind("WHOLE_FILE", "whole files", false))))
+            .contains("of all these, about the reference material")
+            .contains("88 call(s), 294400 chars, 85% |");
+    }
+
+    @Test
+    void aRoleThatLearnedTheProjectFromItsTreeIsNotWarnedAboutItsLookups() {
+        List<ModelUsageRecord> models = List.of(row("architect", true, 30, 24_000, 96_000));
+        List<LookupUsageRecord> lookups = List.of(
+            lookups("architect", "TREE", 80, 60_000, 30, 20_000),
+            lookups("architect", "WHOLE_FILE", 4, 12_000, 1, 3_000));
+
+        assertThat(UsageReport.warnings(models, lookups)).isEmpty();
+        assertThat(UsageReport.warnings(models, List.of(
+            lookups("architect", "WHOLE_FILE", 2, 9_000, 2, 9_000))))
+            .as("too little was looked up for a share to say anything").isEmpty();
+    }
+
     @Test
     void aRowFromBeforeRequestsWereMeasuredSaysNothingAboutThem() {
         ModelUsageRecord old = new ModelUsageRecord("architect", null, "a-model",

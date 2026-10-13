@@ -244,8 +244,13 @@ class ADocumentIsReadBySectionTest {
         }
     }
 
+    /**
+     * Until section 95 the whole file came back with a note naming the cheaper query. The note
+     * changed nothing: a live build's architect read 43 files whole. Now the outline is the
+     * first answer and the whole file is the range of all its lines.
+     */
     @Test
-    void aWholeFileIsStillReadWholeAndTheAnswerNamesTheCheaperQuery() {
+    void aWholeFileIsAnsweredWithItsOutlineAndIsStillOneCallAway() {
         ExpertTools tools = aRolesTools();
 
         String document = tools.readFile("project/docs/architecture.md");
@@ -253,15 +258,21 @@ class ADocumentIsReadBySectionTest {
             "project/shop-server/src/main/java/com/shop/server/Ledger.java");
         String small = tools.readFile("project/docs/testing.md");
 
-        assertThat(document).as("nothing is withheld").startsWith(architecture.strip().substring(0, 40))
-            .contains("A checkout empties the basket.")
+        assertThat(document).as("the outline, with the way to one section and to all of it")
+            .contains("5 section(s)", "3. Checkout")
             .contains("doc_section project/docs/architecture.md#<number or heading>")
-            .contains("5 sections");
+            .contains("the whole file: read_file project/docs/architecture.md:1-")
+            .doesNotContain("A checkout empties the basket.");
+        int lines = architecture.split("\n", -1).length;
+        assertThat(tools.readFile("project/docs/architecture.md:1-" + lines))
+            .as("nothing is withheld").contains(architecture.strip().substring(0, 40))
+            .contains("A checkout empties the basket.");
         assertThat(source).contains("public String entry39()")
-            .contains("public_shape Ledger lists its 44 members")
-            .contains("body_of Ledger#<member>");
-        assertThat(small).as("a short file gets no note: it would be most of the answer")
-            .doesNotContain("[You read");
+            .contains("body_of Ledger#<member>")
+            .contains("the whole file: read_file project/shop-server/src/main/java/com/shop/"
+                + "server/Ledger.java:1-");
+        assertThat(small).as("a short file is its own answer")
+            .startsWith("# Testing").doesNotContain("[Outline");
     }
 
     @Test
