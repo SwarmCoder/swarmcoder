@@ -55,10 +55,38 @@ public final class UsageReport {
      * @param server where the calls went, for the server column; may be empty
      * @param sum    the calls of that role on that server, added up
      */
-    public record Row(String role, String server, ModelUsageRecord sum) {}
+    public static final class Row {
+        private final String role;
+        private final String server;
+        private final ModelUsageRecord sum;
+
+        public Row(String role, String server, ModelUsageRecord sum) {
+            this.role = role;
+            this.server = server;
+            this.sum = sum;
+        }
+
+        public String role() { return role; }
+        public String server() { return server; }
+        public ModelUsageRecord sum() { return sum; }
+    }
 
     /** A kind of lookup, for the columns of the full lookup table. */
-    public record Kind(String name, String label, boolean structured) {}
+    public static final class Kind {
+        private final String name;
+        private final String label;
+        private final boolean structured;
+
+        public Kind(String name, String label, boolean structured) {
+            this.name = name;
+            this.label = label;
+            this.structured = structured;
+        }
+
+        public String name() { return name; }
+        public String label() { return label; }
+        public boolean structured() { return structured; }
+    }
 
     // --- model calls ----------------------------------------------------------------------------
 
