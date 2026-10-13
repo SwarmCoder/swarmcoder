@@ -448,10 +448,22 @@ public final class SupervisorDesk implements SupervisorService {
                     .append(" failed.");
             }
         }
-        com.swarmcoder.domain.CloudSpendRecord spend = store.root().cloudSpend().get(run.id());
-        if (spend != null) {
-            facts.append(" Cloud tokens of this build: ").append(spend.input()).append(" in, ")
-                .append(spend.output()).append(" out.");
+        // The build's model tokens as the servers counted them, call by call (section 93):
+        // paid and local apart, input and output apart. The line this replaces gave the cloud
+        // gate's estimate, which counted a session's output as input ("1163749 in, 2369 out"
+        // for a build whose architect alone made 51 calls). A build from before has no such
+        // record; it is then said that the figure is the old estimate.
+        String tokens = UsageReports.evidenceOf(store, run.id());
+        if (tokens != null) {
+            facts.append(" Model tokens of this build. ").append(tokens)
+                .append(". The table per role is run_report.");
+        } else {
+            com.swarmcoder.domain.CloudSpendRecord spend = store.root().cloudSpend().get(run.id());
+            if (spend != null) {
+                facts.append(" Cloud tokens of this build, estimated before calls were counted "
+                    + "one by one (too low, and output was counted as input): ")
+                    .append(spend.input()).append(" in, ").append(spend.output()).append(" out.");
+            }
         }
         // What the build carried past instead of stopping on (section 88): a journey that was
         // corrected on a person's instruction to ask for less is among them, and whoever

@@ -428,10 +428,46 @@ class SwarmMcpToolsTest {
             .map(registration -> registration.tool().name()).toList();
 
         assertThat(names).containsExactly(
-            "swarm_status", "run_diagnosis", "run_detail", "list_runs", "session_events",
-            "event_payload", "session_prompt", "blob_text", "run_diff", "pending_decisions",
+            "swarm_status", "run_diagnosis", "run_detail", "list_runs", "run_report",
+            "project_report", "session_events", "event_payload", "session_prompt", "blob_text", "run_diff", "pending_decisions",
             "search_history", "insights", "list_projects",
             "start_run", "decide_run", "answer_decision");
+    }
+
+    /** Section 93: tokens per role, input and output apart, where a supervisor looks. */
+    @Test
+    void aRunsTokensAreReportedAsTextAndListedWithInputAndOutputApart() {
+        long now = System.currentTimeMillis();
+        RunSummaryDto run = run(RUN, "DELIVERED", now - 3_600_000L, now, 1_166_118);
+        run.setCloudTokensIn(1_163_749);
+        run.setCloudTokensOut(23_690);
+        run.setCloudCalls(97);
+        run.setLocalTokensIn(2_400_000);
+        run.setLocalTokensOut(310_000);
+        run.setLocalCalls(812);
+        RunSummaryDto before = run("22222222-2222-2222-2222-222222222222", "DELIVERED",
+            now - 90_000_000L, now - 80_000_000L, 5_000);
+        ObserverService observer = Stubs.of(ObserverService.class)
+            .returning("listRuns", List.of(run, before))
+            .answer("runReport", args -> "Run " + args[0] + ": the table per role")
+            .returning("projectReport", "Project: per story and per role")
+            .build();
+        SwarmMcpTools tools = tools(observer, Stubs.of(GraphService.class).build(), control());
+
+        assertThat(firstText(named(tools, "run_report"), java.util.Map.of("run_id", RUN)))
+            .as("the report is the service's text, not wrapped in anything")
+            .isEqualTo("Run " + RUN + ": the table per role");
+        assertThat(firstText(named(tools, "project_report"), java.util.Map.of()))
+            .isEqualTo("Project: per story and per role");
+
+        String listed = tools.listRuns(25);
+        assertThat(listed)
+            .as("the old field stays").contains("\"tokensUsed\":1166118")
+            .contains("\"paidCloud\":{\"input\":1163749,\"output\":23690,\"calls\":97}")
+            .contains("\"local\":{\"input\":2400000,\"output\":310000,\"calls\":812}");
+        assertThat(listed.split("paidCloud", -1))
+            .as("a run nothing was recorded for carries no zeros that look like a measurement")
+            .hasSize(2);
     }
 
     @Test

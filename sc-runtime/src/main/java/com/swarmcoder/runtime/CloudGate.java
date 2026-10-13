@@ -57,6 +57,18 @@ import java.util.function.Consumer;
  * because a session's cost is the conversation it resends every turn. {@link #chargeOutput(long)}
  * is what the model wrote back.
  *
+ * <p><b>True figures</b> (2026-10-13). The paragraph above is how a gate counts that nobody tells
+ * better, which is every gate built in a test. It was wrong for a session that works as an agent:
+ * the figure such a session reports each turn is the size of its latest call (input and output
+ * together), so charging its growth counted roughly one call's input for a session of fifty, and
+ * no output at all. The application now calls {@link #countFromUsage()}: from then on the counts
+ * are each finished call's own {@code usage} as the model server returned it, input and output
+ * apart, handed in by {@link #recordUsage(Where, long, long)} (see {@link UsageLedger}).
+ * {@link #charge(long)} then adds nothing; it is the question "may this run make another call?"
+ * and throws when a limit has been passed, so a run still stops before its next call.
+ * {@link #chargeOutput(long)} and {@link #refund(long)} then do nothing: there is no estimate to
+ * add or give back, and an answer that has arrived is not thrown away.
+ *
  * <p><b>Extending.</b> A limit that was passed is raised by {@link #extendForRun(UUID)}: the same
  * amount again, for the run, story or project whose limit was passed. That is the whole answer to
  * an {@code extend} reply; resuming the parked run is the workflow's own re-drive
@@ -223,6 +235,8 @@ public final class CloudGate {
     private final Map<UUID, Breach> lastBreach = new ConcurrentHashMap<>();
     private final AtomicBoolean unscopedSignalled = new AtomicBoolean();
     private volatile ArtifactStore store;
+    /** Set once the counts come from each call's own usage and no longer from estimates. */
+    private volatile boolean fromUsage;
 
     /**
      * @param limits   the three levels' limits; {@link Limits#NONE} enforces nothing
@@ -361,12 +375,87 @@ public final class CloudGate {
      * limit is passed.
      */
     public void charge(long tokens) {
+        if (fromUsage) {
+            stopIfPassed();
+            return;
+        }
         add(Math.max(0, tokens), 0);
     }
 
     /** Records tokens a model wrote and throws once a limit is passed. */
     public void chargeOutput(long tokens) {
+        if (fromUsage) {
+            return;
+        }
         add(0, Math.max(0, tokens));
+    }
+
+    /**
+     * From now on this gate counts what {@link #recordUsage(Where, long, long)} is told and
+     * nothing else; see "True figures" in the class comment. Called once, at start, by an
+     * application that records every model call.
+     */
+    public void countFromUsage() {
+        fromUsage = true;
+    }
+
+    /** True once {@link #countFromUsage()} was called. */
+    public boolean countsFromUsage() {
+        return fromUsage;
+    }
+
+    /**
+     * Adds one finished call's own token counts, as the model server reported them, to the run,
+     * story and project of {@code where} (or to "outside runs" when it is null).
+     *
+     * <p>Never throws and raises no question: the call has happened and its answer is being
+     * read. A limit this passes is found by the run's next {@link #charge(long)} (or by
+     * {@link #parkingBreach(Where)} before its next stage), which records it, raises its
+     * question and stops the run - so a question is only ever raised for a run that is stopped.
+     */
+    public void recordUsage(Where where, long input, long output) {
+        long in = Math.max(0, input);
+        long out = Math.max(0, output);
+        if (in == 0 && out == 0) {
+            return;
+        }
+        all.input.addAndGet(in);
+        all.output.addAndGet(out);
+        if (where == null) {
+            unscoped.input.addAndGet(in);
+            unscoped.output.addAndGet(out);
+            return;
+        }
+        for (Level level : Level.values()) {
+            Tally tally = tallyFor(level, where, true);
+            if (tally != null) {
+                tally.input.addAndGet(in);
+                tally.output.addAndGet(out);
+            }
+        }
+        persist(where, null, null);
+    }
+
+    /** Throws when the work of this thread is over a limit; adds nothing. */
+    private void stopIfPassed() {
+        Where where = HERE.get();
+        if (where == null) {
+            long total = unscoped.of(Direction.TOTAL);
+            if (unscopedCap > 0 && total > unscopedCap) {
+                if (unscopedSignalled.compareAndSet(false, true)) {
+                    log.error("Cloud budget exhausted ({} of {} tokens) - parking "
+                        + "BUDGET_EXTENSION decision", total, unscopedCap);
+                    onUnscopedBreach.run();
+                }
+                throw new BudgetExhaustedException(total, unscopedCap);
+            }
+            return;
+        }
+        Breach breach = passed(where);
+        if (breach != null) {
+            signal(breach);
+            throw new BudgetExhaustedException(breach);
+        }
     }
 
     private void add(long in, long out) {
@@ -419,7 +508,7 @@ public final class CloudGate {
      * <p>Only ever called with an amount this caller just charged as input.
      */
     public void refund(long tokens) {
-        if (tokens <= 0) {
+        if (tokens <= 0 || fromUsage) {
             return;
         }
         take(all, tokens);

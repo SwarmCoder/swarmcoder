@@ -174,6 +174,24 @@ public final class SwarmMcpTools {
                 {"limit": {"type":"integer","description":"How many runs (default 25, max 200)."}}"""),
             args -> listRuns(num(args, "limit", 25))));
 
+        tools.add(tool("run_report",
+            "WHAT ONE RUN COST IN MODEL TOKENS, PER ROLE. Compact text: one sentence of totals "
+                + "(paid cloud and local apart, input and output apart), then a table per role "
+                + "and class of server - calls, input tokens, input tokens per call, output "
+                + "tokens, cached input tokens, seconds in calls - and what each role looked up, "
+                + "by kind. Every figure is the model server's own count for a call. Judge a "
+                + "run by the paid rows.",
+            schema("""
+                {"run_id": {"type":"string","description":"The run's id, from swarm_status or list_runs."}}""",
+                "run_id"),
+            args -> runReport(str(args, "run_id"))));
+
+        tools.add(tool("project_report",
+            "What the selected project cost in model tokens: a totals sentence per story (paid "
+                + "cloud and local apart, input and output apart), then the same table per role "
+                + "as run_report for all of its runs together. No arguments.",
+            schema(), args -> projectReport()));
+
         tools.add(tool("session_events",
             "One worker's steps, oldest first, one page at a time: what it said, every tool it "
                 + "called and every result it got back. Payloads come as short snippets with a "
@@ -435,6 +453,7 @@ public final class SwarmMcpTools {
         node.put("runningFor", run.getStartedAtMillis() == 0 ? "unknown"
             : elapsed(now - run.getStartedAtMillis()));
         node.put("tokensUsed", run.getTokensUsed());
+        writeTokens(node, run);
         node.put("liveWorkerCount", liveWorkers);
 
         boolean stalled = false;
@@ -824,6 +843,16 @@ public final class SwarmMcpTools {
         root.put("runId", nn(snapshot.getRunId()));
         root.put("state", nn(snapshot.getRunState()));
         root.put("goal", ReplyBudget.snippet(snapshot.getGoal()));
+        // The run's tokens, input and output apart; the table per role is run_report.
+        try {
+            for (RunSummaryDto run : observer.listRuns()) {
+                if (runId.equals(run.getRunId())) {
+                    writeTokens(root, run);
+                }
+            }
+        } catch (RuntimeException e) {                                     // noqa
+            // The shape of the run is what was asked for; its cost is in run_report as well.
+        }
 
         ArrayNode requirements = root.putArray("requirements");
         for (GraphRequirementDto requirement : capped(snapshot.getRequirements(), root,
@@ -879,6 +908,42 @@ public final class SwarmMcpTools {
             writeSession(sessions.addObject(), session, now);
         }
         return finish(root, "run_detail", "run_diagnosis, which is smaller and says what went wrong");
+    }
+
+    /**
+     * The run's tokens as the model servers counted them call by call: paid and local apart,
+     * input and output apart. Left out for a run nothing was recorded for.
+     */
+    private static void writeTokens(ObjectNode node, RunSummaryDto run) {
+        if (run.getCloudCalls() + run.getLocalCalls() == 0) {
+            return;
+        }
+        ObjectNode tokens = node.putObject("tokens");
+        ObjectNode cloud = tokens.putObject("paidCloud");
+        cloud.put("input", run.getCloudTokensIn());
+        cloud.put("output", run.getCloudTokensOut());
+        cloud.put("calls", run.getCloudCalls());
+        ObjectNode local = tokens.putObject("local");
+        local.put("input", run.getLocalTokensIn());
+        local.put("output", run.getLocalTokensOut());
+        local.put("calls", run.getLocalCalls());
+    }
+
+    /** Text, not JSON: the report is a table and is read as one. */
+    String runReport(String runId) {
+        try {
+            return observer.runReport(runId);
+        } catch (RuntimeException e) {
+            return "The report of run " + runId + " could not be read: " + e;
+        }
+    }
+
+    String projectReport() {
+        try {
+            return observer.projectReport();
+        } catch (RuntimeException e) {
+            return "The project's report could not be read: " + e;
+        }
     }
 
     String listRuns(int limit) {

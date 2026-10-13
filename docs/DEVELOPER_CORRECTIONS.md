@@ -9241,3 +9241,135 @@ the others, the log entry, the same on screen, the cap). Run with them:
   task's title.
 - Opening a store written before the new fields. EclipseStore maps added fields on its own
   and `Task` has gained fields this way before; no old store was opened in a test.
+
+## 93. A build was told "1163749 in, 2369 out": tokens were not counted per call, per role, or for the right run (live supervised build, 2026-10-13)
+
+**What was observed.** A supervised build ran its planning roles on a paid model and its workers
+on the local server. The delivery evidence shown to the supervisor said "Cloud tokens of this
+build: 1163749 in, 2369 out". The architect alone had made 51 calls, so the output figure could
+not be right. `run_detail`, `run_diagnosis` and `list_runs` showed one combined `tokens` figure
+per session and per run, and the sessions of the planning roles were not listed under the run at
+all. The test harness printed a table per role with calls, prompt tokens, prompt tokens per call,
+completion tokens, cache hits and lookups by kind; the application had no such report. CLAUDE.md
+sections 1 and 2 ask for exactly that table for every run.
+
+**Causes** (lines as on `master` before this change).
+
+- *The server's counts were read for every call and then thrown away.* An agent session reads
+  each answer's prompt and completion tokens (`KoogAgentRuntime.java:644-650`) and the one-question
+  client reads `usage` too (`VllmClient.recordUsage`). Both hand them to `RunMeter`, which keeps
+  nothing unless switched on (`RunMeter.java:205`, `:265`), and only the harness switches it on.
+- *A streamed call was never asked for its usage in the application.* `stream_options.include_usage`
+  was sent only while the meter was on (`VllmClient.java:310`), so the architect's plan call, the
+  test author's calls, the reviewer and the judge had no server count to keep.
+- *The gate was charged estimates for those calls*: characters / 4 for the prompt, and for the
+  answer at the sixteen places section 79 switched (`ArchitectClient.java:1658`, `:1666` and their
+  like).
+- *The gate was charged the wrong figure for an agent session - this is where the split was lost.*
+  The turn guard charges "what this turn added" as the difference of `TurnInfo.tokensUsed`
+  (`TurnMeter.java:63-70`), believing it a running total. It is not: it is set from the
+  framework's `latestTokenUsage()` (`KoogAgentRuntime.java:476`), which is the size of the LATEST
+  call, input and output together. So a session was charged its first call and after that only
+  the growth of its conversation - about one call's input for a session of fifty - through
+  `CloudGate.charge` (`CloudGate.java:363`), which counts input. Nothing a session wrote was ever
+  counted as output. Section 79 described this as "one combined figure, counted as input"; it was
+  less than that. The same figure is what a session record stores as its `tokens`
+  (`TraceHub.java:222`), and what `list_runs` adds up per run (`ObserverServiceImpl.java:95`).
+- *A session was counted for the wrong run.* The gate knows whose work a thread does from an
+  inheritable thread-local (`CloudGate.java:210`), entered by the thread that drives a run
+  (`GreenfieldWorkflow.java:392`). The agent framework runs a session's loop on a thread of its
+  own pool (`KoogAgentRuntime.java:449`), and such a thread carries the scope of whichever thread
+  first created it. Found by the new test: a second session, opened for a second run, was charged
+  to the first. In a process that builds more than one run, a session's charges went to an earlier
+  run or to none.
+- *A planning role's session names no run.* It is opened without the observer's join keys
+  (`LookupAgent.java:506`), so its record has no run id and no listing by run shows it.
+- *Lookups by kind were counted only while the harness's meter was on* (`LookupMeter.java:106`).
+- *The evidence line printed the gate's count as it stood* (`SupervisorDesk.java:451-455`).
+
+**What changed.**
+
+- *Every model call is recorded.* `RunMeter` gains a recorder (`RunMeter.recordTo`), separate from
+  its on/off switch: it is told of every finished call and every lookup. A call says which server
+  it goes to and ends with `Open.done()` once the server's counts have been told; both clients do
+  that on every way a call can end. With a recorder installed a streamed request asks for its
+  usage.
+- *`UsageLedger` (sc-runtime) is the application's recorder.* Each call is added to the row of its
+  run, role, task, model and class of server (`ModelUsageRecord`: calls, input, output, cached
+  input, seconds, failed calls, the largest input of one call, and how many calls reported each
+  count); each lookup to the row of its run, role and kind. A call whose server reported no
+  usage is counted from the size of its request and its answer and the row says how many were.
+  Rows are kept per run as `RunUsageRecord` in `StoreRoot.runUsage`, schema 14, null-guarded and
+  removed with the project. Paid calls are written at once, local ones every five seconds.
+  Rows are sums, not one stored object per call: a run makes thousands of calls and the report
+  needs their sums; "per call" means each call is counted, with its own figures.
+- *Paid or local is asked of the server, not of the role.* Local: a server a worker model is
+  configured on (worker models cost nothing), or an address on this machine or a private network,
+  read from the address as written. Any other server is paid.
+- *The gate counts true figures.* The application calls `CloudGate.countFromUsage()`. The ledger
+  hands each paid call's input and output to `CloudGate.recordUsage`, for the run, story and
+  project. `charge` then adds nothing: it asks whether the run may make another call and throws
+  when a limit has been passed. `chargeOutput` and `refund` do nothing. A gate nobody tells
+  better - every gate a test builds - counts as before.
+- *A session runs as the work of the run that opened it.* `KoogAgentRuntime` takes the scope of the
+  thread that calls `run` and enters it in the loop, so the turn guard, the call records and the
+  session's tools all see the right run, or none.
+- *One report.* `UsageReport` (sc-domain) writes the table per role, the totals sentence and the
+  lookups. The harness's section 1 and its lookup table now call it (its own copies are gone; the
+  table gains a cached-input column and says "input" and "output"). `UsageReports` (sc-console)
+  reads the stored rows for one run, and per story and in total for a project.
+- *Where it is read.* MCP read tools `run_report(run_id)` and `project_report()`. The delivery
+  evidence says "Model tokens of this build. Paid cloud: N in / N out over K calls; local: N in /
+  N out." `RunSummaryDto` gains paid and local input, output and calls, shown by `list_runs`,
+  `run_detail` and `swarm_status` as `tokens.paidCloud` and `tokens.local`; `tokensUsed` is kept.
+- *A run from before.* `run_report` says the run was not recorded call by call, gives the gate's
+  old figure with what is wrong with it, and adds up the run's stored sessions: each turn kept the
+  size of its call, so calls and input-plus-output per role are exact; output is estimated from
+  the length of what the model wrote, as a lower bound. A planning role's session names no run
+  and is taken by the time it was opened. The one-question calls left no record.
+
+**Decisions made here, to be confirmed.**
+
+- Only calls to paid servers are held against the cloud budgets. Before, every planning role was
+  charged wherever it ran and no worker ever was. A planning role put on the local server no
+  longer uses up a cloud budget.
+- A limit stops a run before its next call. Before, the estimate of the call about to be made
+  was charged first, so the call that would pass the limit was not made. A run can now pass a
+  limit by one call per session in flight.
+- `AutonomousMode` still compares the gate's process-wide total with `maxCloudTokensPerRun`. That
+  total is now true figures, so it is larger than the estimates were and a night stops sooner.
+
+**Tests.** `UsageLedgerTest` (paid and local apart and only paid charged; the report's totals are
+the sum of the calls; a budget on true figures, raised once, extended; a server with no usage;
+a call for no run; stored and continued after a restart; which addresses are local),
+`AnAgentSessionsCallsAreCountedOneByOneTest` in sc-knowledge, on the real agent runtime against
+a scripted endpoint (each call of a session recorded with its own input and output; a second
+run's session counted for the second run, and its tools run for it; the same session without the
+ledger, which pins what was wrong: four calls of 100 in and 20 out charged as 120 in and 0 out;
+a session stopped on the turn that passes an output limit; a one-question call recorded with its
+role and not charged on a local server), `UsageReportsTest` (a run's report and its size; a
+project's report per story; the listing's new fields; a run from before), `SupervisorDeskTest`
+(the evidence line, and the old estimate named as one), `SwarmMcpToolsTest` (the two tools and
+the listing), `HarnessRunReportTest` and `HarnessRoleServersTest` (the shared table).
+
+**Not checked.**
+
+- Nothing was run against a model, a live build or the running application.
+- That a paid server returns `usage` in a streamed answer when asked. The ledger falls back to
+  the size of the text and says so in the row; a server that refuses the option needs
+  `-Dswarmcoder.meter.streamUsage=false`.
+- The run, story and project of a worker's call and of a worker's lookups in a live build. They
+  come from the thread that opens the session; if that thread has no run, the call is counted by
+  the run its session names and its lookups are counted outside runs.
+- A call made by a session's compaction, if it makes one outside the loop's own requests.
+- Opening a store written before schema 14: the new field is null-guarded like the others, and
+  no old store file was opened in a test.
+- The Console shows none of this. `ObserverService.runReport` and `projectReport` are there to
+  call. The place for it is the run's page (`RunGraphView`), as a panel beside the timeline, and
+  the build card on the pipeline board (`PipelineBoard`), which still prints `tokensUsed`.
+- The planning roles' sessions still name no run in their own records, so `run_detail` does not
+  list them; `run_report` does, because the ledger takes the run from the thread.
+- `tokensUsed` on a run and `tokens` on a session are what they were: the size of the session's
+  last call. They are kept because screens read them, and they are not a cost.
+- The harness's "Cloud tokens this run" line reads a gate the harness builds itself; whether the
+  harness should install the ledger was left alone.

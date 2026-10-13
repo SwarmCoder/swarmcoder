@@ -554,8 +554,23 @@ class SupervisorDeskTest {
                 run.setJourneysMade(3);
                 run.setJourneysFailed(0);
                 store.root().runs.put(runId, run);
+                // What the gate counted, and what the calls really were (section 93): 51 calls
+                // by the architect on a paid model, the workers on the local server.
                 store.root().cloudSpend().put(runId,
                     new com.swarmcoder.domain.CloudSpendRecord(runId, "RUN", 120_500, 8_200, 0));
+                com.swarmcoder.domain.ModelUsageRecord architect =
+                    new com.swarmcoder.domain.ModelUsageRecord("architect", null, "cloud-model",
+                        com.swarmcoder.domain.ModelUsageRecord.CLOUD);
+                for (int i = 0; i < 50; i++) {
+                    architect.addCall(20_000, 400, -1, 1_000, false, false);
+                }
+                architect.addCall(163_749, 3_690, -1, 1_000, false, false);
+                com.swarmcoder.domain.ModelUsageRecord workers =
+                    new com.swarmcoder.domain.ModelUsageRecord("worker", "t1", "local-model",
+                        com.swarmcoder.domain.ModelUsageRecord.LOCAL);
+                workers.addCall(2_400_000, 310_000, -1, 1_000, false, false);
+                store.root().runUsage().put(runId, new com.swarmcoder.domain.RunUsageRecord(runId,
+                    story.id(), projectId, List.of(architect, workers), List.of()));
                 return null;
             }).get();
 
@@ -568,8 +583,34 @@ class SupervisorDeskTest {
                 .contains("Delivered commit 01234567.")
                 .contains("14 acceptance test(s) passed on the merged tree.")
                 .contains("3 journey(s) were made in a browser, 0 failed.")
-                .contains("Cloud tokens of this build: 120500 in, 8200 out.");
+                .as("the build's tokens are the calls' own counts, paid and local apart, "
+                    + "input and output apart - not the gate's estimate")
+                .contains("Model tokens of this build. Paid cloud: 1163749 in / 23690 out over "
+                    + "51 calls; local: 2400000 in / 310000 out. The table per role is "
+                    + "run_report.")
+                .doesNotContain("120500");
             assertThat(item.chars()).isLessThanOrEqualTo(AttentionItem.MAX_CHARS);
+        }
+    }
+
+    /** A build from before calls were counted one by one still says what is known, and what it is. */
+    @Test
+    void aDeliveryFromBeforeCallsWereCountedSaysItsFigureIsTheOldEstimate(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store, false, false, null);
+            Story story = delivered(store, "S1", "Lend a book");
+            UUID runId = story.runIds().get(0);
+            store.append(() -> {
+                store.root().cloudSpend().put(runId,
+                    new com.swarmcoder.domain.CloudSpendRecord(runId, "RUN", 120_500, 8_200, 0));
+                return null;
+            }).get();
+
+            assertThat(desk.nextAttention(0).evidence())
+                .contains("estimated before calls were counted one by one")
+                .contains("120500 in, 8200 out.")
+                .doesNotContain("Paid cloud");
         }
     }
 

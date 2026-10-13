@@ -138,9 +138,9 @@ class HarnessRunReportTest {
             "integration commit abc against the run base def", null, "reached DELIVERED", null));
 
         assertThat(report)
-            .contains("| architect | 1 | 500 | 500 | 100 | 1.0 |")
-            .contains("| worker | 4 | 4000 | 1000 | 1000 | 40.0 |")
-            .as("a role whose calls reported no usage says so").contains("| judge | 1 | not recorded | not recorded | not recorded | 1.0 |")
+            .contains("| architect | 1 | 500 | 500 | 100 | not recorded | 1.0 |")
+            .contains("| worker | 4 | 4000 | 1000 | 1000 | not recorded | 40.0 |")
+            .as("a role whose calls reported no usage says so").contains("| judge | 1 | not recorded | not recorded | not recorded | not recorded | 1.0 |")
             .contains("| analyst | 0 | 0 | 0 | 0 |")
             .contains("Candidates dispatched 2, survived verification 1, selected 1")
             .contains("Journey sent back to its author before any worker repair (it failed in "

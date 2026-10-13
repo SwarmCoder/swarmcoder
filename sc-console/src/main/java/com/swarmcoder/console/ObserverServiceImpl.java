@@ -70,13 +70,38 @@ public class ObserverServiceImpl implements ObserverService {
             log.warn("Could not read this project's stories while listing runs: {}", e.toString());
         }
         Map<UUID, Long> tokens = tokensByRun();
+        Map<UUID, com.swarmcoder.domain.RunUsageRecord> usage =
+            new java.util.HashMap<>(ConsoleContext.get().store().root().runUsage());
         return ConsoleContext.get().store().root().runs.values().stream()
             .filter(run -> current == null || current.equals(run.projectId())
                 || viaStories.contains(run.id()))
             .sorted(Comparator.comparing(run -> run.startedAt() == null
                 ? Instant.EPOCH : run.startedAt(), Comparator.reverseOrder()))
-            .map(run -> Dtos.of(run, tokens.getOrDefault(run.id(), 0L)))
+            .map(run -> {
+                RunSummaryDto dto = Dtos.of(run, tokens.getOrDefault(run.id(), 0L));
+                // The true figures, input and output apart (section 93); tokensUsed stays.
+                com.swarmcoder.domain.ModelUsageRecord[] sums =
+                    UsageReports.totalsOf(usage, run.id());
+                dto.setCloudTokensIn(sums[0].inputTokens());
+                dto.setCloudTokensOut(sums[0].outputTokens());
+                dto.setCloudCalls(sums[0].calls());
+                dto.setLocalTokensIn(sums[1].inputTokens());
+                dto.setLocalTokensOut(sums[1].outputTokens());
+                dto.setLocalCalls(sums[1].calls());
+                return dto;
+            })
             .toList();
+    }
+
+    @Override
+    public String runReport(String runId) {
+        return UsageReports.ofRun(ConsoleContext.get().store(), runId);
+    }
+
+    @Override
+    public String projectReport() {
+        return UsageReports.ofProject(ConsoleContext.get().store(),
+            ConsoleContext.get().currentProjectId());
     }
 
     /**

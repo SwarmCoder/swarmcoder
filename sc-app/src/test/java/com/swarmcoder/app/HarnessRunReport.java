@@ -255,42 +255,38 @@ final class HarnessRunReport {
         sb.append("\n## 1. Model usage per role\n\n");
         Servers servers = in.servers() == null ? Servers.ALL_LOCAL : in.servers();
         boolean split = servers.anyElsewhere();
-        sb.append(split
-            ? "| role | server | calls | prompt tokens | prompt tokens per call | completion tokens | seconds in calls |\n"
-            : "| role | calls | prompt tokens | prompt tokens per call | completion tokens | seconds in calls |\n");
-        sb.append(split ? "|---|---|---|---|---|---|---|\n" : "|---|---|---|---|---|---|\n");
+        // The table itself is the application's (UsageReport): one implementation for the
+        // harness, the run_report tool and the delivery evidence.
         Set<String> roles = new LinkedHashSet<>(ROLES);
         in.calls().forEach(c -> roles.add(c.role()));
+        List<com.swarmcoder.domain.UsageReport.Row> rows = new ArrayList<>();
         for (String role : roles) {
             List<RunMeter.Call> mine = in.calls().stream().filter(c -> c.role().equals(role)).toList();
-            sb.append("| ").append(role).append(" | ");
+            String server = "";
             if (split) {
                 Set<String> where = new LinkedHashSet<>();
                 mine.forEach(c -> where.add(servers.labelOf(c)));
                 if (where.isEmpty()) {
                     where.add(servers.byRole().getOrDefault(role, servers.local()));
                 }
-                sb.append(String.join(" and ", where)).append(" | ");
+                server = String.join(" and ", where);
             }
-            sb.append(mine.size()).append(" | ")
-                .append(tokens(mine, true)).append(" | ").append(promptPerCall(mine))
-                .append(" | ").append(tokens(mine, false)).append(" | ")
-                .append(seconds(mine)).append(" |\n");
+            com.swarmcoder.domain.ModelUsageRecord sum =
+                new com.swarmcoder.domain.ModelUsageRecord(role, null, null, null);
+            for (RunMeter.Call call : mine) {
+                sum.addCall(call.promptTokens(), call.completionTokens(),
+                    call.cacheReported() ? call.cachedPromptTokens() : -1,
+                    call.finished() ? call.millis() : -1, call.failed(), false);
+            }
+            rows.add(new com.swarmcoder.domain.UsageReport.Row(role, server, sum));
         }
-        sb.append("| **all** | ");
-        if (split) {
-            sb.append(" | ");
-        }
-        sb.append(in.calls().size()).append(" | ")
-            .append(tokens(in.calls(), true)).append(" | ").append(promptPerCall(in.calls()))
-            .append(" | ").append(tokens(in.calls(), false))
-            .append(" | ").append(seconds(in.calls())).append(" |\n");
+        sb.append(com.swarmcoder.domain.UsageReport.roleTable(rows, split));
         if (split) {
             sb.append("\nThe local server is `").append(servers.local()).append("`. Every other "
                 + "server is one the operator's config gave a role; section 7 counts only the "
                 + "local server's calls.\n");
         }
-        sb.append("\nPrompt tokens per call is what one call was sent on average, over the calls "
+        sb.append("\nInput tokens per call is what one call was sent on average, over the calls "
             + "that reported it: the whole conversation is sent again on every call, so this is "
             + "the figure that shows a role whose conversation is not being kept small (a worker "
             + "is sent about 10,000).\n");
@@ -306,46 +302,19 @@ final class HarnessRunReport {
      * the project from its syntax tree (CLAUDE.md section 1).
      */
     static String lookupsByKind(List<com.swarmcoder.inference.LookupMeter.Count> counts) {
-        StringBuilder sb = new StringBuilder("\n### What each role looked up, by kind\n\n");
-        if (counts.isEmpty()) {
-            return sb.append(NOT_RECORDED).append(": no lookup was recorded in this run.\n")
-                .toString();
+        List<com.swarmcoder.domain.UsageReport.Kind> kinds = new ArrayList<>();
+        for (com.swarmcoder.inference.LookupMeter.Kind kind
+                : com.swarmcoder.inference.LookupMeter.Kind.values()) {
+            kinds.add(new com.swarmcoder.domain.UsageReport.Kind(kind.name(), kind.label(),
+                kind.structured()));
         }
-        com.swarmcoder.inference.LookupMeter.Kind[] kinds =
-            com.swarmcoder.inference.LookupMeter.Kind.values();
-        sb.append("| role |");
-        for (com.swarmcoder.inference.LookupMeter.Kind kind : kinds) {
-            sb.append(' ').append(kind.label()).append(" |");
+        List<com.swarmcoder.domain.LookupUsageRecord> rows = new ArrayList<>();
+        for (com.swarmcoder.inference.LookupMeter.Count count : counts) {
+            rows.add(new com.swarmcoder.domain.LookupUsageRecord(count.role(),
+                count.kind().name(), count.kind().label(), count.kind().structured(),
+                count.calls(), count.chars()));
         }
-        sb.append(" share of characters from the tree, the language server and document "
-            + "sections |\n|---|");
-        sb.append("---|".repeat(kinds.length + 1)).append("\n");
-        Set<String> roles = new LinkedHashSet<>();
-        counts.forEach(c -> roles.add(c.role()));
-        for (String role : roles) {
-            sb.append("| ").append(role).append(" |");
-            long all = 0;
-            long tree = 0;
-            for (com.swarmcoder.inference.LookupMeter.Kind kind : kinds) {
-                int calls = 0;
-                long chars = 0;
-                for (com.swarmcoder.inference.LookupMeter.Count count : counts) {
-                    if (count.role().equals(role) && count.kind() == kind) {
-                        calls += count.calls();
-                        chars += count.chars();
-                    }
-                }
-                all += chars;
-                tree += kind.structured() ? chars : 0;
-                sb.append(' ').append(calls == 0 ? "0" : calls + " call(s), " + chars + " chars")
-                    .append(" |");
-            }
-            sb.append(' ').append(all == 0 ? "0%" : (tree * 100 / all) + "%").append(" |\n");
-        }
-        sb.append("\nCharacters are what came back into the role's conversation, where every "
-            + "later call sends them again. Workers are one row together. An acceptance-test read is a worker's acceptance_test call. A journey check is the test author's check_journey call. A shell read is a "
-            + "worker's exec command that begins with find, grep, cat, ls or their like.\n");
-        return sb.toString();
+        return com.swarmcoder.domain.UsageReport.lookupTable(rows, kinds);
     }
 
     /**
@@ -402,19 +371,6 @@ final class HarnessRunReport {
             + "how many were the unchanged head of the session's previous request. A low figure "
             + "means the conversation was rewritten between calls (old results shortened, "
             + "history compacted), which makes a cache start again from the rewrite.\n");
-    }
-
-    /** The average prompt size of the calls that reported one; "0" for no calls. */
-    private static String promptPerCall(List<RunMeter.Call> calls) {
-        long sum = 0;
-        int counted = 0;
-        for (RunMeter.Call call : calls) {
-            if (call.promptTokens() >= 0) {
-                sum += call.promptTokens();
-                counted++;
-            }
-        }
-        return calls.isEmpty() ? "0" : counted == 0 ? NOT_RECORDED : String.valueOf(sum / counted);
     }
 
     /** The sum the server reported, saying so when some or all calls reported nothing. */

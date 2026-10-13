@@ -296,6 +296,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 tracer.nudge("The conversation continues with: " + input);
             }
             AIAgent<String, String> agent = buildAgent();
+            owner = CloudGate.current();
             // Kept again only by a run that ends cleanly: one that was killed or failed is gone.
             carried = null;
             try {
@@ -466,8 +467,24 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 new ConnectionTimeoutConfig().getConnectTimeoutMillis(), millis);
         }
 
-        /** The worker loop (spec §11.2 shape), with the TurnGuard consulted every turn. */
+        /**
+         * Whose work this session is: the run, story and project of the thread that called
+         * {@link #run}. Taken there and entered again in {@link #loop}, because the framework
+         * runs the loop on a thread of its own pool, and such a thread carries whatever scope
+         * the thread that first created it happened to be in - another run's, or none
+         * (section 93: a session's charges went to the wrong run).
+         */
+        private volatile CloudGate.Where owner;
+
+        /** The loop, run as the work of the run that opened the session. */
         private String loop(AIAgentFunctionalContext ctx, String input) {
+            try (CloudGate.Entered inRun = CloudGate.enter(owner)) {
+                return turns(ctx, input);
+            }
+        }
+
+        /** The worker loop (spec §11.2 shape), with the TurnGuard consulted every turn. */
+        private String turns(AIAgentFunctionalContext ctx, String input) {
             int consecutiveTextTurns = 0;
             Message.Assistant response = ask(ctx, () -> ctx.requestLLM(input));
 
@@ -610,7 +627,9 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 // the server itself reported for THIS call (Koog reads them from the response's
                 // "usage").
                 metered = com.swarmcoder.inference.RunMeter.begin(meterTag(),
-                    spec.endpoint().modelId());
+                    spec.endpoint().modelId(), spec.endpoint().baseUrl(),
+                    spec.meta() == null || spec.meta().runId() == null ? null
+                        : spec.meta().runId().toString());
                 synchronized (cancelLock) {
                     if (cancelRequested != null) {
                         metered.end();
@@ -621,6 +640,9 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 try {
                     answer = call.get();
                     metered.end();
+                    // Told here, before anything below can throw: an answer that arrived was
+                    // paid for whether or not the session goes on to use it.
+                    tellUsage(metered, answer);
                 } catch (RuntimeException | Error noAnswer) {
                     // Timed out, broken off or abandoned: it held a place and gave no answer.
                     metered.failed();
@@ -637,25 +659,40 @@ public final class KoogAgentRuntime implements AgentRuntime {
             } finally {
                 place.close();
             }
-            UsageTap.Seen seen = tap.last();
-            metered.cached(seen.cachedPromptTokens());
-            metered.request(seen.requestChars(), seen.samePrefixChars());
-            if (answer.getMetaInfo() != null) {
-                Integer sent = answer.getMetaInfo().getInputTokensCount();
-                Integer generated = answer.getMetaInfo().getOutputTokensCount();
-                metered.usage(sent == null ? -1 : sent, generated == null ? -1 : generated);
-                if (sent != null || generated != null) {
-                    usageSeen.set(true);
-                    promptSent.addAndGet(sent == null ? 0 : Math.max(0, sent));
-                    completionGenerated.addAndGet(generated == null ? 0 : Math.max(0, generated));
-                }
-            }
             EndpointActivity.succeeded(spec.endpoint().baseUrl());
             inFlight.set(null);
             if (hasReasoning(answer)) {
                 dropReasoningFromSessionHistory(ctx);
             }
             return answer;
+        }
+
+        /**
+         * Hands the run's cost record what the server said this one call used: its prompt and
+         * completion tokens (the framework reads them from the response's {@code usage}), what
+         * it took from its prompt cache and how big the request was. One call of a session is
+         * one record; nothing is added up here except the session's own running sums.
+         */
+        private void tellUsage(com.swarmcoder.inference.RunMeter.Open metered,
+                               Message.Assistant answer) {
+            try {
+                UsageTap.Seen seen = tap.last();
+                metered.cached(seen.cachedPromptTokens());
+                metered.request(seen.requestChars(), seen.samePrefixChars());
+                if (answer != null && answer.getMetaInfo() != null) {
+                    Integer sent = answer.getMetaInfo().getInputTokensCount();
+                    Integer generated = answer.getMetaInfo().getOutputTokensCount();
+                    metered.usage(sent == null ? -1 : sent, generated == null ? -1 : generated);
+                    if (sent != null || generated != null) {
+                        usageSeen.set(true);
+                        promptSent.addAndGet(sent == null ? 0 : Math.max(0, sent));
+                        completionGenerated.addAndGet(
+                            generated == null ? 0 : Math.max(0, generated));
+                    }
+                }
+            } finally {
+                metered.done();
+            }
         }
 
         /**

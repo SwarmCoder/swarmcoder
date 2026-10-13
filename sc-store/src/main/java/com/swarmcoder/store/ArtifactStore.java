@@ -142,7 +142,8 @@ public class ArtifactStore implements AutoCloseable {
                 root.stories(), root.iterations(), root.tasks(), root.sourceDocuments(),
                 root.changeEvents(), root.criterionVerifications(),
                 root.guidedFlows(), root.flowQuestions(), root.flowProposals(),
-                root.flowDiscussions(), root.pendingExecs(), root.cloudSpend(), root.cloudBreaches());
+                root.flowDiscussions(), root.pendingExecs(), root.cloudSpend(), root.cloudBreaches(),
+                root.runUsage());
             storageManager.storeRoot(); // covers newly initialized fields after class evolution
             written();
             return result;
@@ -167,6 +168,22 @@ public class ArtifactStore implements AutoCloseable {
                 root.cloudBreaches().remove(clearBreachOf);
             }
             storageManager.storeAll(root.cloudSpend(), root.cloudBreaches());
+            return null;
+        });
+    }
+
+    /**
+     * Writes what one run's model calls and lookups have cost so far, replacing what was written
+     * for that run before. Queued, not awaited. {@code usage} must be a fresh copy that nobody
+     * changes afterwards, so the store sees a new instance and writes it.
+     */
+    public void recordRunUsage(com.swarmcoder.domain.RunUsageRecord usage) {
+        if (usage == null || usage.runId() == null) {
+            return;
+        }
+        writerThread.submit(() -> {
+            root.runUsage().put(usage.runId(), usage);
+            storageManager.store(root.runUsage());
             return null;
         });
     }
@@ -425,6 +442,7 @@ public class ArtifactStore implements AutoCloseable {
 
                 root.projects.remove(projectId);
                 scope.runIds.forEach(root.runs::remove);
+                scope.runIds.forEach(root.runUsage()::remove);
                 scope.designIds.forEach(root.designs::remove);
                 scope.taskGraphIds.forEach(root.taskGraphs::remove);
                 scope.briefIds.forEach(root.briefs::remove);

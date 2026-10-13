@@ -1467,10 +1467,23 @@ a `tools/call` naming a guarded tool without the secret gets a JSON-RPC error an
 run. `SwarmMcpTools.writeToolNames()` is the guarded list, and a test fails if a tool described as
 changing something is not on it. `mcpApi.readOnly: true` leaves those tools out altogether.
 
-**Watching** (read): `swarm_status`, `run_diagnosis`, `run_detail`, `list_runs`, `session_events`,
-`event_payload`, `session_prompt`, `blob_text`, `run_diff`, `pending_decisions`, `search_history`,
-`insights`, `list_projects`. Older tools that change something: `start_run`, `decide_run`,
-`answer_decision` (records an answer, restarts nothing).
+**Watching** (read): `swarm_status`, `run_diagnosis`, `run_detail`, `list_runs`, `run_report`,
+`project_report`, `session_events`, `event_payload`, `session_prompt`, `blob_text`, `run_diff`,
+`pending_decisions`, `search_history`, `insights`, `list_projects`. Older tools that change
+something: `start_run`, `decide_run`, `answer_decision` (records an answer, restarts nothing).
+
+What a build cost (section 93). Every model call is recorded with the usage the server returned,
+a session's calls one by one (`UsageLedger`, stored per run as `RunUsageRecord`); the tables are
+written by `UsageReport`, which the test harness's run report uses too.
+
+| tool | changes something | what it does |
+|---|---|---|
+| `run_report(run_id)` | no | Compact text, under about 2,500 characters. One sentence of totals: "Paid cloud: N in / N out over K calls; local: N in / N out". Then a table per role and class of server: calls, input tokens, input tokens per call, output tokens, cached input tokens, seconds in calls, and a row for all. Then each role's lookups by kind as calls/characters returned, with the share that came from the tree, the language server and document sections. For a run from before calls were recorded it says so and shows what its stored sessions still hold. |
+| `project_report()` | no | The same for the selected project: a totals sentence per story, then the table and the lookups for all of its runs together. |
+| `list_runs`, `run_detail`, `swarm_status` | no | Keep `tokensUsed` (the sum of each session's last call size, as before) and add `tokens.paidCloud` and `tokens.local`, each with `input`, `output` and `calls`. Left out for a run nothing was recorded for. |
+
+Judge a run by the paid rows. A server is local when a worker model is configured on it or its
+address is on this machine or a private network; any other server is paid, whichever role uses it.
 
 **Supervising** - an outside model running a whole build the way a person does (`SupervisorMcpTools`
 over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a model.

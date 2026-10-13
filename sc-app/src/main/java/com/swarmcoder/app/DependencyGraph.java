@@ -124,6 +124,8 @@ public class DependencyGraph {
     public final TraceHub traceHub;
     public final AgentRuntime agentRuntime;
     public final CloudGate cloudGate;
+    /** Every model call's own usage, per run and role; see docs/DEVELOPER_CORRECTIONS.md section 93. */
+    public final com.swarmcoder.runtime.UsageLedger usageLedger;
     public final SwarmEngine swarmEngine;
     public final GitService gitService;
     public final Context7Client context7Client;
@@ -355,6 +357,27 @@ public class DependencyGraph {
         // Counts and extensions written by earlier runs of the program, so a project limit holds
         // across a restart and an extension still works for a run that was stopped before one.
         this.cloudGate.persistTo(artifactStore);
+
+        // Tokens per role (section 93). Every model call of the process, a session's calls one by
+        // one, is recorded with the usage the server returned: per run, role, task, model and
+        // class of server, stored with the run. The gate above is then charged those true
+        // figures for calls to paid servers, input and output apart, in place of estimates.
+        // A server is local when a worker model is configured on it (worker models cost
+        // nothing) or its address is on this machine or a private network; any other is paid.
+        java.util.Set<String> localServers = new java.util.HashSet<>();
+        for (ModelProfile profile : profiles) {
+            if (profile.costPerMTokens() <= 0 && profile.endpoint() != null
+                    && profile.endpoint().baseUrl() != null) {
+                localServers.add(com.swarmcoder.runtime.UsageLedger.normalized(
+                    profile.endpoint().baseUrl()));
+            }
+        }
+        this.cloudGate.countFromUsage();
+        this.usageLedger = new com.swarmcoder.runtime.UsageLedger(this.cloudGate, artifactStore,
+            address -> localServers.contains(address)
+                || com.swarmcoder.runtime.UsageLedger.onThisNetwork(address))
+            .flushingInTheBackground();
+        com.swarmcoder.inference.RunMeter.recordTo(this.usageLedger);
 
         // 6. Shared knowledge/blob services — process-wide, shared by every project.
         BlobStore blobStore = new BlobStore(
@@ -1788,6 +1811,12 @@ public class DependencyGraph {
     }
 
     public void close() throws Exception {
+        // The recorder is process-wide: one that outlived its store would be handed every later
+        // call. What local calls added since the last write goes to the store first.
+        com.swarmcoder.inference.RunMeter.recordTo(null);
+        if (usageLedger != null) {
+            usageLedger.close();
+        }
         artifactStore.close();
     }
 }

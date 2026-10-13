@@ -39,6 +39,12 @@ import java.util.function.Supplier;
  * a call whose server reported none keeps -1, which a reader must show as "not recorded".
  *
  * <p>Nothing here is persisted, so nothing here can break an existing store.
+ *
+ * <p><b>The recorder</b> (2026-10-13) is separate from the switch above. The application installs
+ * one ({@link #recordTo(Recorder)}) and is then told of every finished call and every lookup,
+ * whether or not the in-memory list is kept: that is how a run's tokens per role are counted,
+ * charged to the cloud budget and stored with the run. With a recorder installed a streamed
+ * request asks the server for its usage, as it does while the meter is on.
  */
 public final class RunMeter {
 
@@ -124,9 +130,89 @@ public final class RunMeter {
         }
     }
 
+    /**
+     * Told of every model call and every lookup of the process. Its methods are called on the
+     * thread that makes the call or the lookup, must be quick and must not throw; whatever one
+     * throws is swallowed, because counting must never fail a call.
+     */
+    public interface Recorder {
+        /**
+         * A call is about to be sent, on this thread.
+         *
+         * @param run the run the caller knows it works for, as text, or null
+         * @return anything the recorder wants handed back with the finished call (whose work
+         *         this thread is doing, for one); may be null
+         */
+        Object begins(Tag tag, String run);
+
+        /** A call has ended and everything known about it has been told. Called once per call. */
+        void finished(Object begun, Finished call);
+
+        /** One lookup was answered: {@code chars} characters came back to {@code role}. */
+        void lookup(String role, LookupMeter.Kind kind, int chars);
+    }
+
+    /**
+     * A call that has ended.
+     *
+     * @param call        the call, with the server's own counts where it gave them
+     * @param endpoint    the base address of the server it went to, or null when not said
+     * @param answerChars how many characters of answer were read, or -1 when not counted - what
+     *                    an output count can be estimated from when the server reported none
+     */
+    public record Finished(Call call, String endpoint, int answerChars) {}
+
+    private static volatile Recorder recorder;
+
+    /** Installs the recorder of every call and lookup, or removes it with null. */
+    public static void recordTo(Recorder to) {
+        recorder = to;
+    }
+
+    /** True while a recorder is installed. */
+    public static boolean recording() {
+        return recorder != null;
+    }
+
+    static Recorder recorder() {
+        return recorder;
+    }
+
     /** One call in flight: told when it ends and what the server said it used. */
     public static final class Open {
         static final Open IGNORED = new Open(null, null);
+
+        private String endpoint;
+        private Recorder to;
+        private Object begun;
+        private final java.util.concurrent.atomic.AtomicBoolean told =
+            new java.util.concurrent.atomic.AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicInteger answerChars =
+            new java.util.concurrent.atomic.AtomicInteger(-1);
+
+        /** Characters of answer read so far, for a server that reports no usage. */
+        public void answered(int chars) {
+            if (chars > 0 && tag != null) {
+                answerChars.updateAndGet(sofar -> Math.max(0, sofar) + chars);
+            }
+        }
+
+        /**
+         * Everything about this call has been told: hand it to the recorder. Only the first
+         * call counts, so every way a call can end may call this.
+         */
+        public void done() {
+            Recorder recorder = to;
+            if (recorder == null || tag == null || !told.compareAndSet(false, true)) {
+                return;
+            }
+            end();
+            try {
+                recorder.finished(begun, new Finished(snapshot(), endpoint, answerChars.get()));
+            } catch (RuntimeException e) {                                 // noqa
+                // Counting must never fail the call it counts.
+            }
+        }
 
         private final Tag tag;
         private final String model;
@@ -155,6 +241,7 @@ public final class RunMeter {
         public void failed() {
             failed = true;
             end();
+            done();
         }
 
         /** The first token of the answer has arrived; only the first call counts. */
@@ -262,12 +349,36 @@ public final class RunMeter {
 
     /** A model call is being sent now. Never null; when metering is off the result does nothing. */
     public static Open begin(Tag tag, String model) {
-        if (!on) {
+        return begin(tag, model, null, null);
+    }
+
+    /**
+     * As {@link #begin(Tag, String)}, saying which server the call goes to and, where the caller
+     * knows it, which run it is for. The caller ends it with {@link Open#done()} once the
+     * server's counts have been told (or {@link Open#failed()}).
+     *
+     * @param endpoint the server's base address, or null
+     * @param run      the run's id as text, or null to leave it to the recorder
+     */
+    public static Open begin(Tag tag, String model, String endpoint, String run) {
+        Recorder to = recorder;
+        if (!on && to == null) {
             return Open.IGNORED;
         }
         Open open = new Open(tag == null ? Tag.UNTAGGED : tag, model);
-        synchronized (CALLS) {
-            CALLS.add(open);
+        open.endpoint = endpoint;
+        if (to != null) {
+            try {
+                open.begun = to.begins(open.tag, run);
+                open.to = to;
+            } catch (RuntimeException e) {                                 // noqa
+                // Counting must never fail the call it counts.
+            }
+        }
+        if (on) {
+            synchronized (CALLS) {
+                CALLS.add(open);
+            }
         }
         return open;
     }
