@@ -102,6 +102,15 @@ public interface ApiLookup {
     }
 
     /**
+     * True when {@link #tree} has something behind one of the two queries a worker is offered
+     * only when it does (section 100): {@code known_about}, what the project's roles and its
+     * delivered stories established, and {@code rule_of}, one project rule in full by its name.
+     */
+    default boolean answers(String query) {
+        return false;
+    }
+
+    /**
      * True when the answer {@link #tree} gave last on this thread came from the language server
      * and not from the syntax tree - a library type's members, a project symbol's usages - so
      * the run's record of lookups counts it under the right kind.

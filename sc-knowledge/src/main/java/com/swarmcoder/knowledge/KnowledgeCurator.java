@@ -172,6 +172,14 @@ public final class KnowledgeCurator {
     private volatile List<WorkedExamples.Shape> shapeCache;
     private volatile SemanticIndex semanticCache;
 
+    /** What this project has already established, for every asker of it (section 100). */
+    private final SharedAnswers answers = new SharedAnswers(this);
+
+    /** The one store of answers and findings of this project; see {@link SharedAnswers}. */
+    public SharedAnswers answers() {
+        return answers;
+    }
+
     private record FileEntry(Root root, Path file, String relative) {}
 
     public KnowledgeCurator(List<Root> roots, VllmClient primerModel, Path primerCacheDir) {
@@ -1253,9 +1261,12 @@ public final class KnowledgeCurator {
                 // And still inside once symbolic links are followed: every address here comes
                 // from a model (the expert's and the roles' read_file and list_files), and the
                 // project root is a tree model-written code lands in.
-                return lexicallyInside
+                Path inside = lexicallyInside
                     && com.swarmcoder.sandbox.ConfinedPath.inside(root.path(), resolved)
                     ? resolved : null;
+                // What a lookup reads is what its kept answer stands on (SharedAnswers).
+                SharedAnswers.reading(inside);
+                return inside;
             }
         }
         return null;

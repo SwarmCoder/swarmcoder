@@ -69,9 +69,25 @@ public final class KnownFacts {
      * @param snippet the lines the tool copied from that lookup's result; null for none
      * @param story   the story it was established for, as the backlog names it; may be null
      * @param commit  the commit that story was built on or delivered as; may be null
+     * @param by      the role that found it
      */
     public record Fact(String about, String source, String note, String snippet, String story,
-                       String commit) {}
+                       String commit, String by) {
+
+        /** A finding of a delivered story's design: the architect kept it. */
+        public Fact(String about, String source, String note, String snippet, String story,
+                    String commit) {
+            this(about, source, note, snippet, story, commit, ARCHITECT);
+        }
+
+        /** True for what a role concluded in a session, as against a delivered story's finding. */
+        boolean ofASession() {
+            return story == null && commit == null && by != null && !ARCHITECT.equals(by);
+        }
+    }
+
+    /** Who found a delivered story's findings. */
+    public static final String ARCHITECT = "architect";
 
     /** What became of a fact's source since it was recorded. */
     public enum Source {
@@ -165,6 +181,21 @@ public final class KnownFacts {
         return of(facts);
     }
 
+    /** These facts and then {@code more}, without the ones that repeat. */
+    public KnownFacts and(List<Fact> more) {
+        if (more == null || more.isEmpty()) {
+            return this;
+        }
+        List<Fact> all = new ArrayList<>(facts);
+        all.addAll(more);
+        return of(all);
+    }
+
+    /** How many of the facts a role concluded in a session, not a delivered story's design. */
+    public int ofSessions() {
+        return (int) facts.stream().filter(Fact::ofASession).count();
+    }
+
     public boolean isEmpty() {
         return facts.isEmpty();
     }
@@ -188,8 +219,13 @@ public final class KnownFacts {
             sources.computeIfAbsent(subject, s -> new LinkedHashSet<>()).add(nameOf(fact.source()));
             counts.merge(subject, 1, Integer::sum);
         }
+        int sessions = ofSessions();
         StringBuilder index = new StringBuilder("WHAT THIS PROJECT ALREADY KNOWS - " + facts.size()
-            + " fact(s) the architect of an earlier, delivered story established and kept. "
+            + (sessions == 0
+                ? " fact(s) the architect of an earlier, delivered story established and kept. "
+                : " fact(s): what the architect of an earlier, delivered story established and "
+                    + "kept, and " + sessions + " that a role concluded from a lookup in a "
+                    + "session of this project (each says who found it). ")
             + "Titles only: known_about <subject or source> gives each fact with the lines it "
             + "was copied from, the story and commit it was true at, and whether its source has "
             + "changed since. Read a fact before you look the same thing up again.\n");
@@ -237,7 +273,9 @@ public final class KnownFacts {
                 + index(Integer.MAX_VALUE);
         }
         StringBuilder answer = new StringBuilder(found.size() + " fact(s) recorded about `" + asked
-            + "`, each as the architect of an earlier story kept it:\n");
+            + (found.stream().anyMatch(Fact::ofASession)
+                ? "`, each as the role that found it kept it:\n"
+                : "`, each as the architect of an earlier story kept it:\n"));
         int shown = 0;
         for (Fact fact : found) {
             Source source = check == null ? Source.NO_LINES : check.apply(fact);
@@ -268,13 +306,21 @@ public final class KnownFacts {
                     + fact.commit().substring(0, Math.min(10, fact.commit().length())));
         }
         text.append('\n');
+        if (fact.ofASession()) {
+            text.append("  found by: the ").append(fact.by().strip()).append(", from that "
+                + "lookup, in a session of this project; no delivered build has proved it.\n");
+        }
         boolean lines = fact.snippet() != null && !fact.snippet().isBlank();
         switch (source) {
-            case UNCHANGED -> text.append("  source: unchanged since - every line below is "
-                + "still in it.\n");
-            case CHANGED -> text.append("  source: CHANGED SINCE. The lines kept from it are no "
-                + "longer all in it, so they are not shown and the sentence above may no longer "
-                + "be true. Make that lookup again before you rely on it.\n");
+            case UNCHANGED -> text.append(lines ? "  source: unchanged since - every line "
+                + "below is still in it.\n" : "  source: unchanged since - every file that "
+                + "lookup's answer stood on is as it was.\n");
+            case CHANGED -> text.append(lines ? "  source: CHANGED SINCE. The lines kept from "
+                + "it are no longer all in it, so they are not shown and the sentence above may "
+                + "no longer be true. Make that lookup again before you rely on it.\n"
+                : "  source: CHANGED SINCE. A file that lookup's answer stood on is no longer "
+                + "as it was, so the sentence above may no longer be true. Make that lookup "
+                + "again before you rely on it.\n");
             case GONE -> text.append("  source: NO LONGER THERE. The sentence above may no "
                 + "longer be true; look up what replaced it before you rely on it.\n");
             default -> text.append("  source: kept as a sentence, with no lines to hold "

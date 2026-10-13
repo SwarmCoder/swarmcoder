@@ -294,7 +294,10 @@ public final class LookupAgent {
         java.util.function.Supplier<KnownFacts> supplier = knownFacts;
         try {
             KnownFacts facts = supplier == null ? null : supplier.get();
-            return facts == null ? KnownFacts.none() : facts;
+            KnownFacts delivered = facts == null ? KnownFacts.none() : facts;
+            // And what a role of an earlier session concluded and kept (section 100).
+            SharedAnswers shared = curator == null ? null : curator.answers();
+            return shared == null ? delivered : delivered.and(shared.findings());
         } catch (RuntimeException e) {                                     // noqa
             log.warn("what the project already knows could not be read ({}); the session is "
                 + "opened without it", e.toString());
@@ -543,6 +546,14 @@ public final class LookupAgent {
         List<ToolBinding> own = ask.ownTools().apply(tools);
         bindings.removeIf(tool -> own.stream().anyMatch(o -> o.name().equals(tool.name())));
         bindings.addAll(own);
+        // Every role keeps what it concludes for the sessions after it (section 100). The
+        // architect keeps its findings with a tool of its own, which also gives them to the
+        // workers of this story; it is not offered a second way to say the same thing.
+        ToolBinding keepFinding = own.stream().anyMatch(o -> "keep_for_workers".equals(o.name()))
+            ? null : tools.keepFindingBinding();
+        if (keepFinding != null) {
+            bindings.add(keepFinding);
+        }
         String system = ask.system()
             + toolGuide(bindings.stream().map(ToolBinding::name).toList());
 

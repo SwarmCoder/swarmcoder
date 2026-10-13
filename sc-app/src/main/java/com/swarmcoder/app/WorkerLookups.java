@@ -21,6 +21,7 @@ import com.swarmcoder.knowledge.DocumentQueries;
 import com.swarmcoder.knowledge.LanguageQueries;
 import com.swarmcoder.knowledge.Librarian;
 import com.swarmcoder.knowledge.ProjectClasspath;
+import com.swarmcoder.knowledge.SharedAnswers;
 import com.swarmcoder.knowledge.TreeQueries;
 import com.swarmcoder.lsp.LspHit;
 import com.swarmcoder.lsp.LspResult;
@@ -104,8 +105,65 @@ public final class WorkerLookups implements ApiLookup {
         return librarian.findExample(what, wantTest, forWhom);
     }
 
+    /** One project rule in full by its name; null when the workers' opening carries them whole. */
+    private volatile Function<String, String> ruleByName;
+
+    /**
+     * Gives the workers {@code rule_of}: {@code byName} answers with one rule as every other
+     * role reads it, or with the rules' names for a name it does not know.
+     */
+    public WorkerLookups rulesByName(Function<String, String> byName) {
+        this.ruleByName = byName;
+        return this;
+    }
+
+    private SharedAnswers shared() {
+        return librarian == null || librarian.curator() == null ? null
+            : librarian.curator().answers();
+    }
+
+    @Override
+    public boolean answers(String query) {
+        if ("rule_of".equals(query)) {
+            return ruleByName != null;
+        }
+        SharedAnswers shared = shared();
+        return "known_about".equals(query) && shared != null && !shared.known().isEmpty();
+    }
+
+    /**
+     * A worker's question, answered once for the project (section 100): the answer another
+     * worker, or a candidate of the same task, has already had is given again while every
+     * file it stood on is as it was. What a worker's own checkout changes is laid over the
+     * answer afterwards by its toolbox, and is never kept here.
+     */
     @Override
     public String tree(String query, String argument) {
+        SharedAnswers shared = shared();
+        if ("rule_of".equals(query)) {
+            Function<String, String> byName = ruleByName;
+            return byName == null ? "The project's rules are in your instructions, whole."
+                : byName.apply(argument);
+        }
+        if ("known_about".equals(query)) {
+            return shared == null ? "Nothing is recorded for this project."
+                : shared.knownAbout(argument);
+        }
+        SharedAnswers.Reach reach = shared == null ? null
+            : SharedAnswers.reachOf(query, argument);
+        if (reach == null) {
+            return answerOf(query, argument);
+        }
+        SharedAnswers.Served given = shared.answer("worker", query, argument, reach, "worker",
+            () -> {
+                String text = answerOf(query, argument);
+                return new SharedAnswers.Computed(text, byLanguageServer.get() ? "server" : null);
+            });
+        byLanguageServer.set("server".equals(given.tag()));
+        return given.text();
+    }
+
+    private String answerOf(String query, String argument) {
         TreeQueries tree = TreeQueries.forAWorkerOf(librarian.curator(), projectPath);
         // One tool per question; which source answers is LanguageQueries' fixed rule.
         LanguageQueries language = LanguageQueries.forAWorkerOf(librarian.curator());

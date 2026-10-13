@@ -348,28 +348,38 @@ public final class ExpertTools {
     // The structural tools — the semantic index, which is the compiler's own answer
     // -------------------------------------------------------------------------------------------
 
+    // The language server is asked INSIDE the lookup, not before it: a question another session
+    // has already had answered is then not put to the server again (section 100).
+
     public String findImplementations(String type) {
-        String fromServer = language().implementationsOrNull(type);
-        if (fromServer != null) {
-            return fromTheServer("find_implementations", type, fromServer);
-        }
-        return withIndex("find_implementations", type, index -> {
-            String known = knownName(index, type);
-            return renamed(type, known, index) + refs("What implements or extends `" + known + "`",
-                index.implementationsOf(known));
+        return run("find_implementations", type, () -> {
+            String fromServer = language().implementationsOrNull(type);
+            if (fromServer != null) {
+                answeredByServer.set(true);
+                return fromServer;
+            }
+            return fromIndex(index -> {
+                String known = knownName(index, type);
+                return renamed(type, known, index)
+                    + refs("What implements or extends `" + known + "`",
+                        index.implementationsOf(known));
+            });
         });
     }
 
     public String findUsages(String typeOrMethod) {
-        String fromServer = language().usagesOrNull(typeOrMethod);
-        if (fromServer != null) {
-            return fromTheServer("find_usages", typeOrMethod, fromServer);
-        }
-        return withIndex("find_usages", typeOrMethod, index -> {
-            String known = knownName(index, typeOrMethod);
-            return renamed(typeOrMethod, known, index)
-                + refs("Where `" + known + "` is used, and what it is used on",
-                    index.usagesOf(known));
+        return run("find_usages", typeOrMethod, () -> {
+            String fromServer = language().usagesOrNull(typeOrMethod);
+            if (fromServer != null) {
+                answeredByServer.set(true);
+                return fromServer;
+            }
+            return fromIndex(index -> {
+                String known = knownName(index, typeOrMethod);
+                return renamed(typeOrMethod, known, index)
+                    + refs("Where `" + known + "` is used, and what it is used on",
+                        index.usagesOf(known));
+            });
         });
     }
 
@@ -1174,13 +1184,6 @@ public final class ExpertTools {
         return LanguageQueries.of(curator);
     }
 
-    private String fromTheServer(String tool, String argument, String answer) {
-        return run(tool, argument, () -> {
-            answeredByServer.set(true);
-            return answer;
-        });
-    }
-
     public String supertypesOf(String type) {
         return run("supertypes_of", type, () -> language().supertypesOf(type));
     }
@@ -1446,6 +1449,105 @@ public final class ExpertTools {
         return run("known_about", what, () -> known.about(what, this::sourceOf));
     }
 
+    // -------------------------------------------------------------------------------------------
+    // One store of answers and findings for the project (section 100).
+
+    /** The tag of a kept answer the language server gave. */
+    private static final String FROM_SERVER = "server";
+
+    /** The most characters of one finding's sentence. */
+    static final int FINDING_CHARS = 1_000;
+
+    /** What each lookup of this session stood on, by the call as {@code tool argument}. */
+    private final java.util.Map<String, SharedAnswers.Basis> basisOfCall =
+        new ConcurrentHashMap<>();
+
+    /** The project's store; null when this toolbox has no curator. */
+    private SharedAnswers shared() {
+        try {
+            return curator == null ? null : curator.answers();
+        } catch (RuntimeException e) {                                     // noqa
+            return null;
+        }
+    }
+
+    /**
+     * Who an answer is written for, as part of the question: a role's addresses and - for the
+     * one lookup whose text is cut to the reader's room and shaped by the session's latest
+     * documentation question - that room and that question.
+     */
+    private String formOf(String tool) {
+        if (!"read_file".equals(tool)) {
+            return "role";
+        }
+        String question = lastDocsQuestion.get();
+        return "role|" + maxToolChars + "|" + (question == null ? "" : question);
+    }
+
+    /**
+     * {@code keep_finding}, for a role that hands in through a tool of its own: what the role
+     * concluded from one of its lookups is kept for every later session of the project, with who
+     * found it and the lookup it came from. Null when there is no store to keep it in.
+     */
+    ToolBinding keepFindingBinding() {
+        if (user == null || shared() == null) {
+            return null;
+        }
+        try {
+            return new ToolBinding("keep_finding",
+                "Keep ONE thing you have just established about this project or what it builds "
+                    + "on, so that no later role or story has to work it out again: `about` is "
+                    + "the type or file it is about, `lookup` the lookup of this session it "
+                    + "comes from, exactly as you made it (tool, a space, its argument), `note` "
+                    + "one or two sentences saying what is so. It is offered to every later "
+                    + "session by title, with your role, and marked when a file that lookup "
+                    + "read has changed. Keep a conclusion, not a copy of the lookup: the "
+                    + "lookup's own answer is already kept.",
+                this, method("keepFinding", String.class, String.class, String.class));
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** {@code keep_finding}. The parameter names are the tool's schema - do not rename them. */
+    public String keepFinding(String about, String lookup, String note) {
+        return run("keep_finding", lookup == null ? "" : lookup.strip(), Kind.OWN, () -> {
+            SharedAnswers shared = shared();
+            if (shared == null || user == null) {
+                return "error: nothing is kept in this session.";
+            }
+            if (note == null || note.isBlank()) {
+                return "error: say in `note` what you established, in one or two sentences.";
+            }
+            Optional<java.util.Map.Entry<String, String>> made = resultOf(lookup);
+            if (made.isEmpty()) {
+                return "error: no lookup of this session that found something matches `"
+                    + (lookup == null ? "" : lookup.strip()) + "`. A finding is kept with the "
+                    + "lookup it comes from. Your latest: "
+                    + String.join("; ", callsThatFound(6)) + ".";
+            }
+            String sentence = note.strip();
+            if (sentence.length() > FINDING_CHARS) {
+                return "error: a finding is one or two sentences, at most " + FINDING_CHARS
+                    + " characters; this one has " + sentence.length() + ". What the lookup "
+                    + "returned is already kept - say only what you concluded from it.";
+            }
+            String call = made.get().getKey();
+            SharedAnswers.Basis basis = basisOfCall.get(call);
+            if (basis == null) {
+                basis = shared.basisNow(call + "\n" + made.get().getValue());
+            }
+            KnownFacts.Fact fact = new KnownFacts.Fact(about == null || about.isBlank() ? null
+                : about.strip(), call, sentence, null, null, null, user.name());
+            shared.keep(fact, basis);
+            log.info("keep_finding: the {} kept [{}] from {}, {} characters", user.name(),
+                KnownFacts.subjectOf(fact), forTheLog(call), sentence.length());
+            return "Kept for every later session of this project: [" + KnownFacts.subjectOf(fact)
+                + "] from " + call + ". known_about " + KnownFacts.subjectOf(fact)
+                + " returns it.";
+        });
+    }
+
     private static final Pattern BODY_ADDRESS = Pattern.compile("^// (\\S+?):\\d+");
 
     /**
@@ -1453,6 +1555,12 @@ public final class ExpertTools {
      * lookup that named a type, the file the tree has that type in - as it is now.
      */
     KnownFacts.Source sourceOf(KnownFacts.Fact fact) {
+        // What a role concluded in a session is held against what its lookup stood on.
+        SharedAnswers shared = shared();
+        KnownFacts.Source kept = shared == null ? null : shared.heldSince(fact);
+        if (kept != null) {
+            return kept;
+        }
         if (fact.snippet() == null || fact.snippet().isBlank()) {
             return KnownFacts.Source.NO_LINES;
         }
@@ -1858,23 +1966,25 @@ public final class ExpertTools {
     }
 
     private String withIndex(String tool, String argument, Lookup lookup) {
-        return run(tool, argument, () -> {
-            SemanticIndex index;
-            try {
-                index = curator.semanticIndex();
-            } catch (Throwable e) {                                        // noqa
-                return "The structural index is not usable for this project (" + e + "), so this "
-                    + "question cannot be answered from the compiler. Use lookup_docs or read_file "
-                    + "instead.";
-            }
-            if (index == null || !index.available()) {
-                return "The structural index is not available for this project"
-                    + (index == null ? "" : " (" + index.unavailableReason() + ")")
-                    + ", so this question cannot be answered from the compiler. Use lookup_docs or "
-                    + "read_file instead.";
-            }
-            return lookup.get(index);
-        });
+        return run(tool, argument, () -> fromIndex(lookup));
+    }
+
+    private String fromIndex(Lookup lookup) {
+        SemanticIndex index;
+        try {
+            index = curator.semanticIndex();
+        } catch (Throwable e) {                                            // noqa
+            return "The structural index is not usable for this project (" + e + "), so this "
+                + "question cannot be answered from the compiler. Use lookup_docs or read_file "
+                + "instead.";
+        }
+        if (index == null || !index.available()) {
+            return "The structural index is not available for this project"
+                + (index == null ? "" : " (" + index.unavailableReason() + ")")
+                + ", so this question cannot be answered from the compiler. Use lookup_docs or "
+                + "read_file instead.";
+        }
+        return lookup.get(index);
     }
 
     /**
@@ -1955,8 +2065,38 @@ public final class ExpertTools {
         String answer;
         answeredByServer.set(false);
         answeredAs.remove();
+        boolean established = false;
         try {
-            answer = body.get();
+            // A deterministic lookup another session of this project has already had answered
+            // is given that answer while everything it stood on is as it was (section 100). The
+            // session's own stops and counts above are unchanged by it: the lookup was made.
+            SharedAnswers shared = shared();
+            SharedAnswers.Reach reach = shared == null || kind != Kind.LOOKUP ? null
+                : SharedAnswers.reachOf(tool, argument);
+            if (reach == null) {
+                answer = body.get();
+            } else {
+                SharedAnswers.Served given = shared.answer(formOf(tool), tool, argument, reach,
+                    user == null ? "expert" : user.name(), () -> {
+                        String text = body.get();
+                        com.swarmcoder.inference.LookupMeter.Kind as = answeredAs.get();
+                        return new SharedAnswers.Computed(text, as != null ? as.name()
+                            : answeredByServer.get() ? FROM_SERVER : null);
+                    });
+                answer = given.text();
+                established = given.fromStore();
+                if (established && given.tag() != null) {
+                    // What answered it first, for the run's record of lookups by kind.
+                    if (FROM_SERVER.equals(given.tag())) {
+                        answeredByServer.set(true);
+                    } else {
+                        answeredAs.set(com.swarmcoder.inference.LookupMeter.Kind
+                            .valueOf(given.tag()));
+                    }
+                }
+                basisOfCall.put(tool + " " + (argument == null ? "" : argument.strip()),
+                    given.basis());
+            }
         } catch (Exception e) {                                            // noqa
             log.debug("expert tool {}({}) failed: {}", tool, argument, e.toString());
             answer = "That lookup failed: " + e + ". Try a different one.";
@@ -1964,8 +2104,9 @@ public final class ExpertTools {
         if (answer == null) {
             answer = "";
         }
-        log.info("{} {}('{}') -> {} chars", user == null ? "expert" : user.name(), tool,
-            forTheLog(argument), answer.length());
+        log.info("{} {}('{}') -> {} chars{}", user == null ? "expert" : user.name(), tool,
+            forTheLog(argument), answer.length(),
+            established ? " (already established for this project; not computed again)" : "");
         String capped = answer.length() <= maxToolChars ? answer
             : answer.substring(0, maxToolChars) + "\n…\n";
         lookups.add(new Found(tool, argument, capped, foundSomething(capped)));

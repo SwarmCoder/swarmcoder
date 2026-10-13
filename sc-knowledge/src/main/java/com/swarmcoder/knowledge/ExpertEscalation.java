@@ -343,12 +343,23 @@ public final class ExpertEscalation implements ToolUsingExpert {
         // turns are left as they run out (harness run 37: the expert had no clock at all).
         ExpertTools tools = new ExpertTools(curator, librarian, skeletons, cloudGate, room(),
             maxTurns);
+        // What the project already knows is a lookup of the expert's too, by title in its
+        // opening (section 100); nothing is added for a project that holds nothing.
+        SharedAnswers shared = curator == null ? null : curator.answers();
+        KnownFacts known = shared == null ? KnownFacts.none() : shared.known();
+        tools.know(known);
+        List<AgentRuntime.ToolBinding> bindings = new java.util.ArrayList<>(tools.bindings());
+        if (tools.knownBinding() != null) {
+            bindings.add(0, tools.knownBinding());
+        }
+        String titles = known.index(room().chars(LookupAgent.KNOWN_INDEX_CHARS));
         // The project map from the object graph opens the session, as it does every role's; the
         // expert fetches the rest with the tree queries. No search is run for it (section 54,
         // CLAUDE.md section 1: no prompt-stuffing).
         String map = ProjectMap.enabled() && targetRoot != null
             ? ProjectMap.of(targetRoot, room().chars(ProjectMap.MAP_CHARS), curator) : "";
-        String opening = (map.isEmpty() ? "" : map + "\n") + question + "\n\n"
+        String opening = (map.isEmpty() ? "" : map + "\n")
+            + (titles.isEmpty() ? "" : titles + "\n") + question + "\n\n"
             + (context == null ? "" : context);
 
         // Charged BEFORE the session opens, like every other cloud role — a runaway is stopped
@@ -368,7 +379,7 @@ public final class ExpertEscalation implements ToolUsingExpert {
         AtomicLong modelTokens = guard.modelTokens;
 
         AgentRuntime.SessionSpec spec = new AgentRuntime.SessionSpec(sessionRole(), SYSTEM, endpoint,
-            0.2, maxTurns, tools.bindings(), guard).with(new AgentRuntime.SessionOptions(
+            0.2, maxTurns, List.copyOf(bindings), guard).with(new AgentRuntime.SessionOptions(
                 TIDY_ABOVE_TOKENS, TIDY_TO_TOKENS, DIGEST_CHARS, null));
 
         AgentRuntime.SessionResult result;
