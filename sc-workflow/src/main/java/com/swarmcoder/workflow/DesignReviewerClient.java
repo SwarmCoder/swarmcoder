@@ -27,6 +27,7 @@ import com.swarmcoder.domain.Task;
 import com.swarmcoder.inference.EndpointOutage;
 import com.swarmcoder.inference.LlmJson;
 import com.swarmcoder.inference.VllmClient;
+import com.swarmcoder.domain.ReviewerMode;
 import com.swarmcoder.knowledge.LookupAgent;
 import com.swarmcoder.runtime.CloudGate;
 import org.slf4j.Logger;
@@ -120,6 +121,18 @@ public class DesignReviewerClient {
      */
     public void setLookupAgent(LookupAgent agent) {
         this.lookupAgent = agent;
+    }
+
+    /**
+     * The one place the application and the harness wire the reviewer (section 96). In
+     * {@link ReviewerMode#QUESTION} mode, the default, each reading is one call with no tools:
+     * the rules, what the architect established, and the text. In {@link ReviewerMode#LOOKUPS}
+     * mode the readings run in the roles' lookup session as section 94 made them.
+     *
+     * @param agent the roles' lookup agent; null leaves the reviewer a single question
+     */
+    public void useMode(ReviewerMode mode, LookupAgent agent) {
+        this.lookupAgent = mode == ReviewerMode.LOOKUPS ? agent : null;
     }
 
     /**
@@ -468,7 +481,7 @@ public class DesignReviewerClient {
      * @param rules what the reading is against, exactly as the roles were shown it
      * @param body  what is read: the design's decisions, the plan's tasks, the test files
      * @param facts what the architect established for the design, rendered, or "" - given to a
-     *              session when it is opened, never to the one-shot review
+     *              session when it is opened, and in the question when there is no session
      */
     private Review callReviewer(String roleLabel, String system, String rules, String body,
                                 String facts) throws Exception {
@@ -486,7 +499,10 @@ public class DesignReviewerClient {
                     + "the one-shot review without tools", roleLabel, e.toString());
             }
         }
-        return oneShotReview(roleLabel, system, rules + "\n\n" + body);
+        // One question per reading (section 96): the architect's established facts are in the
+        // question, since there is no session to be given them as its opening.
+        String established = agent == null && facts != null && !facts.isBlank() ? facts + "\n" : "";
+        return oneShotReview(roleLabel, system, rules + "\n\n" + established + body);
     }
 
     /**
@@ -617,8 +633,7 @@ public class DesignReviewerClient {
             sb.append(rendered);
         }
         if (left > 0) {
-            sb.append("(").append(left).append(" more are not shown here; the lookup tools "
-                + "return them.)\n");
+            sb.append("(").append(left).append(" more are not shown here.)\n");
         }
         return sb.toString();
     }

@@ -9686,3 +9686,48 @@ with them and unchanged: `ARoleLearnsTheProjectFromItsObjectGraphTest`,
   fields were added; the copy that was read holds no usage records.
 - A worker's lookups are not told apart by root, and a worker's own read tool is unchanged.
 - The full test suite was not run; the classes above were.
+
+
+## 96. The reviewer asks one question a reading by default (owner decision, 2026-10-13)
+
+**Decision.** The design reviewer works as ONE QUESTION PER READING, with no lookup tools, unless
+the settings say `roles.reviewerMode: lookups`. Reason: as an agent it made 121 paid calls and
+9.1 million tokens for one small story (section 94); as one question per reading the harness had
+measured about 5 calls and 20,000 tokens a story, and every delivered harness run used that.
+
+**What changed.**
+
+- *The setting.* `roles.reviewerMode` in the settings file: `question` (default, also when absent
+  or unrecognized, the log warns for the latter) or `lookups`. `RolesConfig.reviewerMode`,
+  documented in the starter file (`ConfigLoader.starterConfigText`) and the user manual. One
+  global setting; a project's `project.yaml` does not override it. The settings form carries it
+  over when roles are saved (`ConfigFormsBridge`).
+- *One resolver.* `ReviewerMode` (sc-domain) resolves the word (`fromSetting`, `configure`);
+  `DependencyGraph.roleClientsFor` calls it with the setting before each project context is
+  built, and the harness (`EndToEndLoopTest`) calls it with `-Dswarmcoder.e2e.reviewer`.
+  Both wire the reviewer through `DesignReviewerClient.useMode(mode, roleAgent)`: only
+  `lookups` hands it the lookup agent. Section 95 item 4 (the harness runs the reviewer as the
+  application does) stays true: both follow the same setting, both default to `question`.
+- *The question.* With no lookup agent a reading is one call: rules, then the architect's
+  established facts (`establishedFacts`, the text section 94 opens the agent with, bounded by
+  `swarmcoder.handover.maxChars`), then the thing to review. Only the design reading has facts;
+  the plan and tests readings have none, as before. `lookups` mode is section 94 unchanged.
+- *The report.* `UsageReport.warnings` takes the reviewer's expected calls from
+  `ReviewerMode.current().expectedCalls()`: `question` 8 (four readings: the rubric review of
+  the design, the design against the rules, the plan, the tests; plus up to two design and two
+  plan revisions), `lookups` 16. The mode is process-wide state set where the reviewer is wired,
+  so a report read in a process that wired nothing judges as `question`.
+
+**Tests.** `TheReviewerAsksOneQuestionTest` (default: one call a reading, no tools offered, facts
+in the call; `lookups`: a session with the facts as its opening), `ReviewerModeSettingTest`
+(absent means `question`; application and harness resolve the same word the same way; the
+starter file names the setting), `UsageReportWarningsTest` (question limit; lookups limit),
+`TheReviewerReadsInOneConversationARunTest` unchanged and passing, `FirstRunColdStartTest`.
+
+**Not checked.**
+
+- Nothing was run against a model, the application or the harness; the harness change compiles.
+- A project that wants `lookups` for itself alone cannot say so: the setting is global.
+- The report limit for `question` is the count of readings and revisions in one run; a report
+  of several runs added up can exceed 8 without a fault.
+- The full test suite was not run.

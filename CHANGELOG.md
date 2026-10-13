@@ -555,6 +555,19 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Changed
 
+- **The design reviewer no longer looks things up by default: it reads each thing in one call.**
+  The reviewer (it reads a design against the project's rules, then a revised design, the plan
+  and the tests) was an agent with 29 lookup tools in the application. One small story cost it
+  121 paid calls and 9.1 million tokens; the end-to-end harness had always run it as one
+  question per reading, about 5 calls and 20,000 tokens a story. The application now does the
+  same by default: each reading is one call with no tools, holding the text to review, the
+  project's rules and what the architect established for the design. The agent reviewer is
+  still there as a setting: `roles.reviewerMode: lookups` in the settings file (default
+  `question`). The harness follows the same setting and has the flag
+  `-Dswarmcoder.e2e.reviewer=lookups`. The run report's call warning for the reviewer follows
+  the mode: in `question` mode it warns above 8 calls (four readings and up to four
+  revisions), in `lookups` mode above 16 as before.
+
 - **A run's report tells reference lookups from the project's, and warns about whole files.**
   The lookups table of `run_report`, `project_report` and the harness report has a last column
   for the lookups that were about the reference material (the source and documents of what the

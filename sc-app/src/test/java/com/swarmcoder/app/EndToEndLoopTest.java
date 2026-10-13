@@ -25,6 +25,7 @@ import com.swarmcoder.console.DocumentIngest;
 import com.swarmcoder.console.GuidedFlowServiceImpl;
 import com.swarmcoder.console.PlanningFlowServiceImpl;
 import com.swarmcoder.domain.AcceptanceCriterion;
+import com.swarmcoder.domain.ReviewerMode;
 import com.swarmcoder.domain.AgentSessionRecord;
 import com.swarmcoder.domain.Brd;
 import com.swarmcoder.domain.BrdRequirement;
@@ -1498,9 +1499,16 @@ class EndToEndLoopTest {
             // harness run asked the reviewer one question a reading while the application ran
             // it as an agent with every lookup, so no harness report showed the 121 calls and
             // 9.1 million tokens a paid build then spent on it (section 94).
-            roles.reviewer().setLookupAgent(roleAgent);
-            System.out.println("[E2E] the architect, the planner, the test author and the "
-                + "reviewer work as agents with these lookups: " + roleAgent.lookupNames());
+            // Section 96: as the application, one question per reading unless the flag says
+            // -Dswarmcoder.e2e.reviewer=lookups (the same setting values as
+            // roles.reviewerMode in config.yaml).
+            ReviewerMode reviewerMode =
+                ReviewerMode.configure(System.getProperty("swarmcoder.e2e.reviewer"));
+            roles.reviewer().useMode(reviewerMode, roleAgent);
+            System.out.println("[E2E] the architect, the planner and the test author work as "
+                + "agents with these lookups: " + roleAgent.lookupNames() + "; the reviewer: "
+                + (reviewerMode == ReviewerMode.LOOKUPS ? "an agent with the same lookups"
+                    : "one question per reading, no tools"));
         }
 
         WorkflowEngine engine = new WorkflowEngine(new KoogAgentRuntime(traceHub), swarm,

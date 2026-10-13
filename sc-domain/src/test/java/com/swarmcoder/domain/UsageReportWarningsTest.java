@@ -51,7 +51,13 @@ class UsageReportWarningsTest {
             row("planner", true, 6, 27_300, 100_000),
             row("worker", false, 249, 18_300, 70_000));
 
-        String warnings = UsageReport.warnings(models);
+        ReviewerMode.configure("lookups");
+        String warnings;
+        try {
+            warnings = UsageReport.warnings(models);
+        } finally {
+            ReviewerMode.configure(null);
+        }
 
         assertThat(warnings.lines().filter(line -> line.startsWith("WARNING: "))).hasSize(7);
         assertThat(warnings)
@@ -71,7 +77,13 @@ class UsageReportWarningsTest {
             .doesNotContain("planner");
         assertThat(warnings).as("local tokens are not money").doesNotContain("worker");
 
-        String report = UsageReport.render("One run:", models, List.of());
+        ReviewerMode.configure("lookups");
+        String report;
+        try {
+            report = UsageReport.render("One run:", models, List.of());
+        } finally {
+            ReviewerMode.configure(null);
+        }
         assertThat(report.indexOf("WARNING: the reviewer"))
             .as("the warnings stand above the table").isBetween(0, report.indexOf("| role |"));
         assertThat(report)
@@ -79,6 +91,27 @@ class UsageReportWarningsTest {
             .contains("- reviewer (paid cloud): 18150000 characters sent for 9123400 input "
                 + "tokens counted (2.0 a token); 90% of a request repeated the one before it "
                 + "from the start");
+    }
+
+    @Test
+    void theReviewerAsOneQuestionAReadingIsWarnedAboveOneCallAReadingAndARevision() {
+        assertThat(ReviewerMode.current()).isEqualTo(ReviewerMode.QUESTION);
+        int limit = ReviewerMode.QUESTION.expectedCalls();
+        assertThat(limit).as("four readings, two design revisions, two plan revisions")
+            .isEqualTo(8);
+
+        assertThat(UsageReport.warnings(List.of(row("reviewer", true, limit, 5_000, 20_000))))
+            .isEmpty();
+        assertThat(UsageReport.warnings(List.of(row("reviewer", true, limit + 1, 5_000, 20_000))))
+            .contains("WARNING: the reviewer made " + (limit + 1) + " calls on a paid server; "
+                + "its work in one run needs at most " + limit + ".");
+        ReviewerMode.configure("lookups");
+        try {
+            assertThat(UsageReport.warnings(List.of(row("reviewer", true, 16, 5_000, 20_000))))
+                .as("an agent reviewer is allowed 16, as in section 94").isEmpty();
+        } finally {
+            ReviewerMode.configure(null);
+        }
     }
 
     @Test
