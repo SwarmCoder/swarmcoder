@@ -63,7 +63,9 @@ final class TurnMeter implements AgentRuntime.TurnGuard {
         long total = Math.max(0, info.tokensUsed());
         long delta = Math.max(0, total - modelTokens.get());
         modelTokens.set(Math.max(modelTokens.get(), total));
-        if (delta == 0) {
+        // A gate that counts each call's own usage is only asked here whether the run may go on,
+        // and is asked every turn: this turn's call was already counted when it was answered.
+        if (delta == 0 && !cloudGate.countsFromUsage()) {
             return Optional.empty();
         }
         try {

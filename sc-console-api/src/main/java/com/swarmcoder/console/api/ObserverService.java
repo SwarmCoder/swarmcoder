@@ -68,6 +68,17 @@ public interface ObserverService {
 
     /** "Have we seen this before?" over past session transcripts (spec §12.3 search_history). */
     List<SessionSummaryDto> searchHistory(String query, int max);
+
+    /**
+     * What one run's model calls cost, as compact text: a totals sentence with paid cloud and
+     * local apart and input and output apart, a table per role (calls, input tokens, input per
+     * call, output tokens, cached input, seconds in calls) and the role's lookups by kind.
+     * A sentence saying why not when the id names no run.
+     */
+    String runReport(String runId);
+
+    /** As {@link #runReport}, for the selected project: a totals sentence per story, then all. */
+    String projectReport();
 }
 
 

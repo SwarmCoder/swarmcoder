@@ -32,7 +32,9 @@ import java.util.Map;
  * worker's {@code find}, {@code grep} and {@code cat} in its container looked like any other
  * command. The run report now has one table of this per role.
  *
- * <p>Kept in memory while {@link RunMeter} is on, and never otherwise. Nothing is persisted.
+ * <p>Kept in memory while {@link RunMeter} is on, and never otherwise. Nothing is persisted
+ * here; the application's {@link RunMeter.Recorder} is told of every lookup and stores them with
+ * the run.
  */
 public final class LookupMeter {
 
@@ -103,7 +105,18 @@ public final class LookupMeter {
      * @param chars how many characters came back
      */
     public static void record(String role, Kind kind, int chars) {
-        if (!RunMeter.enabled() || kind == null) {
+        if (kind == null) {
+            return;
+        }
+        RunMeter.Recorder recorder = RunMeter.recorder();
+        if (recorder != null) {
+            try {
+                recorder.lookup(role == null || role.isBlank() ? "untagged" : role, kind, chars);
+            } catch (RuntimeException e) {                                 // noqa
+                // Counting must never fail the lookup it counts.
+            }
+        }
+        if (!RunMeter.enabled()) {
             return;
         }
         String key = (role == null || role.isBlank() ? "untagged" : role) + "\u0000" + kind.name();

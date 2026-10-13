@@ -99,6 +99,31 @@ public class RunSummaryDto implements BinaryPackable {
     public long getTokensUsed() { return tokensUsed; }
     public void setTokensUsed(long v) { this.tokensUsed = v; }
 
+    /**
+     * What the run's model calls cost as the model servers counted them, call by call: input and
+     * output apart, calls to paid servers and to the local server apart. All 0 for a run that
+     * finished before calls were counted one by one. {@code tokensUsed} above is kept as it was.
+     */
+    private long cloudTokensIn;
+    private long cloudTokensOut;
+    private long cloudCalls;
+    private long localTokensIn;
+    private long localTokensOut;
+    private long localCalls;
+
+    public long getCloudTokensIn() { return cloudTokensIn; }
+    public void setCloudTokensIn(long v) { this.cloudTokensIn = v; }
+    public long getCloudTokensOut() { return cloudTokensOut; }
+    public void setCloudTokensOut(long v) { this.cloudTokensOut = v; }
+    public long getCloudCalls() { return cloudCalls; }
+    public void setCloudCalls(long v) { this.cloudCalls = v; }
+    public long getLocalTokensIn() { return localTokensIn; }
+    public void setLocalTokensIn(long v) { this.localTokensIn = v; }
+    public long getLocalTokensOut() { return localTokensOut; }
+    public void setLocalTokensOut(long v) { this.localTokensOut = v; }
+    public long getLocalCalls() { return localCalls; }
+    public void setLocalCalls(long v) { this.localCalls = v; }
+
     @Override
     public void writeToBuffer(com.zeroz4j.api.GrowableBuffer buffer, com.zeroz4j.api.ObjectMapper mapper) {
         BinarySerializer.writeString(buffer, runId);
@@ -114,6 +139,13 @@ public class RunSummaryDto implements BinaryPackable {
         // Appended at the end, same discipline as the pause pair above: both methods, same order.
         BinarySerializer.writeValue(buffer, parkedAtMillis, mapper);
         BinarySerializer.writeString(buffer, parkReason);
+        // Appended at the end again (2026-10-13): tokens per class of server, in and out.
+        BinarySerializer.writeValue(buffer, cloudTokensIn, mapper);
+        BinarySerializer.writeValue(buffer, cloudTokensOut, mapper);
+        BinarySerializer.writeValue(buffer, cloudCalls, mapper);
+        BinarySerializer.writeValue(buffer, localTokensIn, mapper);
+        BinarySerializer.writeValue(buffer, localTokensOut, mapper);
+        BinarySerializer.writeValue(buffer, localCalls, mapper);
     }
 
     @Override
@@ -129,6 +161,12 @@ public class RunSummaryDto implements BinaryPackable {
         this.tokensUsed = SessionSummaryDto.readLong(buffer, mapper);
         this.parkedAtMillis = SessionSummaryDto.readLong(buffer, mapper);
         this.parkReason = BinarySerializer.readString(buffer);
+        this.cloudTokensIn = SessionSummaryDto.readLong(buffer, mapper);
+        this.cloudTokensOut = SessionSummaryDto.readLong(buffer, mapper);
+        this.cloudCalls = SessionSummaryDto.readLong(buffer, mapper);
+        this.localTokensIn = SessionSummaryDto.readLong(buffer, mapper);
+        this.localTokensOut = SessionSummaryDto.readLong(buffer, mapper);
+        this.localCalls = SessionSummaryDto.readLong(buffer, mapper);
     }
 }
 

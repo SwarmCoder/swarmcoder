@@ -188,6 +188,29 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A build's model tokens are counted call by call, input and output apart, paid and local
+  apart, and reported per role.** A build whose planning roles ran on a paid model was reported
+  as "Cloud tokens of this build: 1163749 in, 2369 out"; its architect alone had made 51 calls.
+  A role that works as an agent with tools was charged the growth of its conversation's size,
+  all of it as input, so about one call's input was counted for a whole session and no output
+  at all; the roles that ask one question were charged characters / 4. The session was also
+  counted for whichever run its framework thread had first been created in. Every model call is
+  now recorded with the usage the server returned (role, run, story, task, model, paid or local
+  server, input, output, cached input, time) and stored with the run; the cloud budgets are held
+  against those figures, and only calls to paid servers count. A streamed request now always
+  asks the server for its usage (`stream_options.include_usage`;
+  `-Dswarmcoder.meter.streamUsage=false` withholds it for a server that refuses the option).
+  New read tools `run_report(run_id)` and `project_report()` give the table per role - calls,
+  input tokens, input tokens per call, output tokens, cached input tokens, seconds in calls -
+  with the role's lookups by kind; the delivery evidence says "Paid cloud: N in / N out over K
+  calls; local: N in / N out"; `list_runs`, `run_detail` and `swarm_status` keep `tokensUsed`
+  and add `tokens.paidCloud` and `tokens.local` with `input`, `output` and `calls`. The test
+  harness prints the same table from the same code (it gains a cached-input column). A limit
+  that is passed now stops a run before its next call, not before the call that would pass it;
+  a server on this machine or a private network is local whatever role uses it. Store schema
+  14 (a store from before opens; its runs have no such record and `run_report` says what their
+  stored sessions still show). Section 93 of `docs/DEVELOPER_CORRECTIONS.md`.
+
 - **A build whose application does not start says why, stops at once and can be repaired.**
   At final integration an application that exited in its first seconds was waited for until
   the ready timeout ran out (300 seconds), and the build then stopped with "nothing answered

@@ -184,7 +184,7 @@ public class VllmClient {
         HttpResponse<String> response;
         // One of the server's places while the request is in flight; see chatCompletionStream.
         try (ServerPlaces.Place place = ServerPlaces.enter(baseUrl)) {
-            metered = RunMeter.begin(RunMeter.currentTag(), modelName);
+            metered = RunMeter.begin(RunMeter.currentTag(), modelName, baseUrl, null);
             try {
                 response = httpClient.send(requestBuilder.build(),
                     HttpResponse.BodyHandlers.ofString());
@@ -197,6 +197,7 @@ public class VllmClient {
             }
         }
         if (response.statusCode() != 200) {
+            metered.failed();
             failByStatus(response.statusCode(), response.body());
         }
         // This endpoint answered. Recorded so that a DIFFERENT caller's request timeout on the same
@@ -206,6 +207,8 @@ public class VllmClient {
         JsonNode answered = mapper.readTree(response.body());
         recordUsage(metered, answered);
         JsonNode content = answered.at("/choices/0/message/content");
+        metered.answered(content.isMissingNode() || content.isNull() ? 0 : content.asText().length());
+        metered.done();
         if (content.isMissingNode() || content.isNull()) {
             throw new RuntimeException("vision model returned no content: " + response.body());
         }
@@ -306,8 +309,11 @@ public class VllmClient {
         // A streamed answer carries the server's token counts only when asked to: one last chunk
         // with a "usage" object. Asked ONLY while a run is being metered (see RunMeter), so the
         // request every other caller sends is unchanged; -Dswarmcoder.meter.streamUsage=false
-        // withholds it for a server that refuses the option.
-        if (RunMeter.enabled() && !"false".equals(System.getProperty("swarmcoder.meter.streamUsage"))) {
+        // withholds it for a server that refuses the option. The application records every call
+        // (RunMeter.recordTo), so there it is always asked: without it a streamed answer's tokens
+        // could only be guessed from its length.
+        if ((RunMeter.enabled() || RunMeter.recording())
+                && !"false".equals(System.getProperty("swarmcoder.meter.streamUsage"))) {
             ObjectNode streamOptions = mapper.createObjectNode();
             streamOptions.put("include_usage", true);
             payload.set("stream_options", streamOptions);
@@ -326,13 +332,14 @@ public class VllmClient {
             }
         }
 
+        String body = mapper.writeValueAsString(payload);
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
             .uri(URI.create(baseUrl + "/v1/chat/completions"))
             // Bounds time-to-first-byte (headers), not the streamed body: generous enough
             // for cold prefill, but a dead or wedged endpoint cannot hang a workflow stage.
             .timeout(Duration.ofSeconds(120))
             .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)));
+            .POST(HttpRequest.BodyPublishers.ofString(body));
         
         if (apiKey != null && !apiKey.isEmpty()) {
             requestBuilder.header("Authorization", "Bearer " + apiKey);
@@ -345,7 +352,9 @@ public class VllmClient {
         // counted with them. Nothing, at once, for a server nobody registered (see ServerPlaces).
         // Taken BEFORE the meter starts, so time spent waiting for a place is not time in a call.
         ServerPlaces.Place place = ServerPlaces.enter(baseUrl);
-        RunMeter.Open metered = RunMeter.begin(RunMeter.currentTag(), modelName);
+        RunMeter.Open metered = RunMeter.begin(RunMeter.currentTag(), modelName, baseUrl, null);
+        // The size of what was sent: what the input is estimated from if the server reports none.
+        metered.request(body.length(), -1);
         HttpResponse<InputStream> response;
         try {
             response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -385,10 +394,12 @@ public class VllmClient {
                     boolean more = raw.hasNext();
                     if (!more) {
                         place.close();
+                        metered.done();
                     }
                     return more;
                 } catch (RuntimeException e) {
                     place.close();
+                    metered.done();
                     throw e;
                 }
             }
@@ -400,10 +411,14 @@ public class VllmClient {
         };
         return java.util.stream.StreamSupport.stream(java.util.Spliterators.spliteratorUnknownSize(
                     lines, java.util.Spliterator.ORDERED | java.util.Spliterator.NONNULL), false)
-                .onClose(place::close)
+                .onClose(() -> {
+                    place.close();
+                    metered.done(); // closed before its end, it is still a call that was made
+                })
                 .filter(line -> {
                     if (line.equals("data: [DONE]")) {
                         metered.end(); // the whole answer is in: this is how long the call took
+                        metered.done(); // the chunk with the usage comes before this line
                     }
                     return line.startsWith("data: ") && !line.equals("data: [DONE]");
                 })
@@ -421,6 +436,8 @@ public class VllmClient {
                             // The server has read the prompt and is writing: from here to the end
                             // is generation, which is what a tokens-per-second figure is about.
                             metered.firstToken();
+                            metered.answered((wrote ? delta.asText().length() : 0)
+                                + (reasoned ? thought.asText().length() : 0));
                         }
                         return delta.isMissingNode() || delta.isNull() ? "" : delta.asText();
                     } catch (Exception e) {

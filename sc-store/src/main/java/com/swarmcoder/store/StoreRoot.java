@@ -120,7 +120,13 @@ public final class StoreRoot {
     private Map<UUID, com.swarmcoder.domain.CloudSpendRecord> cloudSpend = new HashMap<>();
     /** The limit that parked each run waiting for a budget answer (schema v13), keyed by run id. */
     private Map<UUID, com.swarmcoder.domain.CloudBreachRecord> cloudBreaches = new HashMap<>();
-    public long schemaVersion = 13;
+    /**
+     * What each run's model calls and lookups cost, per role (schema v14), keyed by run id. Each
+     * value is replaced by a fresh copy on every write. A store from before v14 loads this field
+     * as null; see the accessor.
+     */
+    private Map<UUID, com.swarmcoder.domain.RunUsageRecord> runUsage = new HashMap<>();
+    public long schemaVersion = 14;
 
     /**
      * Class-evolution guard: stores written before schema v2 load this field as null
@@ -289,6 +295,14 @@ public final class StoreRoot {
             cloudBreaches = new HashMap<>();
         }
         return cloudBreaches;
+    }
+
+    /** Model usage per run (v14 null-guard: pre-v14 stores load this field as null). */
+    public synchronized Map<UUID, com.swarmcoder.domain.RunUsageRecord> runUsage() {
+        if (runUsage == null) {
+            runUsage = new HashMap<>();
+        }
+        return runUsage;
     }
 
     /** The last project switched to, or null on a pre-v9 store or a first run. */
