@@ -9547,6 +9547,100 @@ unchanged: `TheReviewerLooksFactsUpBeforeItObjectsTest`,
   fields were added, as the class allows; no old store was opened by the new code.
 - The full test suite was not run; the classes above were.
 
+**Earlier thinking counted as input: measured and remedied (2026-10-13, later the same day).**
+A paid measurement capped in code at 200,000 tokens and 40 calls used 39,860 tokens in 18 calls
+(input 33,978, output 5,882, of it thinking 2,321) on the architect's server (host
+`api.deepseek.com`, model `deepseek-v4-flash`, tool calls in the history natively, thinking
+on). `PaidServerInputCountProbeTest`, off unless `-Dswarmcoder.paidProbe=true`: the real agent
+runtime, two tools that answer a fixed 200 characters, one call a turn.
+
+Baseline, one conversation of 8 calls, the session as it was:
+
+| call | input | output | of it thinking | cached input | request characters | input grew by | call before's output + 50 |
+|---|---|---|---|---|---|---|---|
+| 1 | 477 | 487 | 264 | 0 | 1,082 | | |
+| 2 | 1,014 | 329 | 121 | 768 | 2,012 | 537 | 537 |
+| 3 | 1,393 | 333 | 119 | 1,152 | 2,891 | 379 | 379 |
+| 4 | 1,776 | 312 | 104 | 1,536 | 3,783 | 383 | 383 |
+| 5 | 2,138 | 319 | 111 | 1,920 | 4,662 | 362 | 362 |
+| 6 | 2,507 | 316 | 106 | 2,304 | 5,540 | 369 | 369 |
+| 7 | 2,873 | 316 | 106 | 2,688 | 6,421 | 366 | 366 |
+| 8 | 3,239 | 316 | 106 | 3,072 | 7,301 | 366 | 366 |
+
+Each request was about 880 characters longer than the one before: the model's answer and call
+(about 210 tokens), and a result of 200 characters. Each call's input was the input of the
+call before, plus ALL of that call's output, thinking included, plus 50 - to the token, seven
+times out of seven. By call 8, 931 of 3,239 input tokens were thinking the session had not
+sent.
+
+The same conversation with a new user message begun after the results of call 4 (10 calls):
+
+| call | input | output | of it thinking | cached input | request characters |
+|---|---|---|---|---|---|
+| 1 | 477 | 319 | 132 | 256 | 1,082 |
+| 2 | 846 | 290 | 104 | 640 | 1,879 |
+| 3 | 1,186 | 319 | 132 | 1,024 | 2,676 |
+| 4 | 1,555 | 285 | 99 | 1,408 | 3,475 |
+| 5, ends on a new user message | 1,437 | 311 | 125 | 384 | 4,359 |
+| 6 | 1,798 | 296 | 108 | 1,664 | 5,155 |
+| 7 | 2,144 | 520 | 319 | 1,920 | 5,954 |
+| 8 | 2,714 | 289 | 104 | 2,560 | 6,779 |
+| 9 | 3,053 | 248 | 64 | 2,816 | 7,574 |
+| 10 | 3,351 | 277 | 97 | 3,200 | 8,358 |
+
+Call 5 sent 884 characters more than call 4 and was counted 118 tokens less: 1,555 + 285 + 50
++ about 14 for the message is 1,904, less the 467 tokens of thinking of calls 1 to 4 is 1,437.
+All of it went, and none came back. From call 6 the count grew again by the call before's
+whole output.
+
+*Mechanism.* The server keeps what the model thought before each tool call and puts it back
+into every later request of the same user message, as input, without being sent it. A request
+that ends on a new user message is built without any thinking from before that message. It is
+the server's doing, per user message, and the session cannot remove it any other way. Two
+things the build's figures could not show: nearly all of the counted thinking is input the
+server took from its prompt cache (call 8: 3,072 of 3,239 cached), and the request that begins
+a new message loses that cache from the first answer on (384 cached of 1,437) and has it back
+on the next call.
+
+*Not run.* A request field that tells the server not to keep earlier thinking, and thinking
+switched off: the shape of this model names neither (`ModelShapes`, `deepseek-v4-flash-api`:
+no switch) and the agent runtime's client sends no field of its own, so there was nothing of
+the product's to measure. Outside lookups were off, so the server's documentation was not read.
+
+*What changed.* `CountedNotSent` (sc-runtime), one per session, decides from what the session
+observes and not from a model's or a server's name. The first call fixes what the server counts
+on top of the conversation; on later calls, the server's input count less the conversation as
+sent (estimated) less that is the excess. When it is over the tolerance (1,000 tokens and a
+tenth of what was sent; `swarmcoder.countedNotSent.leastTokens`, `.leastPercent`) and old
+results are tidied on this turn - the call whose cache is lost anyway - or the excess alone is
+over the session's tidy mark, the turn's results are sent with a new user message after them
+("Those are the results of your calls. Go on with your work."), the session's log and its trace
+say so, and the excess is measured afresh from that call. If the count did not fall by at least
+a third of the excess, the server is not one this helps on and the session begins no other. A
+session that never tidies begins none. `-Dswarmcoder.countedNotSent=false` switches it off.
+`RunMeter.Finished` now carries the server's count of a call's thinking tokens
+(`completion_tokens_details.reasoning_tokens`, read by `UsageTap`).
+
+*What it should save.* Not measured on a build. The architect of this section's build tidied
+six times in 55 calls and thought about 1,700 tokens a call: the thinking carried into a call
+would average four calls' worth, not twenty-four, about 1.4 of its 1.66 million such tokens.
+At the server's prices the saving is smaller than in tokens, because what goes was cached input.
+
+*Tests.* `ThinkingTheServerCountsAgainIsLetGoTest`: the real runtime against an endpoint
+scripted to count as measured (a message is begun at the sixth and eleventh request, after the
+turn's results; the count falls there; the total is under three quarters of the same session
+with the behaviour off; no thinking is ever sent), a server that counts only what was sent
+(none begun), a server that goes on counting (one begun, then none), and the rule alone. Run
+once with it: `UsageTapTest`, `ASessionNeverSendsItsThinkingBackTest`,
+`AnAgentSessionsCallsAreCountedOneByOneTest`.
+
+*Not checked.* The first version of the judging rule compared the estimated excess before and
+after and, on this very small conversation, read the fall of 467 tokens as too little (its
+estimate was out by about 40 tokens a call) and stopped. The rule was corrected to judge the
+fall of the server's own count and to measure afresh afterwards; the corrected rule was run
+against the scripted endpoint only, not again against the paid server. Whether the model works
+worse without its earlier thinking after such a message was not measured. No build was run.
+
 ## 95. A role's answers were larger than its questions: 43 whole files, a 30,000-character listing (the stored sessions of the build of section 94, 2026-10-13)
 
 **What was established.** The stored sessions of the build of section 94 were read from a copy

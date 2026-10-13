@@ -167,8 +167,16 @@ public final class RunMeter {
      * @param endpoint    the base address of the server it went to, or null when not said
      * @param answerChars how many characters of answer were read, or -1 when not counted - what
      *                    an output count can be estimated from when the server reported none
+     * @param reasoningTokens how many of the call's output tokens the server says were
+     *                    thinking, or -1 when it did not say
      */
-    public record Finished(Call call, String endpoint, int answerChars) {}
+    public record Finished(Call call, String endpoint, int answerChars, int reasoningTokens) {
+
+        /** A call whose server said nothing of its thinking. */
+        public Finished(Call call, String endpoint, int answerChars) {
+            this(call, endpoint, answerChars, -1);
+        }
+    }
 
     private static volatile Recorder recorder;
 
@@ -216,7 +224,8 @@ public final class RunMeter {
             }
             end();
             try {
-                recorder.finished(begun, new Finished(snapshot(), endpoint, answerChars.get()));
+                recorder.finished(begun,
+                    new Finished(snapshot(), endpoint, answerChars.get(), reasoning));
             } catch (RuntimeException e) {                                 // noqa
                 // Counting must never fail the call it counts.
             }
@@ -275,6 +284,15 @@ public final class RunMeter {
         private volatile int cached = -1;
         private volatile int requestChars = -1;
         private volatile int samePrefixChars = -1;
+
+        private volatile int reasoning = -1;
+
+        /** How many of the answer's tokens the server says were thinking; negative is ignored. */
+        public void reasoning(int reasoningTokens) {
+            if (reasoningTokens >= 0) {
+                reasoning = reasoningTokens;
+            }
+        }
 
         /** How many prompt tokens the server took from its prefix cache; negative is ignored. */
         public void cached(int cachedPromptTokens) {

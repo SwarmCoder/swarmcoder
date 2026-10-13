@@ -188,6 +188,18 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A paid server no longer counts a session's earlier thinking as input for the whole
+  session.** Measured on the hosted model the planning roles ran on: every call was counted
+  for all the model had thought before each earlier tool call of the same user message,
+  although no request contained it - about 6.3 of one build's 15.1 million tokens. A request
+  that ends on a new user message is counted without it. A session now watches the server's
+  input count against what it sent, and when the difference passes the tolerance it begins a
+  new user message after a turn's results: on the turn old results are tidied, or once the
+  difference alone passes the tidy mark. It decides from the counts, not from the model's
+  name; a server that counts only what was sent is left alone, and one that goes on counting
+  is asked once. `-Dswarmcoder.countedNotSent=false` switches it off. Section 94 of
+  `docs/DEVELOPER_CORRECTIONS.md` has the measured table.
+
 - **A role's lookups come back at the size of the question.** In the same paid build the
   architect looked up 487,401 characters: 43 whole files were 248,177 of them, and one listing
   of a framework package was 30,723. Now `read_file` with a bare path answers a long file with
