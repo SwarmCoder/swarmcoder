@@ -116,6 +116,38 @@ strip and the autonomous-mode status line say so. One attempt that still runs ou
 whole server to itself means the piece of work does not fit this server: split it into smaller
 pieces, or start the server with more memory.
 
+### When every attempt at a piece of work fails
+
+The piece of work gets one repair round: new attempts that start from the best of the failed
+ones and are shown what failed. A repair round gets as many attempts as a first round of the
+same piece of work, so the server's places are as full during a repair as during the first
+round. The first of them waits its turn for a place; the others start on places nothing else is
+waiting for.
+
+A repair round is stopped in two cases, and what its attempts had changed is still checked:
+
+- **Nothing has moved.** None of its attempts has changed a file or been shown a result it had
+  not seen before for as long as five turns take on your server, and never under 15 minutes.
+- **It reached its ceiling.** Thirty turns' worth of time on your server, and never under 30
+  minutes. On a server that takes three minutes a turn that is 90 minutes.
+
+How long a turn takes is measured from the build's own attempts. When the ceiling stops attempts
+that were still getting somewhere, the question the build asks says so first, and that more
+time is the remedy: answer `repair` again, and raise the ceiling if you want to. That round does
+not count against the repair rounds a piece of work may be given on an answer.
+
+These are Java system properties, given on the start command (`-Dname=value`); none is needed:
+
+| property | what it sets | default |
+|---|---|---|
+| `swarmcoder.repair.roundMinutes` | the ceiling of a repair round, in minutes, outright | not set: 30 turns' worth, at least 30 minutes |
+| `swarmcoder.repair.roundTurns` | how many turns' worth of time the ceiling is | 30 |
+| `swarmcoder.repair.quietMinutes` | how long a repair round may go with no attempt moving, in minutes, outright | not set: 5 turns' worth, at least 15 minutes |
+| `swarmcoder.repair.instructedRounds` | repair rounds one piece of work may be given on the answer `repair` in one build (at most 4) | 1 |
+
+The build log has one line for every repair round: how many places were free, how many attempts
+were planned and started, their turns, the minutes, and why the round ended.
+
 ### Asking one project, or one story, for a different number
 
 The number of attempts can be set in three places, and the most specific one wins:

@@ -92,9 +92,12 @@ public class SwarmEngineImpl implements SwarmEngine {
 
     private static final Logger log = LoggerFactory.getLogger(SwarmEngineImpl.class);
 
-    /** Repair shape (spec §11.5): up to 2 seeds × 2 workers, one round only — opinionated. */
+    /**
+     * Repair shape (spec §11.5): up to 2 seeds, one round only — opinionated. How many workers
+     * the round gets is not a number of this class: it is what a first round of the task gets,
+     * spread over the seeds (section 91, {@link RepairRound}).
+     */
     private static final int REPAIR_SEEDS = 2;
-    private static final int REPAIR_WORKERS_PER_SEED = 2;
 
     private final VllmClient judgeClient;
     private final ArtifactStore artifactStore;
@@ -1792,21 +1795,67 @@ public class SwarmEngineImpl implements SwarmEngine {
         return brief == null ? null : brief.renderedMarkdown();
     }
 
-    /** Minutes a repair round may run before its unfinished workers are stopped. */
-    static final String REPAIR_ROUND_MINUTES_PROPERTY = "swarmcoder.repair.roundMinutes";
-    static final int DEFAULT_REPAIR_ROUND_MINUTES = 30;
+    /** Minutes a repair round may run at most; set, it replaces the derived ceiling. */
+    static final String REPAIR_ROUND_MINUTES_PROPERTY = RepairRound.ROUND_MINUTES_PROPERTY;
+    static final int DEFAULT_REPAIR_ROUND_MINUTES = RepairRound.ROUND_FLOOR_MINUTES;
 
     /** Milliseconds, so a test can state a ceiling shorter than a minute. */
-    static final String REPAIR_ROUND_MILLIS_PROPERTY = "swarmcoder.repair.roundMillis";
+    static final String REPAIR_ROUND_MILLIS_PROPERTY = RepairRound.ROUND_MILLIS_PROPERTY;
 
+    /** The ceiling of a round in a run whose turns have not been measured yet. */
     static long repairRoundCeilingMillis() {
-        long millis = Long.getLong(REPAIR_ROUND_MILLIS_PROPERTY, 0L);
-        if (millis > 0) {
-            return millis;
+        return RepairRound.ceilingMillis(0);
+    }
+
+    /** How often a running repair round is looked at. Parked on a virtual thread between. */
+    private static final long ROUND_LOOKS_AGAIN_MILLIS = 100;
+
+    /** A task's last repair round in this process, and whether it was given on an instruction. */
+    private record LastRepair(RepairRound.Outcome outcome, boolean instructed) {}
+
+    private final Map<UUID, LastRepair> lastRepairRounds =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * What a stop question about this task says first when the task's last repair round was
+     * stopped by its time limit (section 91); "" otherwise. Taken: it is said once.
+     */
+    public String takeTimeLimitNote(Task task) {
+        LastRepair last = task == null ? null : lastRepairRounds.remove(task.id());
+        return last == null ? "" : BlockedReason.timeLimit(last.outcome(), last.instructed());
+    }
+
+    /**
+     * The first attempt number a new repair worker of {@code seed} can have: after every repair
+     * worker the task already has for that seed, and for an instructed round not before the
+     * numbers such rounds start at. {@link RepairIndex#PER_ATTEMPT} when the seed has no number
+     * left. A worker's index names its branch, so a number is never given twice.
+     */
+    private int firstRepairAttempt(CandidateSolution seed, Set<Integer> taken, Instructed told) {
+        int first = told == null ? 0 : InstructedRepair.firstAttemptOf(told.round());
+        for (int index : taken) {
+            if (RepairIndex.isRepair(index) && RepairIndex.repairOf(index) == seed.workerIndex()) {
+                first = Math.max(first, RepairIndex.attempt(index) + 1);
+            }
         }
-        int minutes = Integer.getInteger(REPAIR_ROUND_MINUTES_PROPERTY,
-            DEFAULT_REPAIR_ROUND_MINUTES);
-        return (minutes <= 0 ? DEFAULT_REPAIR_ROUND_MINUTES : minutes) * 60_000L;
+        return Math.min(first, RepairIndex.PER_ATTEMPT);
+    }
+
+    /** The worker indices this task's candidates already have: archived, or in hand. */
+    private Set<Integer> workerIndicesOf(Task task, List<CandidateSolution> inHand) {
+        Set<Integer> taken = new HashSet<>();
+        for (Lazy<Object> lazy : artifactStore.root().candidateArchives.values()) {
+            if (Lazy.get(lazy) instanceof CandidateSolution candidate
+                    && task.id().equals(candidate.taskId())) {
+                taken.add(candidate.workerIndex());
+            }
+        }
+        for (CandidateSolution candidate : inHand) {
+            if (candidate != null) {
+                taken.add(candidate.workerIndex());
+            }
+        }
+        return taken;
     }
 
     private List<CandidateSolution> repairRound(Task task, UUID runId,
@@ -1814,8 +1863,18 @@ public class SwarmEngineImpl implements SwarmEngine {
                                                 List<WorkerResult> allResults,
                                                 String knowledgeBrief, String guidelines,
                                                 List<GuidelineCheck> guidelineChecks) {
+        lastRepairRounds.remove(task.id());
+        // An instructed round (section 84) and a round after a failed journey are this same
+        // round, with their own evidence.
+        final Instructed told = instructedRepairs.get(task.id());
+        // A seed that passed its own verification and is repaired because a journey
+        // failed has no failure of its own to show: the journey's is the evidence.
+        final String journey = journeyFailures.get(task.id());
+        final Set<Integer> taken = workerIndicesOf(task, failed);
         List<CandidateSolution> seeds = failed.stream()
             .filter(c -> c.verification() != null && c.branch() != null)
+            // A seed whose ten worker numbers are used cannot name another worker.
+            .filter(c -> firstRepairAttempt(c, taken, told) < RepairIndex.PER_ATTEMPT)
             .sorted((a, b) -> {
                 int byAcceptance = Integer.compare(passed(b), passed(a));
                 if (byAcceptance != 0) {
@@ -1826,9 +1885,35 @@ public class SwarmEngineImpl implements SwarmEngine {
             .limit(REPAIR_SEEDS)
             .toList();
         if (seeds.isEmpty()) {
-            log.warn("Task '{}': no repairable candidates (none verified) — skipping repair", task.title());
+            log.warn("Task '{}': no repairable candidates (none verified, or none with a worker "
+                + "number left) — skipping repair", task.title());
             return List.of();
         }
+
+        // How many workers (section 91): what a first round of this task gets, never a number
+        // of the repair round's own - two workers on a server with four places left half of
+        // it empty for a whole round. Dealt out over the seeds in turn.
+        int wanted = dispatcher.repairWorkers(task);
+        int[] firstAttempt = new int[seeds.size()];
+        int[] room = new int[seeds.size()];
+        for (int i = 0; i < seeds.size(); i++) {
+            firstAttempt[i] = firstRepairAttempt(seeds.get(i), taken, told);
+            room[i] = RepairIndex.PER_ATTEMPT - firstAttempt[i];
+        }
+        int[] share = RepairRound.spread(wanted, room);
+        int planned = java.util.Arrays.stream(share).sum();
+        RepairRound round = new RepairRound(
+            told != null ? "on an instruction"
+                : journey != null ? "after a failure at final integration"
+                : "after every candidate failed",
+            wanted, WorkerSlots.shared().ceiling(), WorkerSlots.shared().running(),
+            System::currentTimeMillis);
+        round.planned(planned);
+        log.info("Task '{}': repair round {} gets {} worker(s) - a first round of this task gets "
+            + "{} - from {} seed(s) {}; {} of the machine's places are busy now{}.",
+            task.title(), round.outcome().kind(), planned, wanted, seeds.size(),
+            java.util.Arrays.toString(share), WorkerSlots.shared().running(),
+            WorkerSlots.shared().ceiling() > 0 ? " of " + WorkerSlots.shared().ceiling() : "");
 
         // The phase the box was silent about. A task being repaired is not a task being checked,
         // and the difference is the whole of what the operator was missing.
@@ -1839,29 +1924,32 @@ public class SwarmEngineImpl implements SwarmEngine {
         String workerRulesText = rulesForWorkersOf(task, guidelines);
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<Void>> chained = new ArrayList<>();
-            for (CandidateSolution seed : seeds) {
+            int dispatched = 0;
+            for (int i = 0; i < seeds.size(); i++) {
+                if (share[i] == 0) {
+                    continue;
+                }
+                CandidateSolution seed = seeds.get(i);
                 // Named after the attempt it is fixing, not after its rank in the sort above:
                 // w120 and w121 are the two goes at what w2 got wrong. The rank is an internal
                 // fact and encoding it produced numbers nothing outside this method could read.
-                // An instructed round (section 84) takes the attempt numbers after the ordinary
-                // round's, so its workers' branches are never those of an earlier repair of the
-                // same seed - which may itself be a seed of this round.
-                Instructed told = instructedRepairs.get(task.id());
-                int indexOffset = RepairIndex.of(seed.workerIndex(),
-                    told == null ? 0 : InstructedRepair.firstAttemptOf(told.round()));
-                // A seed that passed its own verification and is repaired because a journey
-                // failed has no failure of its own to show: the journey's is the evidence.
-                String journey = journeyFailures.get(task.id());
+                // The numbers follow those of every earlier repair of the same seed, so a
+                // worker's branch is never that of an earlier one.
+                int indexOffset = RepairIndex.of(seed.workerIndex(), firstAttempt[i]);
                 String evidence =
                     journey != null ? journey : failureEvidence(seed) + reviewEvidence(task);
                 for (CompletableFuture<WorkerResult> future : dispatcher.dispatchRepair(
                         task, runId, seed.branch(),
                         told == null ? evidence : InstructedRepair.brief(told.text()) + evidence,
-                        REPAIR_WORKERS_PER_SEED, indexOffset, signal, executor, knowledgeBrief,
-                        workerRulesText)) {
+                        share[i], indexOffset, signal, executor, knowledgeBrief,
+                        workerRulesText, round, dispatched)) {
                     chained.add(future.thenAccept(result -> {
+                        if (result == null) {
+                            return; // never started: its round was over first
+                        }
                         allResults.add(result);
                         CandidateSolution candidate = verifyOne(task, runId, result, guidelineChecks);
+                        round.verdict();
                         repaired.add(candidate);
                         if (candidate.state() == CandidateState.SURVIVED) {
                             // First green repair wins the wave; siblings die SUPERSEDED.
@@ -1869,32 +1957,70 @@ public class SwarmEngineImpl implements SwarmEngine {
                         }
                     }));
                 }
+                dispatched += share[i];
             }
             CompletableFuture<Void> all =
                 CompletableFuture.allOf(chained.toArray(new CompletableFuture[0]));
-            // A safety stop, not a budget (live run 74: two repair rounds ran 74 and 66 minutes).
-            // At the ceiling the workers still going are stopped; each one's change, if it made
-            // one, is verified like any other stopped worker's (StoppedWork), so the join below
-            // still waits for every verdict.
-            long ceiling = repairRoundCeilingMillis();
-            try {
-                all.get(ceiling, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (java.util.concurrent.TimeoutException late) {
-                if (signal.stop(KillReason.ROUND_TIME_UP)) {
-                    log.warn("Task '{}': the repair round has run {} minutes, its ceiling. The "
-                        + "repair workers still going are stopped, and whatever each has "
-                        + "changed is verified. (-D{} changes the ceiling.)", task.title(),
-                        ceiling / 60_000, REPAIR_ROUND_MINUTES_PROPERTY);
-                    com.swarmcoder.inference.RunMeter.span("repair round stopped at its ceiling|"
-                        + task.id(), System.currentTimeMillis());
+            // Two safety stops, neither a budget (live run 74: two repair rounds ran 74 and 66
+            // minutes; section 91: a fixed 30 minutes stopped workers that were getting
+            // somewhere). The round is stopped when none of its workers has made progress for
+            // a stretch, or at its ceiling; both follow the time a turn takes in this run. The
+            // workers still going are stopped; each one's change, if it made one, is verified
+            // like any other stopped worker's (StoppedWork), so the join below still waits for
+            // every verdict.
+            TurnPace pace = TurnPace.forRun(runId);
+            while (true) {
+                try {
+                    all.get(ROUND_LOOKS_AGAIN_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    break;
+                } catch (java.util.concurrent.TimeoutException notYet) {
+                    long perTurn = pace.millisPerTurn();
+                    RepairRound.Ended why = round.due(perTurn);
+                    if (why == null) {
+                        continue;
+                    }
+                    round.stopped(why, perTurn);
+                    boolean timeUp = why == RepairRound.Ended.TIME_LIMIT;
+                    if (signal.stop(timeUp ? KillReason.ROUND_TIME_UP : KillReason.ROUND_QUIET)) {
+                        RepairRound.Outcome now = round.outcome();
+                        log.warn("Task '{}': the repair round {} ({} minutes; a turn takes {} "
+                            + "seconds in this run). The {} repair worker(s) still going are "
+                            + "stopped after {} turn(s), and whatever each has changed is "
+                            + "verified.{} (-D{} sets the ceiling in minutes, -D{} the stretch "
+                            + "without progress.)", task.title(),
+                            timeUp ? "has run as long as it may, its ceiling"
+                                : "has had no worker make progress for as long as it may",
+                            RepairRound.Outcome.minutes(now.limitMillis()), perTurn / 1000,
+                            now.stoppedWorkers(), now.stoppedTurns(),
+                            now.stoppedWorkers() == 0 ? ""
+                                : now.progressing() ? " They were still making progress."
+                                : " They had stopped making progress.",
+                            REPAIR_ROUND_MINUTES_PROPERTY, RepairRound.QUIET_MINUTES_PROPERTY);
+                        com.swarmcoder.inference.RunMeter.span(
+                            (timeUp ? "repair round stopped at its ceiling|"
+                                : "repair round stopped for no progress|")
+                            + task.id(), System.currentTimeMillis());
+                    }
+                    break;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    round.stopped(RepairRound.Ended.INTERRUPTED, pace.millisPerTurn());
+                    signal.stop(KillReason.SUPERSEDED);
+                    break;
+                } catch (java.util.concurrent.ExecutionException e) {
+                    break; // surfaced by the join below, as it always was
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                signal.stop(KillReason.SUPERSEDED);
-            } catch (java.util.concurrent.ExecutionException e) {
-                // surfaced by the join below, as it always was
             }
             all.join();
+        } finally {
+            // Said for every round, however it ended (section 91): places, workers, turns,
+            // minutes and why.
+            RepairRound.Outcome outcome = round.finished(!filterSurvived(repaired).isEmpty());
+            lastRepairRounds.put(task.id(), new LastRepair(outcome, told != null));
+            log.info(outcome.line(task.title()));
+            com.swarmcoder.inference.RunMeter.span("repair round ended|" + outcome.ended() + "|"
+                + task.id() + "|" + outcome.started() + " of " + outcome.planned()
+                + " workers|" + outcome.turns() + " turns", System.currentTimeMillis());
         }
         log.info("Task '{}': repair produced {}/{} survivors", task.title(),
             filterSurvived(repaired).size(), repaired.size());
@@ -2436,6 +2562,8 @@ public class SwarmEngineImpl implements SwarmEngine {
         log.info("Task '{}': repair round {} on an instruction ({} allowed per task per run)",
             task.title(), round, InstructedRepair.limit());
         instructedRepairs.put(task.id(), new Instructed(instruction, round));
+        lastRepairRounds.remove(task.id());
+        boolean chosen = false;
         try {
             if (archivedWinner(task) != null) {
                 // The question the run stopped on: the one that offered `repair`, or the one
@@ -2444,12 +2572,32 @@ public class SwarmEngineImpl implements SwarmEngine {
                     : task.screenVerdictOfferedBy();
                 Decision asked = question == null ? null
                     : artifactStore.root().decisions.get(question);
-                return repairAfterFinalIntegration(task, runId,
+                chosen = repairAfterFinalIntegration(task, runId,
                     asked == null ? "" : asked.briefMarkdown()) != null;
+            } else {
+                chosen = repairBlockedOnInstruction(task, runId);
             }
-            return repairBlockedOnInstruction(task, runId);
+            return chosen;
         } finally {
             instructedRepairs.remove(task.id());
+            // A round that only its time limit stopped is not one of the rounds a task may be
+            // given on an instruction (section 91): its workers were still making progress,
+            // so the same instruction with more time is the remedy and must stay on offer.
+            LastRepair last = lastRepairRounds.get(task.id());
+            if (!chosen && last != null && last.outcome().onlyTheTimeLimit()
+                    && task.instructedRepairRounds() == round) {
+                task.setInstructedRepairRounds(round - 1);
+                try {
+                    artifactStore.storeChanged(task).get();
+                } catch (Exception e) {
+                    log.warn("Failed to persist task '{}' instructed repair rounds: {}",
+                        task.title(), e.getMessage());
+                }
+                log.info("Task '{}': repair round {} on an instruction was stopped by its time "
+                    + "limit while its workers were still making progress. It is not counted: "
+                    + "the task has had {} of the {} such round(s) it may be given.",
+                    task.title(), round, round - 1, InstructedRepair.limit());
+            }
         }
     }
 
@@ -3713,6 +3861,14 @@ public class SwarmEngineImpl implements SwarmEngine {
                                       String headline, boolean repairable, boolean retestable) {
         StringBuilder brief = new StringBuilder();
         brief.append(headline);
+        // A round stopped by its time limit says so first (section 91): more time, not a
+        // different instruction, is then the remedy. Only when a candidate in the evidence
+        // was stopped that way - a fact of the candidates, not of the wording.
+        LastRepair last = lastRepairRounds.get(task.id());
+        if (last != null && evidence.stream().anyMatch(candidate -> candidate != null
+                && candidate.killReason() == KillReason.ROUND_TIME_UP)) {
+            brief.append(BlockedReason.timeLimit(last.outcome(), last.instructed()));
+        }
         // The reason, once and before the list of workers (section 83): a reader shown only
         // the first lines must still learn on what the task failed.
         brief.append(BlockedReason.of(task, evidence, headline));

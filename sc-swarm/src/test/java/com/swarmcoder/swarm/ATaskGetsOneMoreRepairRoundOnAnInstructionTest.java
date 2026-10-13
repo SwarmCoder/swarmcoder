@@ -93,7 +93,7 @@ class ATaskGetsOneMoreRepairRoundOnAnInstructionTest {
     @Test
     void aBlockedTaskIsRepairedByARoundThatIsToldWhatToChange() throws Exception {
         UUID runId = UUID.randomUUID();
-        initRepo(runId);
+        initRepo(runId, SERVICE, SCREEN);
         Task service = task("Create the books service and its screen",
             "Create " + SERVICE + ".", Set.of(SERVICE, SCREEN),
             List.of(new AcceptanceCriterion(UUID.randomUUID(), "the service exists",
@@ -161,6 +161,97 @@ class ATaskGetsOneMoreRepairRoundOnAnInstructionTest {
         }
     }
 
+    /**
+     * Section 91. Live supervised build, 2026-10-12/13: a repair round seeded from a task's one
+     * chosen candidate started two workers on a server with four places and nothing else
+     * running. A round gets what a first round of the task gets - here four, all from the one
+     * seed, no two alike - and a second round of the same seed takes the numbers after them.
+     */
+    @Test
+    void aRoundFromOneSeedGetsAsManyWorkersAsAFirstRoundAndNoTwoAlike() throws Exception {
+        UUID runId = UUID.randomUUID();
+        initRepo(runId, SCREEN);
+        Task service = task("Create the books screen", "Create " + SCREEN + ".",
+            Set.of(SERVICE, SCREEN),
+            List.of(new AcceptanceCriterion(UUID.randomUUID(), "the screen exists",
+                "swarm.accept.BooksServiceTest#proves")),
+            List.of(SERVICE_TEST), 4);
+
+        // Every worker writes the screen, and only the screen.
+        java.util.function.Function<String, FakeVllm.Reply> screenOnly = conversation ->
+            conversation.contains("code-review judge")
+                ? FakeVllm.Reply.text("{\"score\": 0.9, \"rationale\": \"does the job\"}")
+                : conversation.contains("wrote " + SCREEN)
+                    ? FakeVllm.Reply.toolCall("report_done", "{\"summary\": \"done\"}")
+                    : FakeVllm.Reply.toolCall("write_file", new ObjectMapper().createObjectNode()
+                        .put("path", SCREEN).put("content", "<p>books</p>\n").toString());
+        try (FakeVllm fake = new FakeVllm(screenOnly);
+             ArtifactStore store = new ArtifactStore(storeDir)) {
+            UUID graphId = UUID.randomUUID();
+            TaskGraph graph = new TaskGraph(graphId, 1, null, List.of(service), List.of());
+            Run run = new Run(runId, WorkflowKind.GREENFIELD, RunState.EXECUTING,
+                null, null, null, graphId, null, Instant.now(), null);
+            run.setBaseCommit(base);
+            run.setAcceptanceTestsCommit(testsCommit);
+            store.append(() -> {
+                store.root().taskGraphs.put(graphId, graph);
+                store.root().runs.put(runId, run);
+                return null;
+            }).get();
+            SwarmEngineImpl engine = new SwarmEngineImpl(
+                new VllmClient(fake.baseUrl(), "", "fake-judge", true), store,
+                new InferenceScheduler(8, 1024 * 1024 * 1024, 1024), new KoogAgentRuntime(),
+                new ModelProfileRegistry(List.of(new ModelProfile("fake",
+                    new AgentRuntime.ModelEndpoint(fake.baseUrl(), "", "fake-vllm", 65536),
+                    ModelProfile.Kind.WORKER, 0, 0))),
+                new GitService(repoDir), content -> null, new CloudGate(1_000_000, null));
+            engine.setWaveGate((asked, wave, waveBase) -> null);
+
+            engine.executeRun(run);
+            assertThat(service.state()).isEqualTo(TaskState.SELECTED);
+            CandidateSolution chosen = candidatesOf(store, service).stream()
+                .filter(c -> c.state() == com.swarmcoder.domain.CandidateState.SELECTED)
+                .findFirst().orElseThrow();
+            Set<Integer> before = workerIndicesOf(store, service);
+
+            // The workers write the file the seed already has, so none of them passes, none
+            // supersedes the others, and every one the round planned runs to its end.
+            assertThat(engine.repairAfterFinalIntegration(service, runId, "nothing reaches it"))
+                .isNull();
+
+            List<CandidateSolution> round = candidatesOf(store, service).stream()
+                .filter(c -> !before.contains(c.workerIndex())).toList();
+            assertThat(round).as("four workers, not two: what a first round of the task gets")
+                .hasSize(4)
+                .allSatisfy(c -> assertThat(RepairIndex.repairOf(c.workerIndex()))
+                    .isEqualTo(chosen.workerIndex()));
+            assertThat(round.stream().map(c -> RepairIndex.attempt(c.workerIndex())))
+                .containsExactlyInAnyOrder(0, 1, 2, 3);
+            assertThat(round.stream().map(c -> c.sampling().temperature() + " "
+                    + c.sampling().personaId()).distinct())
+                .as("no two workers of one seed are alike").hasSize(4);
+
+            assertThat(engine.repairAfterFinalIntegration(service, runId, "still nothing"))
+                .isNull();
+            assertThat(candidatesOf(store, service).stream()
+                    .filter(c -> !before.contains(c.workerIndex()))
+                    .map(c -> RepairIndex.attempt(c.workerIndex())))
+                .as("the second round of the same seed takes the numbers after the first's")
+                .containsExactlyInAnyOrder(0, 1, 2, 3, 4, 5, 6, 7);
+        }
+    }
+
+    private static List<CandidateSolution> candidatesOf(ArtifactStore store, Task task) {
+        List<CandidateSolution> candidates = new ArrayList<>();
+        for (var lazy : store.root().candidateArchives.values()) {
+            CandidateSolution candidate = (CandidateSolution) Lazy.get(lazy);
+            if (task.id().equals(candidate.taskId())) {
+                candidates.add(candidate);
+            }
+        }
+        return candidates;
+    }
+
     @Test
     void theSettingCapsTheRoundsAndTheirWorkersHaveIndicesOfTheirOwn() {
         Task task = task("T", "", Set.of(SERVICE), List.of(), List.of());
@@ -215,7 +306,7 @@ class ATaskGetsOneMoreRepairRoundOnAnInstructionTest {
 
     // --- the repository --------------------------------------------------------------------------
 
-    private void initRepo(UUID runId) throws Exception {
+    private void initRepo(UUID runId, String... needs) throws Exception {
         git("init -q");
         Files.writeString(repoDir.resolve("README.md"), "hello\n");
         Files.createDirectories(repoDir.resolve("src/main"));
@@ -237,7 +328,11 @@ class ATaskGetsOneMoreRepairRoundOnAnInstructionTest {
         base = git("rev-parse HEAD").strip();
 
         git("checkout -q -b swarm/tests/" + runId);
-        write(SERVICE_TEST, "package swarm.accept;\n// needs: " + SERVICE + "\n// needs: " + SCREEN
+        StringBuilder needed = new StringBuilder();
+        for (String path : needs) {
+            needed.append("\n// needs: ").append(path);
+        }
+        write(SERVICE_TEST, "package swarm.accept;" + needed
             + "\nclass BooksServiceTest { void proves() {} }\n");
         git("add -A");
         git("-c user.email=t@t -c user.name=t commit -q -m tests");
@@ -299,10 +394,17 @@ class ATaskGetsOneMoreRepairRoundOnAnInstructionTest {
 
     private static Task task(String title, String instructions, Set<String> writeSet,
                              List<AcceptanceCriterion> criteria, List<String> authoredTestPaths) {
+        return task(title, instructions, writeSet, criteria, authoredTestPaths, 2);
+    }
+
+    private static Task task(String title, String instructions, Set<String> writeSet,
+                             List<AcceptanceCriterion> criteria, List<String> authoredTestPaths,
+                             int workersPerTask) {
         Task task = new Task(UUID.randomUUID(), 1, title, instructions, writeSet, Set.of(),
             criteria, "src/test/java/swarm", null,
             new TokenBudget(32000, 4000, 100000, 12),
-            new SwarmPolicy(2, false, 0.2, 0.8, List.of("minimal-diff")), TaskState.READY);
+            new SwarmPolicy(workersPerTask, false, 0.2, 0.8, List.of("minimal-diff")),
+            TaskState.READY);
         task.setAuthoredTestPaths(authoredTestPaths);
         return task;
     }

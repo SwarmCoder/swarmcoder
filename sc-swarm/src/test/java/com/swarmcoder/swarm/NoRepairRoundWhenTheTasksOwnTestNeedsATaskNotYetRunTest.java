@@ -157,8 +157,9 @@ class NoRepairRoundWhenTheTasksOwnTestNeedsATaskNotYetRunTest {
     @Test
     void theStopReasonIsAppendedAndSaysNothingAboutTheWorkersCode() {
         assertThat(KillReason.PLAN_FAULT.ordinal())
-            .as("appended last: the enum is stored by ordinal")
-            .isEqualTo(KillReason.values().length - 1);
+            .as("it keeps its number: the enum is stored by ordinal, and later reasons "
+                + "(section 91) are appended after it")
+            .isEqualTo(17);
         assertThat(KillReason.ROUND_TIME_UP.ordinal()).isEqualTo(KillReason.PLAN_FAULT.ordinal() - 1);
         assertThat(KillReason.PLAN_FAULT.sentence()).contains("the plan gave its task a test");
         assertThat(StoppedWork.worthVerifying(KillReason.PLAN_FAULT, "diff --git a/x b/x\n+x\n"))

@@ -587,14 +587,39 @@ public class SwarmDispatcher {
     }
 
     /**
-     * Repair wave (spec §11.5): small swarms seeded from failed candidates' branches, the
-     * failure evidence baked into the (per-seed) shared prefix. Returns futures so the
-     * engine can verify repairs as they complete and supersede the rest on first survivor.
+     * How many workers a repair round of this task gets: what a first round of the task gets
+     * now (section 91) - the task's workers per task, cut to what its model server is currently
+     * allowed when that is fewer. Never a number of its own.
+     */
+    int repairWorkers(Task task) {
+        List<ModelProfile> workers = profiles.workers();
+        String family = workers.isEmpty() ? "unconfigured" : workers.get(0).id();
+        AdaptiveConcurrency.Plan plan = concurrency.plan(family);
+        SwarmPolicy policy = task.swarmPolicy();
+        int perTask = policy == null ? com.swarmcoder.domain.SwarmSizing.BUILT_IN_WORKERS_PER_TASK
+            : policy.n();
+        return waveSize(task, perTask, plan, plan);
+    }
+
+    /**
+     * Repair wave (spec §11.5): workers seeded from one failed candidate's branch, the failure
+     * evidence baked into the (per-seed) shared prefix. Returns futures so the engine can verify
+     * repairs as they complete and supersede the rest on first survivor.
+     *
+     * <p>A future's result is null for a worker that was never started: the round was stopped,
+     * or a repair passed, before a place came free for it.
+     *
+     * @param n            how many workers this seed gets
+     * @param indexOffset  the first one's worker index; the others follow it
+     * @param round        the round these workers belong to, which is told what they do
+     * @param firstOrdinal how many workers of the round were dispatched before these: the
+     *                     round's very first worker waits its turn for a place, every other one
+     *                     starts on a place nothing else is waiting for
      */
     public List<CompletableFuture<WorkerResult>> dispatchRepair(
             Task task, UUID runId, String seedBranch, String failureEvidence,
             int n, int indexOffset, GroupSignal signal, ExecutorService executor,
-            String knowledgeBrief, String projectRules) {
+            String knowledgeBrief, String projectRules, RepairRound round, int firstOrdinal) {
         List<ModelProfile> workers = profiles.workers();
         String family = workers.isEmpty() ? "unconfigured" : workers.get(0).id();
 
@@ -616,40 +641,56 @@ public class SwarmDispatcher {
         List<CompletableFuture<WorkerResult>> futures = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             final int idx = indexOffset + i; // unique per seed — worker index names the branch
-            final SamplingConfig cfg = new SamplingConfig(family, 0.4 + 0.4 * i, idx * 100L,
-                "defensive-edges", "full-files");
+            final int ordinal = firstOrdinal + i;
+            // No two workers of one seed are alike: see RepairRound.sampling.
+            final SamplingConfig cfg = RepairRound.sampling(family, i, idx);
+            LoggerFactory.getLogger(SwarmDispatcher.class)
+                .info("  repair worker {} -> model={} temperature={} persona={}{}", idx,
+                    cfg.modelProfileId(),
+                    String.format(java.util.Locale.ROOT, "%.2f", cfg.temperature()),
+                    cfg.personaId(),
+                    ordinal == 0 ? "" : " (starts only on a place nothing else is waiting for)");
             futures.add(CompletableFuture.supplyAsync(() -> {
                 ModelProfile profile = profiles.find(cfg.modelProfileId());
                 AgentRuntime.ModelEndpoint endpoint = endpointFor(profile, plan);
-                WorkerLoop loop = new WorkerLoop(task, cfg, idx, scheduler, gitService,
-                    agentRuntime, endpoint, runId, bundle,
-                    seedBranch, signal, apiLookup, sandbox, protectedPaths);
-                loop.withReferenceRoots(referenceRoots);
-                loop.withAcceptanceSource(acceptanceSourceOf(runId));
-                loop.withOtherTasks(otherTasksFor(runId, task, idx));
-                loop.withExpert(expertFor(runId, idx, bundle, task), frameworkPackages);
                 String label = "Repair worker " + idx + " of '" + task.title() + "'";
-                // Repair workers count against the same ceiling as first-wave ones: they are the
-                // same kind of load, and a repair wave arriving while other tasks are still going
-                // is exactly the moment the machine is fullest. And against the same per-server
-                // count: the engine sizes a repair wave itself, so its workers are not cut down,
-                // but they queue for the server's places and get the room those places carry.
-                // A repair is work its task depends on - the task has nothing that passed - so
-                // like a first candidate it waits its turn, and a spare candidate of some other
-                // task gives its place up when it has to wait.
-                WorkerResult result;
+                // Repair workers count against the same ceiling as first-wave ones, and against
+                // the same per-server count, and they take places as a first round's candidates
+                // do (section 91): the round's first worker is work its task depends on - the
+                // task has nothing that passed - so it waits its turn, and a spare candidate of
+                // some other task gives its place up when it has to wait. Every further one
+                // starts on a place that would otherwise be empty, and waits its turn only when
+                // no worker of its round is running.
                 Places places;
                 try {
-                    places = waitingItsTurn(cfg.modelProfileId(), label, reservedTokens(endpoint));
+                    places = repairPlaces(round, ordinal, idx, signal, cfg.modelProfileId(),
+                        label, reservedTokens(endpoint));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(label + " was interrupted waiting for a place", e);
                 }
+                if (places == null) {
+                    com.swarmcoder.inference.RunMeter.span("repair worker not started|"
+                        + task.id() + "|" + idx, System.currentTimeMillis());
+                    LoggerFactory.getLogger(SwarmDispatcher.class).info("{} was not started: "
+                        + "its round was over before a place came free for it.", label);
+                    return null;
+                }
+                WorkerResult result;
                 try {
+                    WorkerLoop loop = new WorkerLoop(task, cfg, idx, scheduler, gitService,
+                        agentRuntime, endpoint, runId, bundle,
+                        seedBranch, signal, apiLookup, sandbox, protectedPaths);
+                    loop.withReferenceRoots(referenceRoots);
+                    loop.withAcceptanceSource(acceptanceSourceOf(runId));
+                    loop.withOtherTasks(otherTasksFor(runId, task, idx));
+                    loop.withExpert(expertFor(runId, idx, bundle, task), frameworkPackages);
+                    loop.withTurnWatch(progressed -> round.turn(idx, progressed));
                     loop.withLease(places.lease);
                     result = loop.run();
                 } finally {
                     places.close();
+                    round.sessionOver(idx);
                 }
                 concurrency.completed(cfg.modelProfileId(), label,
                     result.candidate().killReason(), result.contextDeath(), plan.concurrency());
@@ -657,6 +698,46 @@ public class SwarmDispatcher {
             }, executor));
         }
         return futures;
+    }
+
+    /**
+     * The places one repair worker runs on, or null when its round was over before it got any.
+     * The worker is counted as started on the round before the places are handed back.
+     */
+    private Places repairPlaces(RepairRound round, int ordinal, int workerIndex,
+                                GroupSignal signal, String profileId, String label,
+                                int reservedTokens) throws InterruptedException {
+        while (true) {
+            if (signal.isSuperseded()) {
+                if (ordinal == 0) {
+                    round.firstPlaced();
+                }
+                return null;
+            }
+            Places places = null;
+            try {
+                if (ordinal == 0) {
+                    places = waitingItsTurn(profileId, label, reservedTokens);
+                } else if (round.isFirstPlaced()) {
+                    places = round.nobodyInSession()
+                        ? waitingItsTurn(profileId, label, reservedTokens)
+                        : onlyIfFree(profileId, reservedTokens);
+                }
+                if (places != null) {
+                    if (signal.isSuperseded()) {
+                        places.close();
+                        return null;
+                    }
+                    round.started(workerIndex);
+                    return places;
+                }
+            } finally {
+                if (ordinal == 0) {
+                    round.firstPlaced(); // placed, or never going to be
+                }
+            }
+            Thread.sleep(SPARE_LOOKS_AGAIN_MILLIS);
+        }
     }
 
     /**

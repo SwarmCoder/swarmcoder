@@ -42,12 +42,16 @@ public final class InstructedRepair {
 
     /**
      * The most the setting can allow. A repair worker's index names its branch, and the scheme
-     * has ten indices for each repaired attempt ({@link RepairIndex}): two for the ordinary
-     * round and two for each instructed one.
+     * has ten indices for each repaired attempt ({@link RepairIndex}). A round takes the
+     * numbers after those the seed's earlier repairs have, and a seed with none left is not a
+     * seed any more (section 91), so this is a bound on the setting, not on the numbers.
      */
     public static final int MOST = 4;
 
-    /** Workers started from each seed in one round; the indices one round uses. */
+    /**
+     * The fewest indices of a seed an instructed round leaves to the ordinary round before it.
+     * How many workers a seed really gets follows the task's workers per task (section 91).
+     */
     public static final int WORKERS_PER_SEED = 2;
 
     private InstructedRepair() {
@@ -65,8 +69,9 @@ public final class InstructedRepair {
     }
 
     /**
-     * The first attempt number of an instructed round, for {@link RepairIndex#of}: after the
-     * ordinary round's two, and after every earlier instructed round's.
+     * The first attempt number an instructed round may use, for {@link RepairIndex#of}: after
+     * the ordinary round's first two. The engine starts later when the seed's earlier repairs
+     * have already taken that number.
      *
      * @param round which instructed round this is, counted from one
      */

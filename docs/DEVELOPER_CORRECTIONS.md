@@ -8927,3 +8927,149 @@ declared libraries only, one writer), `APageUnderTestLoadsFromThisComputerOnlyTe
 - The tie between a candidate and a declared library is by name parts. A library whose
   published name shares no whole part with its coordinates is not found; one that happens to
   be made of the same parts is accepted.
+
+## 91. A repair round left half the server empty, and a fixed clock stopped workers that were getting somewhere (live supervised build, 2026-10-12/13)
+
+**Observed.** One local model server whose measured best is four conversations at once
+(CLAUDE.md section 0), `swarm.maxConcurrentWorkers: 4`, `swarm.nPerTask: 4`.
+
+1. A repair round given on the answer `repair` (section 84) logged "Repair wave for task '...'
+   n=2" once and ran two workers while nothing else was running. Two of the server's four
+   places were empty for the whole round. Ordinary repair rounds were seen with four workers in
+   some rounds and two in others.
+2. That round was stopped by "the repair round has run 30 minutes, its ceiling": both workers
+   KILLED/ROUND_TIME_UP after 8 and 11 turns in 29 minutes, about three minutes a turn with
+   client-side compiles, "0/2 survivors", and the failing screen stayed. The same instruction
+   with `-Dswarmcoder.repair.roundMinutes=90` succeeded. The workers were not stuck.
+
+**Cause** (lines as they were before this change).
+
+1. The number of repair workers was two constants multiplied, and the second factor was the
+   number of seeds the round happened to have.
+   `SwarmEngineImpl.java:96-97`: `REPAIR_SEEDS = 2`, `REPAIR_WORKERS_PER_SEED = 2`.
+   `SwarmEngineImpl.java:1817-1827`: the seeds are the task's candidates that have a branch and
+   a verification report, best first, at most two. `SwarmEngineImpl.java:1857-1861`: each seed
+   gets `REPAIR_WORKERS_PER_SEED` workers. So:
+
+   | repair path | seeds | workers before |
+   |---|---|---|
+   | after every candidate failed, two or more candidates verified | 2 | 4 |
+   | after every candidate failed, one candidate verified | 1 | 2 |
+   | after a failed journey or a refusal at final integration (`SwarmEngineImpl.java:2307`, `List.of(chosen)`) | 1 | 2 |
+   | on an instruction, task has a chosen candidate (`SwarmEngineImpl.java:2447`, the same call) | 1 | 2 |
+   | on an instruction, task BLOCKED (`SwarmEngineImpl.java:2483`) | 1 or 2 | 2 or 4 |
+
+   Nothing in it read the task's workers per task, the ceiling on workers at once or what else
+   was running. And every repair worker waited its turn for a place
+   (`SwarmDispatcher.java:643`), so a round of four also stood in the queue ahead of other
+   tasks' spare candidates.
+2. `SwarmEngineImpl.java:1797`: `DEFAULT_REPAIR_ROUND_MINUTES = 30`, applied at
+   `SwarmEngineImpl.java:1879-1883` as `all.get(ceiling)` and `signal.stop(ROUND_TIME_UP)`. It
+   was written after live run 74 (rounds of 74 and 66 minutes that changed nothing) for a
+   server that took well under a minute a turn. It measured nothing: at three minutes a turn
+   it is ten turns. The stop for workers that change nothing is a different one and already
+   existed (`EarlyKillEnforcer.IDLE_TURNS_BEFORE_KILL`, five turns in a row).
+3. The question after such a round was the ordinary one. Nothing in it said the clock had
+   stopped the workers, and the round was counted against
+   `-Dswarmcoder.repair.instructedRounds` (default 1), so the answer `repair` was no longer
+   taken.
+
+**What changed.**
+
+1. *How many workers* (`RepairRound`, `SwarmDispatcher.repairWorkers`,
+   `SwarmEngineImpl.repairRound`). In every path the round gets what a first round of the task
+   gets under the same settings: the task's workers per task (story, project or
+   `swarm.nPerTask`), cut to what the model server is currently allowed when that is fewer -
+   the same `SwarmDispatcher.waveSize` a first round is sized with. They are dealt out over
+   the seeds in turn (`RepairRound.spread`).
+
+   | repair path, workers per task 4 | before | now |
+   |---|---|---|
+   | two seeds | 4 (2 + 2) | 4 (2 + 2) |
+   | one seed (final integration, instruction with a chosen candidate, one verified candidate) | 2 | 4 |
+
+   With workers per task 2 a round of two seeds gets 2 (1 + 1) where it had 4; with 8 it gets
+   8. The number is the task's, never the repair round's own.
+2. *Places* (`SwarmDispatcher.repairPlaces`). As for a first round's candidates
+   (`CandidateGroup`): the round's first worker waits its turn and may ask a spare candidate
+   of another task for its place; every further one starts only on a place that is free with
+   nothing waiting, and looks again every 200 ms; when no worker of the round is in a session
+   the next one waits its turn. A worker that has no place when a repair passes or the round
+   is stopped is not started.
+3. *No twins* (`RepairRound.sampling`). The first two workers of a seed are what they were:
+   temperature 0.4 and 0.8, persona `defensive-edges`. Each further pair has the same two
+   temperatures and the next persona of `WorkerPersonas.DEFAULT_ROTATION`; after that
+   temperature 0.6 with each persona. Twelve different, and a seed can have ten.
+4. *Worker numbers.* A worker's index names its branch and a seed has ten
+   (`RepairIndex.PER_ATTEMPT`). A round now takes the numbers after those the seed's earlier
+   repairs have (`SwarmEngineImpl.firstRepairAttempt`), an instructed round not before
+   `InstructedRepair.firstAttemptOf`. A candidate with no number left is not a seed.
+5. *The limit follows progress* (`RepairRound.due`). A running round is looked at every 100 ms
+   and stopped
+   - when no worker of it has made progress for a stretch: `IDLE_TURNS_BEFORE_KILL` (5) turns'
+     worth of time, at least 15 minutes; `-Dswarmcoder.repair.quietMinutes` sets it outright.
+     Workers are stopped `ROUND_QUIET` (appended to `KillReason`);
+   - or at its ceiling: `-Dswarmcoder.repair.roundTurns` (30) turns' worth of time, at least
+     30 minutes; `-Dswarmcoder.repair.roundMinutes` sets it outright as before. Workers are
+     stopped `ROUND_TIME_UP` as before.
+
+   Progress is what a worker's own stall stop already counts, per turn
+   (`WorkerToolbox.progressMarks`): a file changed, or a tool result not seen before - a build
+   or a test run that came out differently is one. A verification verdict for a worker of the
+   round counts too. A turn's length is the mean of the turns the run's workers have taken in
+   this process (`TurnPace`, recorded in `WorkerLoop`'s turn guard for first-round and repair
+   workers alike); with none measured the floors apply. The ceiling counts from the start of
+   the round's first worker. In both cases each stopped worker's change is verified as before
+   (`StoppedWork`). Thirty turns: the stopped round needed 90 minutes at three minutes a turn.
+6. *The question says so* (`BlockedReason.timeLimit`). When the ceiling stopped the round,
+   the stop question starts with "The repair round was stopped by the time limit (M minutes)
+   after N turns" and either "the workers were still making progress. More time, not a
+   different instruction, is the remedy" or "the workers had stopped making progress". A
+   stopped worker was still making progress when it has a turn that counted as progress and
+   the last one is more recent than the quiet stretch. For a BLOCKED task it is in the task's
+   question; for a task with a chosen candidate it is in the FINAL_INTEGRATION question
+   (`GreenfieldWorkflow.repairTimeLimitNotes`).
+7. *Not counted* (`SwarmEngineImpl.repairOnInstruction`). An instructed round that nothing
+   passed in, that the ceiling stopped, and whose stopped workers were still making progress
+   is taken off the task's count again, so `repair` stays on offer.
+8. *One line per round* in the log, and a `repair round ended|...` mark on the run meter:
+   "Repair round for task '...' (on an instruction): places 4 of 4 free when it was planned;
+   workers 4 started of 4 planned (a first round of this task gets 4); 37 turn(s) in 31.2
+   minute(s); ended because a repaired candidate passed verification; ...".
+
+**Stored differently.** `KillReason.ROUND_QUIET` is appended after `PLAN_FAULT`; no other
+constant moved and no field was added. The record of a round is kept in memory only.
+
+**Tests.** New: `ARepairRoundFillsThePlacesAndFollowsProgressTest` (sc-swarm: the spread over
+seeds; ten different workers of one seed; the ceiling and the quiet stretch from a measured
+turn, their floors and settings; the live round's shape is not stopped at 30 minutes; what a
+round stopped at its ceiling says; a round whose workers had gone quiet; the stop for no
+progress; the appended reason). Extended: `ATaskGetsOneMoreRepairRoundOnAnInstructionTest`
+(real engine with scripted workers: a round from one chosen candidate starts four workers, no
+two alike, and a second round of the same seed takes the next four numbers). Run with them:
+`RepairHasSafetyStopsTest`, `NoChangeRepairSaysSoTest`, `WorkerSlotsTest`, `SparePlacesTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model server, a container or a live build. The before and
+  after figures CLAUDE.md section 0 asks for are the worker counts above; how full the server
+  is during a repair round has not been measured since.
+- A round stopped by either limit inside the real engine has no test: it needs workers that
+  take real time. `RepairRound` is tested with a clock of its own, and the count being given
+  back, the two notes in the questions and the stop for no progress are tested there and
+  through `BlockedReason`, not through `repairOnInstruction` or the workflow.
+- A repair worker that waits for a free place while other tasks run, and one that is never
+  started, have no test: the tests run with no ceiling on places.
+- A further repair worker, once started, is not asked to give its place up for another
+  task's first candidate, as a first round's spare candidate is.
+- How many times `repair` can be answered when every round is stopped by its ceiling while
+  progressing is not bounded by a count. Each such round needs an answer, and a seed has ten
+  worker numbers.
+- The one repair round after a failed journey (`journeyRepairAttempted`) is still one. When
+  its ceiling stopped it the question says so and offers `repair`; it is not given again by
+  itself.
+- The mean time per turn includes a worker's first turn, which reads the opening, and is not
+  kept across a restart: a round that starts first after a restart has the floors until its
+  own turns are measured.
+- Opening a store written before `ROUND_QUIET` was appended was not done in a test; the
+  constant is last.
