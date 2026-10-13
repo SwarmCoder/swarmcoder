@@ -93,6 +93,22 @@ public class ChecksAlreadyProved {
      * on. Appended last and false on every record stored before it existed.
      */
     private boolean beforeTheRun;
+    /**
+     * True when the task needs no change at all (section 89): the product itself ran the task's
+     * acceptance tests on the tree the task starts from and they passed, every test file the
+     * task claims was among them, the contracts it was to deliver are in that tree, and it
+     * claims no journey. No worker is started for such a task; it has no chosen candidate, its
+     * tests are run again on the merged tree at final integration, and its checks are proved by
+     * that run. {@link #waveBase} is the tree the measurement was made on. Appended last and
+     * false on every record stored before it existed.
+     */
+    private boolean noChangeNeeded;
+    /**
+     * When the measurement behind {@link #noChangeNeeded} was made, as a clause that follows
+     * "measured": "before any worker was started", or "after every worker of the task had left
+     * the tree unchanged". Appended last; null on every record stored before it existed.
+     */
+    private String measuredWhen;
 
     public ChecksAlreadyProved() {}
 
@@ -146,6 +162,24 @@ public class ChecksAlreadyProved {
     public boolean isBeforeTheRun() { return beforeTheRun; }
     public void setBeforeTheRun(boolean beforeTheRun) { this.beforeTheRun = beforeTheRun; }
 
+    public boolean noChangeNeeded() { return noChangeNeeded; }
+    public boolean isNoChangeNeeded() { return noChangeNeeded; }
+    public void setNoChangeNeeded(boolean noChangeNeeded) { this.noChangeNeeded = noChangeNeeded; }
+    public String measuredWhen() { return measuredWhen; }
+    public String getMeasuredWhen() { return measuredWhen; }
+    public void setMeasuredWhen(String measuredWhen) { this.measuredWhen = measuredWhen; }
+
+    /** The record of a task that needs no change: what passed, on which tree, measured when. */
+    public static ChecksAlreadyProved noChangeNeeded(Instant at, String tree, List<String> tests,
+                                                     List<String> checks, int passed,
+                                                     String measuredWhen) {
+        ChecksAlreadyProved record =
+            new ChecksAlreadyProved(at, tree, tests, checks, passed, false, "", false);
+        record.setNoChangeNeeded(true);
+        record.setMeasuredWhen(measuredWhen);
+        return record;
+    }
+
     /**
      * The sentence the run log, the task record and the judge's brief all use, so one fact is
      * worded one way wherever it is read.
@@ -153,6 +187,9 @@ public class ChecksAlreadyProved {
     public String describe(String taskTitle) {
         if (beforeTheRun) {
             return describeBeforeTheRun(taskTitle);
+        }
+        if (noChangeNeeded) {
+            return describeNoChangeNeeded(taskTitle);
         }
         StringBuilder sb = new StringBuilder("The checks of task '")
             .append(taskTitle == null ? "?" : taskTitle)
@@ -176,6 +213,28 @@ public class ChecksAlreadyProved {
         return sb.toString();
     }
 
+    private String describeNoChangeNeeded(String taskTitle) {
+        StringBuilder sb = new StringBuilder("Task '")
+            .append(taskTitle == null ? "?" : taskTitle)
+            .append("' needs no change: ")
+            .append(tests().isEmpty() ? passed + " acceptance test(s)" : String.join(", ", tests()))
+            .append(" passed on ").append(waveBase == null ? "the tree the task starts from"
+                : waveBase + ", the tree the task starts from")
+            .append(". The product ran them itself")
+            .append(measuredWhen == null || measuredWhen.isBlank() ? "" : ", " + measuredWhen)
+            .append("; no worker's word is taken for it.");
+        if (!checks().isEmpty()) {
+            sb.append("\nThe check(s) it answers for:");
+            for (String check : checks()) {
+                sb.append("\n  - ").append(check);
+            }
+        }
+        sb.append("\n\nNothing is built for this task and it has no chosen candidate. Its "
+            + "test(s) are run again on the merged tree at final integration, and its check(s) "
+            + "are proved by that run.");
+        return sb.toString();
+    }
+
     private String describeBeforeTheRun(String taskTitle) {
         StringBuilder sb = new StringBuilder("The checks of task '")
             .append(taskTitle == null ? "?" : taskTitle)
@@ -192,8 +251,11 @@ public class ChecksAlreadyProved {
         }
         sb.append("\n\nThis is not a fault and it does not stop the run. Nothing has to be built "
             + "to turn these tests green; they stay in the run and must still pass on the merged "
-            + "tree. If the task is still built, the tests do not separate its candidates, so the "
-            + "judge decides on whether the diff delivers the task's instructions.");
+            + "tree. ").append(noChangeNeeded
+                ? "Every contract the task was to deliver is in that tree too, so nothing is "
+                    + "built for it: no worker is started and it has no chosen candidate."
+                : "If the task is still built, the tests do not separate its candidates, so the "
+                    + "judge decides on whether the diff delivers the task's instructions.");
         if (remainingProof != null && !remainingProof.isBlank()) {
             sb.append('\n').append(remainingProof);
         }
@@ -209,6 +271,8 @@ public class ChecksAlreadyProved {
             && userFacing == that.userFacing
             && nothingDeliveredYet == that.nothingDeliveredYet
             && beforeTheRun == that.beforeTheRun
+            && noChangeNeeded == that.noChangeNeeded
+            && Objects.equals(measuredWhen, that.measuredWhen)
             && Objects.equals(provedAt, that.provedAt)
             && Objects.equals(waveBase, that.waveBase)
             && Objects.equals(tests(), that.tests())

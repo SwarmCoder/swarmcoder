@@ -404,9 +404,20 @@ public final class SupervisorDesk implements SupervisorService {
         if (run == null) {
             return facts.toString();
         }
+        // A story the existing code already meets (section 89): said first, because what is
+        // being accepted is then tests and no code.
+        boolean unchanged = run.nothingToBuild();
+        if (unchanged) {
+            facts.append(" No change was needed: the code the build started from already meets "
+                + "every check of this story, so the delivered commit changes no code. "
+                + "Accepting adds the story's acceptance tests, and its journeys if it has "
+                + "any, to the delivery branch, where they keep guarding the behaviour.");
+        }
         if (run.acceptanceTestsPassed() != null) {
             facts.append(' ').append(run.acceptanceTestsPassed())
-                .append(" acceptance test(s) passed on the merged tree.");
+                .append(unchanged ? " acceptance test(s) pass on the delivery branch as the "
+                    + "build found it, with those tests added."
+                    : " acceptance test(s) passed on the merged tree.");
         }
         if (run.journeysMade() != null) {
             if (run.journeysMade() == 0) {

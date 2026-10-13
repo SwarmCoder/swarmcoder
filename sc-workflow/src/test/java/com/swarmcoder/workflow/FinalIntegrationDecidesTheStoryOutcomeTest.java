@@ -162,6 +162,104 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
         assertThat(run.parkReason()).contains("FINAL_INTEGRATION failed");
     }
 
+    /**
+     * Section 89, live supervised build of 2026-10-13: a story ended with its one check UNKNOWN,
+     * its run ABORTED, no question and no reason on the story; the supervisor was shown "Its
+     * last build ended at the ABORTED stage". The story now carries which check has no proof,
+     * why no result exists for it and what can be done, and the run asks the same.
+     */
+    @Test
+    void aStoryWhoseCheckHasNoResultStopsWithItsReasonAndAsks() throws Exception {
+        Fixture fx = build(Shape.NO_CANDIDATE);
+
+        awaitEnded(fx.store, fx.runId);
+
+        Story story = fx.store.getStory(fx.storyId);
+        assertThat(story.state()).isEqualTo(StoryState.BLOCKED);
+        assertThat(story.waitingReason())
+            .startsWith("S1 was not delivered. 1 of 1 check(s) had no proof at final integration:")
+            .contains("UNKNOWN - " + CHECK)
+            .contains("Why no result exists: task '" + TASK_TITLE + "' (stuck) has no chosen "
+                + "candidate and was not measured as needing no change, so nothing of it was "
+                + "merged and its acceptance test(s) [" + RATING_TEST + "] were not run on a "
+                + "merged tree.")
+            .contains("What can be done: this build has ended")
+            .contains("send_back");
+        assertThat(fx.store.root().runs.get(fx.runId).state()).isEqualTo(RunState.ABORTED);
+        assertThat(fx.store.root().decisions.values().stream()
+                .filter(d -> fx.runId.equals(d.runId())
+                    && d.state() == com.swarmcoder.domain.DecisionState.PENDING)
+                .map(com.swarmcoder.domain.Decision::briefMarkdown))
+            .as("the same reason is asked as a question of the run")
+            .containsExactly(story.waitingReason());
+    }
+
+    /**
+     * Section 89: a story whose every check the existing code already meets, found only while
+     * it was being built, is delivered for a verdict with no code change. The commit it offers
+     * is the run's tests commit, so accepting it adds the story's tests to the delivery branch.
+     */
+    @Test
+    void aStoryNoTaskHadToChangeGoesToReviewAndDeliversItsTests() throws Exception {
+        Fixture fx = build(Shape.NO_CHANGE);
+
+        awaitEnded(fx.store, fx.runId);
+
+        Story story = fx.store.getStory(fx.storyId);
+        assertThat(story.state()).isEqualTo(StoryState.REVIEW);
+        assertThat(story.waitingReason()).isNull();
+        Run run = fx.store.root().runs.get(fx.runId);
+        assertThat(run.state()).isEqualTo(RunState.DELIVERED);
+        assertThat(run.nothingToBuild()).isTrue();
+        assertThat(run.acceptanceTestsPassed()).isEqualTo(1);
+        assertThat(run.journeysMade()).isZero();
+        assertThat(story.integrationCommit())
+            .as("the tests commit: the story's acceptance tests and no code")
+            .isEqualTo(git("rev-parse swarm/tests/" + fx.runId).strip());
+        assertThat(git("ls-tree -r --name-only " + story.integrationCommit()))
+            .contains(RATING_TEST);
+    }
+
+    /**
+     * Section 89: a task ended BLOCKED with its question raised and nothing waited on it, so the
+     * engine came back as if the stage were over. The run went on to final integration, which
+     * withdrew the question and ended the story. It stops behind the question now.
+     */
+    @Test
+    void aTaskThatStoppedWithAQuestionStopsTheRunBehindItInsteadOfEndingIt() throws Exception {
+        Fixture fx = build(Shape.BLOCKS_WHILE_BUILDING);
+
+        awaitEnded(fx.store, fx.runId);
+
+        Run run = fx.store.root().runs.get(fx.runId);
+        assertThat(run.state()).as("not ended, and not at final integration")
+            .isEqualTo(RunState.EXECUTING);
+        assertThat(run.parkedAt()).isNotNull();
+        assertThat(run.parkReason())
+            .startsWith("EXECUTING stopped behind ['" + TASK_TITLE + "'], which has no chosen "
+                + "candidate. Its own question, already raised, says why");
+        assertThat(fx.store.root().decisions.values().stream()
+                .filter(d -> fx.runId.equals(d.runId()))
+                .map(com.swarmcoder.domain.Decision::state))
+            .as("the task's question is still open: one question, not withdrawn")
+            .containsExactly(com.swarmcoder.domain.DecisionState.PENDING);
+        assertThat(fx.store.getStory(fx.storyId).state())
+            .as("the story is still being built").isEqualTo(StoryState.RUNNING);
+    }
+
+    private static void awaitEnded(ArtifactStore store, UUID runId) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline) {
+            Run run = store.root().runs.get(runId);
+            if (run != null && (run.state() == RunState.DELIVERED
+                    || run.state() == RunState.ABORTED || run.parkedAt() != null)) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("run never ended");
+    }
+
     // --- the fixture ----------------------------------------------------------------------------
 
     private record Fixture(ArtifactStore store, UUID projectId, UUID storyId, UUID graphId,
@@ -173,6 +271,19 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
      *                      acceptance test still fails and integration comes up red.
      */
     private Fixture build(boolean winnerFixesIt) throws Exception {
+        return build(winnerFixesIt ? Shape.GREEN : Shape.RED);
+    }
+
+    /**
+     * GREEN and RED are the two shapes above. NO_CANDIDATE: the task ended with nothing chosen
+     * and nothing measured. NO_CHANGE: the product measured the task as needing no change - its
+     * test needs only what the start tree already holds - and nothing was chosen either.
+     */
+    private enum Shape { GREEN, RED, NO_CANDIDATE, NO_CHANGE, BLOCKS_WHILE_BUILDING }
+
+    private Fixture build(Shape shape) throws Exception {
+        boolean winnerFixesIt = shape == Shape.GREEN;
+        boolean hasWinner = shape == Shape.GREEN || shape == Shape.RED;
         UUID runId = UUID.randomUUID();
         String base = initRepo();
 
@@ -182,7 +293,7 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
             package swarm.accept;
             // needs: %s
             class BookRatingTest { void proves() {} }
-            """.formatted(RATING_FILE));
+            """.formatted(shape == Shape.NO_CHANGE ? "README.md" : RATING_FILE));
         git("add -A");
         git("-c user.email=t@t -c user.name=t commit -q -m tests");
         String testsCommit = git("rev-parse HEAD").strip();
@@ -194,19 +305,27 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
             List.of(new AcceptanceCriterion(UUID.randomUUID(), CHECK,
                 "swarm.accept.BookRatingTest#proves")),
             ACCEPT_DIR, null, null,
-            new SwarmPolicy(1, false, 0.2, 0.2, List.of()), TaskState.DONE);
+            new SwarmPolicy(1, false, 0.2, 0.2, List.of()),
+            shape == Shape.NO_CANDIDATE ? TaskState.BLOCKED : TaskState.DONE);
         task.setAuthoredTestPaths(List.of(RATING_TEST));
+        if (shape == Shape.NO_CHANGE) {
+            task.setChecksAlreadyProved(com.swarmcoder.domain.ChecksAlreadyProved.noChangeNeeded(
+                Instant.now(), base, List.of("swarm.accept.BookRatingTest#proves"), List.of(), 1,
+                "after every worker of the task had left the tree unchanged"));
+        }
 
         // The repair candidate's winning branch.
         String winnerBranch = "swarm/" + taskId + "/2";
         git("checkout -q -b " + winnerBranch);
-        if (winnerFixesIt) {
+        if (!hasWinner) {
+            // nothing was chosen: the branch stays at the start tree and is never merged
+        } else if (winnerFixesIt) {
             write(RATING_FILE, "package client;\nclass Rating {}\n");
         } else {
             write("src/main/client/Placeholder.java", "package client;\nclass Placeholder {}\n");
         }
         git("add -A");
-        git("-c user.email=t@t -c user.name=t commit -q -m repair");
+        git("-c user.email=t@t -c user.name=t commit -q --allow-empty -m repair");
         git("checkout -q master");
 
         // The repair candidate's OWN pre-merge verification: it survived selection, but never ran
@@ -257,13 +376,17 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
         store.saveStory(story);
         store.append(() -> {
             store.root().taskGraphs.put(graphId, graph);
-            store.root().candidateArchives.put(winnerId, Lazy.Reference(winner));
-            store.root().candidateArchives.put(dead1.id(), Lazy.Reference(dead1));
-            store.root().candidateArchives.put(dead2.id(), Lazy.Reference(dead2));
+            if (hasWinner) {
+                store.root().candidateArchives.put(winnerId, Lazy.Reference(winner));
+                store.root().candidateArchives.put(dead1.id(), Lazy.Reference(dead1));
+                store.root().candidateArchives.put(dead2.id(), Lazy.Reference(dead2));
+            }
             return null;
         }).get();
 
-        Run run = new Run(runId, WorkflowKind.GREENFIELD, RunState.FINAL_INTEGRATION,
+        boolean building = shape == Shape.BLOCKS_WHILE_BUILDING;
+        Run run = new Run(runId, WorkflowKind.GREENFIELD,
+            building ? RunState.EXECUTING : RunState.FINAL_INTEGRATION,
             projectId, story.id(), null, graphId, null, Instant.now(),
             new RunReport(runId, "deliver S1"));
         run.setBaseCommit(base);
@@ -276,7 +399,26 @@ class FinalIntegrationDecidesTheStoryOutcomeTest {
             throw new UnsupportedOperationException("no agents at this stage");
         };
         VllmClient client = new VllmClient(llm.baseUrl(), "", "test-model", true);
-        WorkflowEngine engine = new WorkflowEngine(unusedRuntime, r -> r, client, store,
+        // The stand-in for the swarm engine. While building, it does what the real one does
+        // for a task nothing survived of: the task is BLOCKED, its question is raised, and the
+        // engine comes back as if the stage were over.
+        com.swarmcoder.runtime.SwarmEngine swarm = !building ? r -> r : r -> {
+            task.setState(TaskState.BLOCKED);
+            UUID question = UUID.randomUUID();
+            try {
+                store.append(() -> {
+                    store.root().decisions.put(question, new com.swarmcoder.domain.Decision(
+                        question, r.id(), com.swarmcoder.domain.DecisionKind.BLOCKED_TASK,
+                        "Task BLOCKED after swarm + repair round: '" + TASK_TITLE + "'",
+                        com.swarmcoder.domain.DecisionState.PENDING, null, Instant.now()));
+                    return null;
+                }).get();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return r;
+        };
+        WorkflowEngine engine = new WorkflowEngine(unusedRuntime, swarm, client, store,
             new CloudGate(0, null), repo, new CloudRoles(null, null, null), new GitService(repo));
         engine.advance(run);
 

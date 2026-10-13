@@ -504,6 +504,66 @@ class SupervisorDeskTest {
         }
     }
 
+    /**
+     * Section 89: a story the existing code already meets comes back with no code change. The
+     * evidence says so first, and says what accepting it adds.
+     */
+    @Test
+    void aDeliveryThatNeededNoChangeSaysSoAndWhatAcceptingAdds(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store, false, false, null);
+            Story story = delivered(store, "S5", "Keep books across restarts");
+            UUID runId = story.runIds().get(0);
+            store.append(() -> {
+                Run run = store.root().runs.get(runId);
+                run.setNothingToBuild(true);
+                run.setAcceptanceTestsPassed(1);
+                run.setJourneysMade(4);
+                run.setJourneysFailed(0);
+                return null;
+            }).get();
+
+            AttentionItem item = desk.nextAttention(0);
+
+            assertThat(item.kind()).isEqualTo("DELIVERY");
+            assertThat(item.evidence())
+                .contains("No change was needed: the code the build started from already meets "
+                    + "every check of this story, so the delivered commit changes no code.")
+                .contains("Accepting adds the story's acceptance tests, and its journeys if it "
+                    + "has any, to the delivery branch")
+                .contains("1 acceptance test(s) pass on the delivery branch as the build found "
+                    + "it, with those tests added.")
+                .contains("4 journey(s) were made in a browser, 0 failed.")
+                .doesNotContain("passed on the merged tree");
+            assertThat(item.chars()).isLessThanOrEqualTo(AttentionItem.MAX_CHARS);
+        }
+    }
+
+    /**
+     * Section 89: a story that stopped at final integration shows why, not "Its last build
+     * ended at the ABORTED stage".
+     */
+    @Test
+    void aStoppedStoryShowsTheReasonItsBuildEndedOn(@TempDir Path dir) throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store, false, false, null);
+            Story stopped = story("S5", "Keep books across restarts", StoryState.BLOCKED);
+            UUID runId = persistRun(store, stopped.id(), RunState.ABORTED, null);
+            stopped.setRunIds(new ArrayList<>(List.of(runId)));
+            stopped.setWaitingReason("S5 was not delivered. 1 of 1 check(s) had no proof at "
+                + "final integration:\n- R5:C1 UNKNOWN - books are still there after a restart "
+                + "[no acceptance results were reported]");
+            store.saveStory(stopped);
+
+            AttentionItem item = desk.nextAttention(0);
+
+            assertThat(item.kind()).isEqualTo("STORY_STOPPED");
+            assertThat(item.evidence()).startsWith("S5 was not delivered. 1 of 1 check(s)")
+                .contains("R5:C1 UNKNOWN").doesNotContain("ended at the ABORTED stage");
+        }
+    }
+
     private Story delivered(ArtifactStore store, String key, String title) {
         return delivered(store, story(key, title, StoryState.REVIEW));
     }

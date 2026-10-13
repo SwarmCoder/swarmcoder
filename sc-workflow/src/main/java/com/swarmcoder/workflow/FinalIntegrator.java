@@ -310,7 +310,13 @@ public class FinalIntegrator {
         }
         Map<UUID, CandidateSolution> winners = winnersByTask(graph);
         if (winners.isEmpty()) {
-            if (run.nothingToBuild() && !graph.tasks().isEmpty()) {
+            // Every task was measured as needing no change, at the red check or after its
+            // workers left the tree unchanged (section 89): the same delivery without a build
+            // as a plan whose every task was dropped at TEST_AUTHORING.
+            boolean noTaskNeedsAChange = !graph.tasks().isEmpty()
+                && graph.tasks().stream().allMatch(Task::needsNoChange);
+            if ((run.nothingToBuild() || noTaskNeedsAChange) && !graph.tasks().isEmpty()) {
+                run.setNothingToBuild(true);
                 return verifyTheUnchangedTree(run, graph);
             }
             log.info("Run {}: no selected candidates — nothing to integrate", run.id());
@@ -389,12 +395,24 @@ public class FinalIntegrator {
             // tests against the merged tree, and it travels out on the Result so the delivery
             // decision reads THIS, not a candidate's own pre-merge, verified-alone report.
             VerificationReport[] lastVerification = new VerificationReport[1];
+            // Tasks that need no change (section 89) have no winner to merge. Their tests
+            // become due where the task stands in the plan's order, and are run with the next
+            // merge's verification - or once more after the last merge when none follows.
+            List<Task> unchangedNotYetVerified = new ArrayList<>();
             // One LSP server for the whole integration worktree (spec §S6), reused across the
             // per-merge verifications and closed when integration finishes. NONE by default.
             try (LspService lsp = lspFactory.create(worktree)) {
                 for (List<Task> wave : SwarmEngineImpl.topologicalWaves(graph)) {
                     for (Task task : wave) {
                         CandidateSolution winner = winners.get(task.id());
+                        if (winner == null && task.needsNoChange()) {
+                            testsDue.addAll(task.authoredTestPaths());
+                            unchangedNotYetVerified.add(task);
+                            log.info("Run {}: task '{}' needed no change - nothing is merged for "
+                                + "it; its acceptance test(s) {} are due on the merged tree from "
+                                + "here on", run.id(), task.title(), task.authoredTestPaths());
+                            continue;
+                        }
                         if (winner == null) {
                             log.warn("Run {}: task '{}' has no winner — integrating without it",
                                 run.id(), task.title());
@@ -491,9 +509,44 @@ public class FinalIntegrator {
                                 + task.title() + "':\n" + outcome.failure(), outcome.report());
                         }
                         markTaskDone(task);
+                        unchangedNotYetVerified.forEach(this::markTaskDone);
+                        unchangedNotYetVerified.clear();
                         log.info("Run {}: merged '{}' ({}) — integration verified green",
                             run.id(), task.title(), winner.branch());
                     }
+                }
+                if (!unchangedNotYetVerified.isEmpty() && testsCommit != null) {
+                    // No merge followed them, so nothing has run their tests on the merged tree.
+                    Task last = unchangedNotYetVerified.get(unchangedNotYetVerified.size() - 1);
+                    gitService.restoreTree(worktree, ".");
+                    AcceptanceOverlay.Outcome placed = AcceptanceOverlay.reduceTo(gitService,
+                        worktree, last.acceptanceTestDir(), testsCommit, testsDue);
+                    List<String> claimed = new ArrayList<>();
+                    for (Task task : unchangedNotYetVerified) {
+                        for (String check : store.describeClaimedChecks(task)) {
+                            if (!claimed.contains(check)) {
+                                claimed.add(check);
+                            }
+                        }
+                    }
+                    List<String> titles = unchangedNotYetVerified.stream().map(Task::title).toList();
+                    log.info("Run {}: the merged tree is verified once more with the acceptance "
+                        + "tests of the task(s) that needed no change {} — {}", run.id(), titles,
+                        placed.describe());
+                    VerifyOutcome outcome = verifyIntegration(worktree, last, lsp,
+                        com.swarmcoder.verify.VerificationBaseline.of(
+                            run.baselineFailingTests()), claimed);
+                    if (outcome.report() != null) {
+                        lastVerification[0] = outcome.report();
+                    }
+                    if (outcome.failure() != null) {
+                        return new Result(integrationBranch, "Verification failed on the merged "
+                            + "tree with the acceptance tests of the task(s) that needed no "
+                            + "change " + titles + ". They passed on the tree those tasks "
+                            + "started from; with every chosen change merged they do not:\n"
+                            + outcome.failure(), outcome.report());
+                    }
+                    unchangedNotYetVerified.forEach(this::markTaskDone);
                 }
             }
             // Every winner is merged and the merged tree is green. One thing no test of it can
@@ -846,6 +899,8 @@ public class FinalIntegrator {
         Task first = graph.tasks().get(0);
         try {
             openIntegration(run, integrationBranch, worktree);
+            // Every journey the tree holds, read before the protected trees are reduced.
+            Map<String, String> journeysHeld = journeysIn(worktree, graph);
             String testsCommit = run.acceptanceTestsCommit();
             Set<String> testsDue = new java.util.LinkedHashSet<>(run.alreadySatisfiedTests());
             for (Task task : graph.tasks()) {
@@ -877,6 +932,14 @@ public class FinalIntegrator {
                     + "verification of that unchanged tree (" + run.verificationPoint()
                     + ") with the acceptance tests " + testsDue + " did NOT pass, so the story "
                     + "is not delivered:\n" + outcome.failure(), outcome.report());
+            }
+            // Journeys are made on an unchanged tree as on a merged one (section 89): the
+            // delivery's evidence says how many were made and how many failed, and a journey
+            // this story claims that fails shows the story is not met by the code as it stands.
+            Result journeys = makeJourneys(run, graph, worktree, integrationBranch, journeysHeld,
+                outcome.report(), Map.of());
+            if (journeys != null) {
+                return journeys;
             }
             for (Task task : graph.tasks()) {
                 markTaskDone(task);

@@ -8685,3 +8685,169 @@ warning in the delivery's evidence). Run with them: `AFailedJourneyGoesBackToIts
 - Opening a store written before the new fields. EclipseStore maps added fields on its own and
   `Task` has gained fields this way before; no old store was opened in a test.
 - The Console's question card was not opened to see the new paragraph or options.
+
+## 89. A story the existing code already met ended stopped, with no reason and no question (live supervised build, 2026-10-13)
+
+**What was observed.** The fifth story of a project asked that books and ratings still be
+there after a restart. The stories delivered before it already store everything durably. The
+plan had one task.
+
+- TEST_AUTHORING. The first acceptance test did not compile ("cannot find symbol"), a broken
+  test. Its author corrected it and the log said "they are red again".
+- EXECUTING. Three of four workers ended without a change, each reporting that the existing
+  code met the check and that the acceptance test passed. The fourth was stopped for trying to
+  write a test file of its own. The task was BLOCKED.
+- FINAL_INTEGRATION. "criterion R5:C1 UNKNOWN ... [no acceptance results were reported]", the
+  story BLOCKED with "did not satisfy every criterion", the run ABORTED. No question was open.
+  The supervisor was shown "Its last build ended at the ABORTED stage" and `send_back`.
+
+**What was established.**
+
+1. *The corrected test was red by the product's own run, and no worker ran it.* The red check
+   of the correction ran the acceptance stage on the start tree and it failed; the author's
+   own check of the draft said "1 acceptance test(s) fail on the pre-change tree". What it
+   failed with was not written to the log, so the reason is not on record. The corrected test
+   registers a supplier of the store as the bean where every delivered test of that project
+   registers the store itself; whether that is what failed it was not measured. A worker's
+   checkout is cut from the start tree and does not hold the task's acceptance test
+   (`SwarmEngineImpl.placeClaimedTests` places it at verification): the one worker whose test
+   command was not piped through `tail` got exit 1 for it, a worker's listing of the test
+   tree showed the five earlier tests only, and two writes of a scratch test were refused.
+   "The acceptance test passes" was a claim, not a measurement.
+2. *A worker that changes nothing was never verified.* `WorkerLoop.java:574` records an empty
+   diff as `FAILED` with no report, and `SwarmEngineImpl.verifyFinished` (`:3693`) returns
+   such a candidate as it is. So nothing ran the task's test on the unchanged tree. With no
+   report there is no seed for the repair round (`:1765`, "no repairable candidates (none
+   verified)"), the task is BLOCKED (`:1687`) and its question (`:1697`) lists the workers
+   and gives no reason, because `BlockedReason.of` has no report to read.
+3. *The run went past the blocked task.* In `executeWaves` a task with no winner is recorded
+   as one others must wait for only when a wave follows (`:622` leaves the loop for the last
+   wave before `:628`), so the engine returned as if the stage were over.
+   `GreenfieldWorkflow.java:1299` went on to FINAL_INTEGRATION, and the change of state
+   withdrew the task's question (`:489`, `withdrawStaleDecisions`). `FinalIntegrator.java:312`
+   found no chosen candidate and returned with no verification. `recordDelivery` (`:2250`)
+   read every criterion as UNKNOWN, set the story BLOCKED without a reason on it (`:2258`),
+   logged "did not satisfy every criterion" (`:2304`), raised nothing, and the run was saved
+   ABORTED (`:1401`). `SupervisorDesk.lastRunLine` (`:1101`) then had only the run's state to
+   show.
+4. *The "already green" mechanisms were never reached.* They are entered when the red check
+   is green (`GreenfieldWorkflow.java:5878`); this test was red. Two further gaps were found
+   on the way: a corrected test that passes on the start tree stopped the build whatever it
+   measured (`:6080`, `:6177`, `:6311`, "proves nothing about the work"), where the same
+   result from a first-written test is recorded as already satisfied; and a task recorded as
+   already satisfied that something else builds on was still dispatched, and a worker that
+   found nothing to change failed it (section 44, "Open").
+
+(Line numbers are those before this change.)
+
+**What changed.**
+
+1. *A task that needs no change* (`ChecksAlreadyProved.noChangeNeeded`, `Task.needsNoChange`).
+   The record holds the tests that passed, the tree they passed on and when the product ran
+   them. It is written where the product has measured the task's acceptance tests green on
+   the tree the task starts from, every contract the task delivers is in that tree
+   (`ContractDelivery.shortfalls`), the task claims no journey, and the run is evidence that
+   the tests measure the project's code (`AlreadySatisfied.assess`):
+   - at the red check (`GreenfieldWorkflow.recordAlreadySatisfied`), also for a task that
+     stays in the plan because something builds on it;
+   - when a corrected test passes on the start tree (`greenCorrectionRefused`, called by the
+     four correction paths of TEST_AUTHORING; refused evidence stops the build as before,
+     with the reason);
+   - at the start of a later wave (`needsNoChangeOnItsWaveBase`). A task whose tests pass
+     there and which does not meet the conditions is built as before. A task recorded earlier
+     whose tests are red on its wave's tree loses the record and is built.
+   `SwarmEngineImpl.executeTaskOnce` starts no worker for such a task; it is done without a
+   chosen candidate, and what depends on it is not held back (`executeWaves`).
+2. *No worker changed anything* (`UnchangedTree`, `SwarmEngineImpl.measureUnchangedTree`).
+   When no candidate of the first round left a change and at least one worker ended by
+   itself, the product runs the task's acceptance tests on that tree through the verification
+   a candidate gets. Green and accepted (`UnchangedTree.refusal`, then `NoChangeEvidence`,
+   which the workflow sets to `AlreadySatisfied.assess`): `finishTask` records that the task
+   needs no change and chooses nothing. Otherwise the candidate carries the report and is
+   failed, and the existing rules read it: the test goes to its author when it errors before
+   any project code runs (section 86), else the repair round starts from it with the failure
+   as evidence. A task that still stops says in its question that no worker changed anything
+   and what the product's run counted, names the first failing test and its message
+   (`BlockedReason.of`), and takes `repair` and `retest`. A candidate that changed nothing
+   and passes a corrected test when candidates are verified again is held to the same
+   evidence (`reverifyOne`) and is recorded the same way, never chosen. "Changed nothing"
+   there is an empty diff on a branch that still stands at the commit the task's candidates
+   are cut from (`leftTheStartTreeUnchanged`): a repair worker's empty diff is empty against
+   the candidate it started from, whose change its branch carries.
+3. *A build stops behind a task that stopped with a question*
+   (`GreenfieldWorkflow.tasksStoppedWithAQuestion`): after the engine returns at EXECUTING, a
+   task that is BLOCKED while a question of the run is open stops the run there, marked
+   stopped, with the question left open.
+4. *An undelivered story says why* (`GreenfieldWorkflow.undeliveredReason`). Each check that
+   was not proved with its outcome and the evidence's reason; each task with no chosen
+   candidate that was not measured as needing no change; what can be done. It is the story's
+   `waitingReason`, which the stopped-story item shows, and a question of the run. A question
+   raised in the stage a run ends ABORTED in is no longer withdrawn by that change of state.
+5. *Final integration* (`FinalIntegrator`). A plan whose every task needs no change is
+   verified as an unchanged tree, as a plan dropped at TEST_AUTHORING is, and the run is
+   marked `nothingToBuild`. In a plan with chosen candidates, the tests of a task that needs
+   no change are due from that task's place in the order, and the merged tree is verified
+   once more when no merge follows them. `verifyTheUnchangedTree` now makes the journeys the
+   tree holds. The delivered branch of an unchanged tree is the run's tests commit, so
+   accepting the story adds its tests and journeys and no code.
+6. *The delivery's evidence* (`SupervisorDesk.deliveryFacts`): for a run marked
+   `nothingToBuild`, that no change was needed, what accepting adds, and the count of
+   acceptance tests worded for an unchanged tree.
+
+**Decisions.**
+
+- *The run still ends ABORTED when a story is not delivered at final integration.* With item
+  3 that is reached only when no task has a question open. The question it raises cannot
+  restart the build and says so; `send_back` is the way on.
+- *A red run on the unchanged tree gets the ordinary repair round.* Its workers are the
+  first to be shown a measured failure of the test.
+- *Where a candidate changed something and another changed nothing, and both pass, nothing
+  is chosen.* No change is preferred to a change nothing asked for.
+
+**Stored differently.** Fields were added to `ChecksAlreadyProved`, no constant to any enum:
+`noChangeNeeded` (false on a record stored before) and `measuredWhen` (null). A task that
+needs no change is in the existing state `DONE`.
+
+**The story that was already stopped.** Its run is ABORTED and cannot be taken up again.
+`send_back` with a note builds it again. Whether that build delivers without a code change
+depends on the test its author writes: one that passes on the start tree and measures the
+project's code is recorded at the red check, no worker is started, and the story comes back
+for a verdict. One that is red for a reason of its own stops the build with a question that
+now names the failing test and its message and takes `retest`.
+
+**Tests.** New: `ATaskNoWorkerChangedIsMeasuredByTheProductTest` (sc-swarm, real engine with
+scripted workers: a green run on the unchanged tree records the task and chooses nothing; a
+red one is in the question, which takes `repair` and `retest`; a task that needs no change
+is not dispatched and what builds on it is built; the reading on its own). Extended:
+`ACheckTheCodeAlreadySatisfiesIsRecordedNotParkedOnTest` (a kept task needs no change; a
+task with a journey does not; a plan whose every task needed no change is verified unchanged
+and delivers the tests commit), `FinalIntegrationDecidesTheStoryOutcomeTest` (the reason on
+the story and as a question; a story no task had to change goes to REVIEW with its tests; a
+task that stopped with a question stops the run at EXECUTING), `SupervisorDeskTest` (the
+evidence of a delivery with no change; the stopped story's reason). Run with them:
+`ATaskWhoseTestsAreAlreadyGreenIsNotAStopTest`, `UnattendedRunningTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model, a container, a browser or a live build.
+- What the live build's corrected test failed with. Item 2 would have put it in the
+  question; it was not reproduced.
+- A corrected test that passes on the start tree (`greenCorrectionRefused`) and the start of
+  a later wave (`needsNoChangeOnItsWaveBase`) have no test: both need the test author or the
+  wave gate inside the workflow. What they call is tested.
+- The merged tree verified once more for a task that needs no change among tasks with chosen
+  candidates, and journeys made on an unchanged tree, have no test.
+- After `retest`, a candidate that changed nothing and passes the corrected test is recorded
+  as needing no change and the stage, run next, goes on to final integration. Each half is
+  covered; the hand-over through `GreenfieldWorkflow.giveInstructedRetests` is not.
+- The stop behind a blocked task is tested with a stand-in for the engine. Unattended
+  running of a build stopped this way was not looked at: the build is stopped at EXECUTING
+  with its story still building, as it is when another task waits on a blocked one.
+- A question left open on a run that ended ABORTED is shown by the Console as any open
+  question is; answering it records the answer and restarts nothing. The Console's card was
+  not opened.
+- A task with no acceptance test of its own whose workers change nothing is not measured and
+  stops as before.
+- Opening a store written before the new fields. EclipseStore maps added fields on its own
+  and `ChecksAlreadyProved` has gained fields this way before; no old store was opened in a
+  test.

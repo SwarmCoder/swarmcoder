@@ -494,6 +494,29 @@ public class SwarmEngineImpl implements SwarmEngine {
         this.waveGate = waveGate;
     }
 
+    /**
+     * Asked when the product has run a task's acceptance tests on a tree no worker changed and
+     * they passed (section 89): is that run evidence that the existing code satisfies the
+     * task's checks, or a test that measures nothing? The engine asks what it can read itself
+     * ({@link UnchangedTree#refusal}); whoever knows the design and the plan adds the rest.
+     */
+    @FunctionalInterface
+    public interface NoChangeEvidence {
+        /**
+         * @param tree       the unchanged tree with the task's own tests placed in it
+         * @param acceptance what the acceptance stage reported on that tree
+         * @return null when the green run is accepted as proof; otherwise why it is not
+         */
+        String refusal(Run run, Task task, Path tree, TestResults acceptance);
+    }
+
+    private volatile NoChangeEvidence noChangeEvidence;
+
+    /** Registers the further check of a green run on an unchanged tree; none by default. */
+    public void setNoChangeEvidence(NoChangeEvidence evidence) {
+        this.noChangeEvidence = evidence;
+    }
+
     @Override
     public Run executeRun(Run run) {
         runsInFlight.put(run.id(), run);
@@ -625,7 +648,9 @@ public class SwarmEngineImpl implements SwarmEngine {
             List<WaveIntegrator.Winner> winners = new ArrayList<>();
             for (int i = 0; i < wave.size(); i++) {
                 CandidateSolution winner = futures.get(i).join();
-                if (winner == null) {
+                // A task that needs no change has no winner and is not one that failed
+                // (section 89): what builds on it finds what it needs in the tree already.
+                if (winner == null && !wave.get(i).needsNoChange()) {
                     gate.finishedWithoutWinner(wave.get(i));
                 }
                 if (winner != null && winner.branch() != null) {
@@ -1510,6 +1535,17 @@ public class SwarmEngineImpl implements SwarmEngine {
         // A retry after an outage re-enters executeRun from the top, so a task that already has a
         // winner must not be swarmed again. Auto-retry is only permitted because it stays inside the
         // original budget (UX v3 rule 6); re-dispatching finished tasks is how it would leave it.
+        // The product measured this task's acceptance tests green on the tree the task starts
+        // from (section 89): nothing is built for it, so no worker is started. It has no winner
+        // and is not BLOCKED; its tests are run again on the merged tree at final integration.
+        if (task.needsNoChange()) {
+            log.info("Task '{}' needs no change - not dispatching. {}", task.title(),
+                task.checksAlreadyProved().describe(task.title()).lines().findFirst().orElse(""));
+            if (task.state() != TaskState.DONE) {
+                markTaskState(task, TaskState.DONE);
+            }
+            return null;
+        }
         CandidateSolution alreadyWon = archivedWinner(task);
         if (alreadyWon != null) {
             log.info("Task '{}' already selected a winner — not dispatching again", task.title());
@@ -1563,6 +1599,26 @@ public class SwarmEngineImpl implements SwarmEngine {
             // chips go red-less and vanish, and read four new ones as a restart. A verdict that
             // exists and is not published is a verdict nobody has.
             archiveCandidates(verified, null);
+
+            // 2a. No worker changed anything (section 89). A worker's word that the existing code
+            // already does it is not a measurement, and a worker cannot run the task's own
+            // acceptance test: its checkout does not hold it. The product runs the test on that
+            // unchanged tree itself. Green and accepted: the candidate survives and finishTask
+            // records that the task needs no change. Red: the candidate carries the report, and
+            // everything below reads what was measured.
+            CandidateSolution unchanged = null;
+            if (survivors.isEmpty()) {
+                failIfLostToOutage(task, verified);
+                unchanged = measureUnchangedTree(task, runId, startPoint, verified, allResults,
+                    guidelineChecks);
+                if (unchanged != null) {
+                    final CandidateSolution measured = unchanged;
+                    verified.replaceAll(c -> c.id().equals(measured.id()) ? measured : c);
+                    archivePool.replaceAll(c -> c.id().equals(measured.id()) ? measured : c);
+                    archiveCandidates(verified, null);
+                    survivors = filterSurvived(verified);
+                }
+            }
 
             // 2b. Repair round — one, then BLOCKED (spec §11.5). Not entered when the wave was lost
             // to an outage: there is nothing to repair and no evidence to repair it from.
@@ -1693,6 +1749,13 @@ public class SwarmEngineImpl implements SwarmEngine {
                         log.warn("Task '{}': every repair worker found nothing to change; the "
                             + "objection is a suspected false alarm in the check", task.title());
                         queueBlockedDecision(task, runId, archivePool, noChange);
+                    } else if (unchanged != null) {
+                        // No worker of the first round changed anything and the product's own
+                        // run of the tests on that tree was not green (section 89): the question
+                        // says so before the reason, and takes `retest` as well as `repair` -
+                        // which side is wrong is for whoever answers.
+                        queueBlockedDecision(task, runId, archivePool,
+                            UnchangedTree.headline(task.title(), unchanged), true, true);
                     } else {
                         queueBlockedDecision(task, runId, archivePool);
                     }
@@ -2628,7 +2691,11 @@ public class SwarmEngineImpl implements SwarmEngine {
         WorkerResult result = new WorkerResult(reset, worktree);
         allResults.add(result);
         try {
-            return verifyOne(task, runId, result, guidelineChecks);
+            CandidateSolution verdict = verifyOne(task, runId, result, guidelineChecks);
+            // A candidate that changed nothing survives only when the green run on its tree
+            // is accepted as proof that nothing has to be built (section 89).
+            return leftTheStartTreeUnchanged(runId, verdict)
+                ? heldToNoChangeEvidence(task, runId, verdict, worktree) : verdict;
         } finally {
             gitService.removeWorktree(worktree); // scratch space; the branch stays for archival
         }
@@ -2695,6 +2762,144 @@ public class SwarmEngineImpl implements SwarmEngine {
     }
 
     /**
+     * Runs the task's acceptance tests on the tree no worker of its first round changed, through
+     * the verification every candidate gets (section 89, {@link UnchangedTree}).
+     *
+     * @param round the first round's candidates, none of which survived
+     * @return the measured candidate, carrying the report: SURVIVED when the tests are green and
+     *         the run is accepted as proof that the task needs no change, FAILED otherwise. Null
+     *         when a worker did change something, when the task claims no test, or when nothing
+     *         could be verified - the round is then judged as before
+     */
+    private CandidateSolution measureUnchangedTree(Task task, UUID runId, String startPoint,
+                                                   List<CandidateSolution> round,
+                                                   List<WorkerResult> allResults,
+                                                   List<GuidelineCheck> guidelineChecks) {
+        CandidateSolution pick = UnchangedTree.toMeasure(round);
+        if (pick == null || task.authoredTestPaths().isEmpty()) {
+            return null;
+        }
+        WorkerResult ended = null;
+        synchronized (allResults) {
+            for (WorkerResult result : allResults) {
+                if (result.candidate() != null && pick.id().equals(result.candidate().id())
+                        && result.workspace() != null) {
+                    ended = result;
+                }
+            }
+        }
+        if (ended == null) {
+            return null;
+        }
+        log.info("Task '{}': no worker changed anything ({} candidate(s)). The product runs the "
+            + "task's acceptance test(s) {} on the unchanged tree {} itself.", task.title(),
+            round.size(), task.authoredTestPaths(), startPoint == null ? "" : shortSha(startPoint));
+        CandidateSolution asFinished = new CandidateSolution(pick.id(), pick.taskId(),
+            pick.workerIndex(), pick.branch(), pick.sampling(), pick.diffUnified(), null,
+            pick.cluster(), pick.judge(), CandidateState.SURVIVED, null).carryingAuditFrom(pick);
+        CandidateSolution verdict;
+        try {
+            verdict = verifyFinished(task, runId, ended.withCandidate(asFinished), guidelineChecks);
+        } catch (RuntimeException e) {
+            log.warn("Task '{}': the unchanged tree could not be measured ({}); the round is "
+                + "judged as before", task.title(), e.toString());
+            return null;
+        }
+        if (verdict.verification() == null) {
+            return null; // no contract or no container: nothing was measured
+        }
+        verdict = heldToNoChangeEvidence(task, runId, verdict, ended.workspace());
+        TestResults acceptance = verdict.verification().acceptance();
+        log.info("Task '{}': on the unchanged tree compiles={} acceptance={} - {}", task.title(),
+            verdict.verification().compiles(),
+            acceptance == null ? "not run" : BlockedReason.counts(acceptance),
+            verdict.state() == CandidateState.SURVIVED ? "the task needs no change"
+                : "not accepted as needing no change");
+        return verdict;
+    }
+
+    /**
+     * True when the candidate's tree is the tree its task starts from: its worker changed
+     * nothing, and its branch still stands at the commit the task's candidates are cut from.
+     * The second half is what tells a first-round worker that changed nothing from a repair
+     * worker that changed nothing: a repair worker's diff is empty against the candidate it
+     * started from, whose change its branch carries. False whenever git cannot say.
+     */
+    private boolean leftTheStartTreeUnchanged(UUID runId, CandidateSolution candidate) {
+        if (!UnchangedTree.changedNothing(candidate) || candidate.branch() == null
+                || gitService == null || !gitService.isEnabled() || runId == null) {
+            return false;
+        }
+        Run run = runsInFlight.get(runId);
+        if (run == null) {
+            run = artifactStore.root().runs.get(runId);
+        }
+        String start = run == null ? null : run.progressPoint();
+        String tip = gitService.headSha(candidate.branch());
+        return start != null && !start.isBlank() && tip != null
+            && (tip.equals(start) || tip.startsWith(start) || start.startsWith(tip));
+    }
+
+    /**
+     * A candidate that changed nothing and passed verification survives only when its green run
+     * shows that nothing has to be built: {@link UnchangedTree#refusal}, then whatever
+     * {@link NoChangeEvidence} was registered. Otherwise it is failed with that reason, which is
+     * what a repair worker and the task's question are then shown.
+     */
+    private CandidateSolution heldToNoChangeEvidence(Task task, UUID runId,
+                                                     CandidateSolution verdict, Path tree) {
+        if (verdict.state() != CandidateState.SURVIVED || verdict.verification() == null) {
+            return verdict;
+        }
+        String refusal = UnchangedTree.refusal(task, verdict.verification());
+        NoChangeEvidence further = noChangeEvidence;
+        if (refusal == null && further != null) {
+            try {
+                Run run = runId == null ? null : artifactStore.root().runs.get(runId);
+                refusal = further.refusal(run, task, tree, verdict.verification().acceptance());
+            } catch (RuntimeException e) {
+                refusal = "whether the green run measures the project's code could not be "
+                    + "established (" + e + ")";
+            }
+        }
+        if (refusal == null) {
+            return verdict;
+        }
+        String reason = "no worker changed anything, and the task's acceptance test(s) pass on "
+            + "the unchanged tree; that is not accepted as proof that nothing has to be built: "
+            + refusal;
+        log.warn("Task '{}': {}", task.title(), reason);
+        recordVerdict(verdict.verification(), reason);
+        return new CandidateSolution(verdict.id(), verdict.taskId(), verdict.workerIndex(),
+            verdict.branch(), verdict.sampling(), verdict.diffUnified(), verdict.verification(),
+            verdict.cluster(), verdict.judge(), CandidateState.FAILED, verdict.killReason())
+            .carryingAuditFrom(verdict);
+    }
+
+    /**
+     * Writes down that the task needs no change, with the measurement: the tests that passed,
+     * the tree they passed on and when the product ran them (section 89). The task is done
+     * without a chosen candidate; any answer an earlier question of it was offered is withdrawn.
+     */
+    private void recordNoChangeNeeded(Task task, CandidateSolution measured, String tree,
+                                      String measuredWhen) {
+        TestResults acceptance = measured.verification().acceptance();
+        // The commit, where git can name it: a branch nothing was committed on is its start.
+        String sha = tree == null || gitService == null || !gitService.isEnabled() ? null
+            : gitService.headSha(tree);
+        ChecksAlreadyProved record = ChecksAlreadyProved.noChangeNeeded(Instant.now(),
+            sha == null ? tree : shortSha(sha),
+            acceptance == null ? List.of() : acceptance.passedIds(),
+            artifactStore.describeClaimedChecks(task),
+            acceptance == null ? 0 : acceptance.passed(), measuredWhen);
+        task.setChecksAlreadyProved(record);
+        task.setRepairOfferedBy(null);
+        task.setRetestOfferedBy(null);
+        markTaskState(task, TaskState.DONE);
+        log.info("{}", record.describe(task.title()));
+    }
+
+    /**
      * The tail every finished task shares, whether it got here on its first pass or after a repair:
      * cluster survivors, judge them, run the rule-break repair round if every one of them broke a
      * stated rule, select a winner, and archive everything. Extracted so
@@ -2705,6 +2910,18 @@ public class SwarmEngineImpl implements SwarmEngine {
                                          List<CandidateSolution> archivePool, String knowledgeBrief,
                                          String guidelines, List<GuidelineCheck> guidelineChecks,
                                          List<WorkerResult> allResults) {
+        // 2c. A candidate that changed nothing and survived (section 89): the product ran the
+        // task's tests on the unchanged tree and the run was accepted as proof. Nothing is
+        // chosen - there is nothing to merge - and a candidate that did change something is not
+        // preferred to no change at all. The task is recorded as needing no change.
+        for (CandidateSolution survivor : survivors) {
+            if (survivor.verification() != null && leftTheStartTreeUnchanged(runId, survivor)) {
+                recordNoChangeNeeded(task, survivor, survivor.branch(),
+                    "after every worker of the task had left the tree unchanged");
+                archiveCandidates(archivePool, null);
+                return null;
+            }
+        }
         // 3. Cluster survivors (behavioral probes arrive in M4, spec §11.4)
         SyntacticClusterer clusterer = new SyntacticClusterer(
             new TreeSitterSyntaxService(), candidate -> List.of());
