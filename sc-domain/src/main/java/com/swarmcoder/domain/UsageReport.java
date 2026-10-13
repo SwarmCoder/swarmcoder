@@ -177,6 +177,105 @@ public final class UsageReport {
             + local.inputTokens() + " in / " + local.outputTokens() + " out";
     }
 
+    // --- warnings -------------------------------------------------------------------------------
+
+    /**
+     * A paid role is warned about when its calls were sent more input tokens than this each, on
+     * average. A role's opening, its tool descriptions and the lookups it is working from fit in
+     * well under this; above it the conversation is carrying what it no longer needs
+     * (section 94: 75,500 and 83,600 a call went unnoticed for a whole build).
+     */
+    public static final int WARN_INPUT_PER_CALL = 30_000;
+
+    /**
+     * How many calls a role's work in one run needs at most, for the roles whose work has a
+     * known size; a paid role above its figure is warned about. The architect designs once and
+     * answers a few revisions; the planner splits and orders a design; the reviewer reads a
+     * design, a plan and tests against the rules; the test author writes and compiles a test a
+     * task. Roles not named here (workers, the expert, the judge) make as many calls as there
+     * is work, and are judged by input per call alone.
+     */
+    public static final Map<String, Integer> WARN_CALLS = Map.of(
+        "architect", 40, "planner", 15, "reviewer", 16, "test author", 40);
+
+    /**
+     * Fewer characters of request than this for each input token the server counted, and the
+     * server counted more than the request holds. English prose and source code run at three to
+     * four characters a token and a request's JSON adds to the characters, not to the tokens.
+     */
+    public static final double WARN_CHARS_PER_INPUT_TOKEN = 2.5;
+
+    /**
+     * One line per thing a reader must not miss, each beginning "WARNING:", or "" when there is
+     * none: a paid role whose calls were too large, a paid role that made more calls than its
+     * work needs, and a paid server that counted more input than its requests held. Only paid
+     * rows are looked at: local tokens are not money (CLAUDE.md section 0).
+     */
+    public static String warnings(Collection<ModelUsageRecord> models) {
+        StringBuilder sb = new StringBuilder();
+        for (Row row : rowsOf(models)) {
+            ModelUsageRecord sum = row.sum();
+            if (!sum.paid()) {
+                continue;
+            }
+            long perCall = sum.inputCalls() == 0 ? 0 : sum.inputTokens() / sum.inputCalls();
+            if (perCall > WARN_INPUT_PER_CALL) {
+                sb.append("WARNING: the ").append(row.role()).append(" was sent ").append(perCall)
+                    .append(" input tokens a call on a paid server (").append(sum.inputCalls())
+                    .append(" calls, the largest ").append(sum.largestInput())
+                    .append("); above ").append(WARN_INPUT_PER_CALL)
+                    .append(" a conversation is carrying what it no longer needs.\n");
+            }
+            Integer needs = WARN_CALLS.get(row.role());
+            if (needs != null && sum.calls() > needs) {
+                sb.append("WARNING: the ").append(row.role()).append(" made ").append(sum.calls())
+                    .append(" calls on a paid server; its work in one run needs at most ")
+                    .append(needs).append(".\n");
+            }
+            if (sum.sizedCalls() > 0 && sum.sizedInputTokens() > 0
+                    && sum.requestChars() < WARN_CHARS_PER_INPUT_TOKEN * sum.sizedInputTokens()) {
+                sb.append("WARNING: the paid server counted ").append(sum.sizedInputTokens())
+                    .append(" input tokens for the ").append(row.role())
+                    .append("'s requests of ").append(sum.requestChars())
+                    .append(" characters in all (").append(perToken(sum))
+                    .append(" characters a token): it counts something the requests do not "
+                        + "hold, such as the model's own earlier thinking.\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String perToken(ModelUsageRecord sum) {
+        return String.format(Locale.ROOT, "%.1f",
+            sum.requestChars() / (double) sum.sizedInputTokens());
+    }
+
+    /**
+     * What the requests of each role were made of, one line a role, for the rows that recorded
+     * it: characters sent for each input token counted, and how much of each request repeated
+     * the session's request before it from its first character - the part a server's prompt
+     * cache can serve. "" when no row recorded a request's size.
+     */
+    public static String requestLines(Collection<ModelUsageRecord> models) {
+        StringBuilder sb = new StringBuilder();
+        for (Row row : rowsOf(models)) {
+            ModelUsageRecord sum = row.sum();
+            if (sum.sizedCalls() == 0 || sum.sizedInputTokens() == 0) {
+                continue;
+            }
+            sb.append("- ").append(row.role()).append(" (").append(row.server()).append("): ")
+                .append(sum.requestChars()).append(" characters sent for ")
+                .append(sum.sizedInputTokens()).append(" input tokens counted (")
+                .append(perToken(sum)).append(" a token)");
+            if (sum.repeatCalls() > 0 && sum.repeatRequestChars() > 0) {
+                sb.append("; ").append(sum.samePrefixChars() * 100 / sum.repeatRequestChars())
+                    .append("% of a request repeated the one before it from the start");
+            }
+            sb.append('\n');
+        }
+        return sb.length() == 0 ? "" : "Requests per role, as they went out:\n" + sb;
+    }
+
     // --- lookups --------------------------------------------------------------------------------
 
     /**
@@ -279,6 +378,7 @@ public final class UsageReport {
                 + "recorded one by one.\n");
         } else {
             sb.append(spendLine(models)).append(".\n\n");
+            sb.append(warnings(models));
             sb.append(roleTable(rowsOf(models), true));
             sb.append("\nCounts are each call's own usage as the model server reported it; a "
                 + "session's calls are counted one by one. Input per call is what one call was "
@@ -287,6 +387,10 @@ public final class UsageReport {
             if (estimated > 0) {
                 sb.append(estimated).append(" call(s) were counted from the size of their text "
                     + "(characters / 4) because the server reported no usage.\n");
+            }
+            String requests = requestLines(models);
+            if (!requests.isEmpty()) {
+                sb.append('\n').append(requests);
             }
         }
         sb.append('\n').append(lookupLines(lookups));

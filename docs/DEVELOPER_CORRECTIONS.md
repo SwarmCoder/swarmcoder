@@ -9373,3 +9373,176 @@ the listing), `HarnessRunReportTest` and `HarnessRoleServersTest` (the shared ta
   last call. They are kept because screens read them, and they are not a cost.
 - The harness's "Cloud tokens this run" line reads a gate the harness builds itself; whether the
   harness should install the ledger was left alone.
+
+## 94. One small story cost 15.1 million paid tokens: a reviewer that learned the project four times, and input nobody had sent (live build, 2026-10-13)
+
+**What was observed.** One story of a small three-module demo project ("add a book and see it in
+the list") was built with the planning roles on a paid server and the workers on the local one.
+Recovered from the stored sessions by `run_report` (section 93; tokens are each call's input and
+output together, as the server counted them):
+
+| role | calls | tokens | per call | output (estimated) |
+|---|---|---|---|---|
+| design reviewer | 121 | 9,138,322 | 75,500 | 8,743 |
+| architect | 55 | 4,598,614 | 83,600 | 27,117 |
+| test author | 27 | 1,008,420 | 37,300 | 7,739 |
+| expert | 11 | 238,893 | 21,700 | 562 |
+| planner | 6 | 166,113 | 27,700 | 2,195 |
+| workers (local, not paid) | 249 | 4,589,485 | 18,400 | 29,626 |
+
+About 15.1 million paid tokens, nearly all input. The run's limit of 3,000,000 did not stop it:
+the counter under-counted (section 93). Harness runs of a similar story had the reviewer at about
+5 calls and 20,000 tokens and the architect at 33 to 53 calls and 1.4 to 3.4 million.
+
+What the three roles looked up in the planning stages, from the instance's log (calls, characters
+returned into the conversation):
+
+| role | tree and graph | document sections | search | whole files | parts of files | listings |
+|---|---|---|---|---|---|---|
+| architect | 61, 94,426 | 30, 56,154 | 10, 37,854 | 43, 248,177 | 23, 40,744 | 5, 4,099 |
+| reviewer | 104, 123,824 | 123, 189,622 | 58, 155,150 | 51, 272,034 | 12, 85,429 | 18, 21,505 |
+| test author | 19, 50,373 | 1, 616 | 1, 2,208 | 2, 9,240 | 1, 5,152 | 1, 342 |
+
+The reviewer's 370 lookups returned 847,632 characters, 517,277 of them from the reference
+folder; the architect's 201 returned 487,401, 304,692 from the reference folder. Whole files are
+half of the architect's characters and a third of the reviewer's.
+
+**Causes** (lines as on `master` before this change).
+
+- *The reviewer was a 29-tool agent in the application and one question in the harness.* The
+  application hands the reviewer the roles' lookup session (`ProjectContext.java:445`); the
+  harness hands it to the architect and the test author only (`EndToEndLoopTest.java:1495-1496`).
+  So every harness figure for the reviewer was one reply a reading, and the session was never
+  measured before a paid build ran it.
+- *Each reading opened a session of its own and learned the project again*
+  (`DesignReviewerClient.java:485-490`, with the roles' stops of 120 turns and 300 lookups). Four
+  readings: the design against the rules (34 calls, 102 lookups, one objection), the revised
+  design (28 calls, 99 lookups, approved), the plan (51 calls, 143 lookups, approved), the tests
+  (8 calls, 26 lookups, approved). Nothing was handed to it of what the architect had
+  established (25 facts kept for the workers, section 73), so it read the same framework
+  documents again: 63 whole files and 101 document sections.
+- *It was told to verify what it approved.* "Never object on a guess, and never approve on one"
+  (`DesignReviewerClient.java:516-522`): the three approvals took 87 of the 121 calls.
+- *A call's input held everything the model had thought in the session's earlier calls.* A
+  least-squares fit over the architect's six tidies gives input = 5,600 (the tool descriptions)
+  + 1.02 x the conversation as the session holds it + 1.07 x the thinking of all earlier calls.
+  At its 48th call that is 65,600 of conversation and 80,800 of earlier thinking in a call of
+  159,000. Summed: about 1.66 of the architect's 4.6 million tokens and 4.62 of the reviewer's
+  9.14 million. The session does not send it: `KoogAgentRuntime.java:664-666` removes a turn's
+  thinking from the history, and a scripted endpoint shows no thinking in any later request,
+  with tool calls sent natively or as text. When the architect's conversation was continued
+  with a new message, the count fell from 167,999 to 92,034 with the same history. So the
+  server counts it, and stops counting it when a new user message begins. Not explained
+  further: no model was called for this work.
+- *Results of up to 1,000 characters were never shortened.* A digest keeps 600 characters and
+  leaves anything up to 400 longer whole (`HistoryTrim.java:938-940`). 98 of the architect's
+  199 results were that short: 46,282 characters sent on every later call. They counted toward
+  the mark (`HistoryTrim.java:426`) and could not be cut, so the mark was out of reach and each
+  tidy cut every longer result it could, which the role then read again (23 repeated calls).
+- *The tidy did run at the mark on this server*: six times for the architect, ten for the
+  reviewer, 20,000 down to 8,000 (section 67). The conversation was still 29,000 to 58,000
+  tokens after one because of the short results above, the results the role had asked for
+  twice (never counted, never cut: `HistoryTrim.java:416-425`; 75,765 characters for the
+  architect), the last four turns, and a design of over 16,000 characters carried in each
+  `check_design` call. The hosted model's working room is 983,040 tokens
+  (`ModelShapes.java:166-170`), so no compaction ever comes after the tidy.
+- *A reviewer stopped by the budget was recorded as an approval.* Every reading caught
+  `Exception` and returned "approved, review unavailable" (`DesignReviewerClient.java:209`,
+  `:281`, `:337`, `:388`); a session stopped for the budget fell back to the one-shot review
+  (`:473-478`), whose refusal was caught the same way. The run then went on to its next stage.
+- *The report showed the figures and said nothing.* Input per call was a column; nothing marked
+  75,500.
+
+**Prompt cache.** The stored sessions of this build hold no cache figures (the build ran before
+section 93). By construction a session's request repeats the one before it up to the new
+results, except on the call after a tidy, which rewrites old results near the front: 16 of
+these two roles' 176 calls. The report now gives cached input tokens per role and how much of
+each request repeated the one before.
+
+**What changed.**
+
+- *One reviewer conversation a run.* `DesignReviewerClient` keeps the conversation of a reading
+  that ended cleanly, per run (at most 8 runs), and gives the next reading of that run - the
+  revised design, the plan, the tests - as its next message, with that reading's own
+  instructions and without the rules when they are the ones it already holds
+  (`LookupAgent.resume`, as the architect's revisions since section 54). A conversation that
+  cannot be continued opens a new session, as before. A reading for no run keeps nothing.
+- *It starts from what the architect established.* The design's findings, each with the lookup
+  it was copied from, are in the opening of the reviewer's session, bounded like a task's
+  handover (`swarmcoder.handover.maxChars`). Not in the one-shot review.
+- *It looks up what an objection depends on.* The session's instructions say its work is to
+  read the text against the rules, not to learn the project; to look a fact up only when an
+  objection it is about to raise depends on it; and to rely on the facts given. "Never object
+  on a guess" stays. No stop was lowered and no lookup is refused.
+- *A spent budget stops the reviewer and is not an approval.* The four readings let
+  `CloudGate.BudgetExhaustedException` through, and a session stopped for the budget asks the
+  gate again instead of paying for a one-shot review. `GreenfieldWorkflow` parks the run on it
+  with the budget question, as for every other role.
+- *Short old results become one line.* In a tidy, a result too short for first lines and
+  longer than 400 characters becomes the line that names its call, oldest first with the
+  others (`HistoryTrim.oneLine`). The tidy now counts what a cut saves, not the size of what is
+  cut, so it stops at the mark and leaves the newest results whole.
+- *The report warns.* `UsageReport.warnings`, above the table of `run_report` and
+  `project_report`: a paid role sent more than 30,000 input tokens a call; a paid role with
+  more calls than its work needs (architect 40, planner 15, reviewer 16, test author 40); a
+  paid server that counted an input token for fewer than 2.5 characters of request. Each row
+  now keeps the size of its requests beside the server's count of them and how much of each
+  request repeated the one before (`ModelUsageRecord`, fields added).
+
+**What the same story should cost.** Not measured: nothing here was run against a model.
+
+- Reviewer: one conversation of four readings. If it looks up only what an objection depends
+  on, 10 to 25 calls of 10,000 to 30,000 tokens, 0.2 to 0.6 million against 9.1. If the model
+  ignores that instruction the kept conversation and the facts still spare the second, third
+  and fourth learning of the project (87 calls in this build), and the report warns above 16
+  calls.
+- Architect: about 0.3 million less from the short results; its 200 lookups, its whole files
+  and the server's count of its thinking are as they were: about 4.2 million.
+- Test author, planner, expert: as they were.
+- A run that does this again is stopped by its budget at the limit, reviewer included.
+
+**Not decided here.**
+
+- *The thinking the server counts as input* (about 6.3 of the 15.1 million). It ends at a new
+  user message. Starting a new user message at each tidy - the call whose cache is lost anyway -
+  would take it out, if the server behaves as it did at the architect's revision. That is one
+  observation; it needs one paid call sequence to confirm, and the report's characters-per-token
+  line will show it.
+- *Whether the reviewer should be an agent at all.* As one question a reading it cost about
+  20,000 tokens a story in the harness, and could not look a fact up.
+- *Results asked for twice stay whole and uncounted* (run 79's rule for a small room). In a
+  room of a million tokens nothing ever cuts them: about 19,000 tokens of the architect's late
+  calls, perhaps 0.25 million. A bound risks the re-reading that rule was made against.
+- *Answers larger than the question.* The types of one framework package came back as 35,078
+  characters, twice; whole reference documents of 30,000 characters were read where their
+  sections have a query; lines 40 to 80 of a file with very long lines were 20,649 characters.
+- *The harness still runs the reviewer as one question*, so it does not measure what the
+  application runs.
+
+**Tests.** `TheReviewerReadsInOneConversationARunTest` (a second reading of the design and the
+plan's reading are the next messages of one conversation, rules and facts sent once; another
+run and no run start their own; a reviewer that keeps calling is stopped after the call that
+passes the run's limit, no one-shot review is paid for, the budget question is raised once and
+the reading is not approved; the same with the budget already spent, the rubric review
+included), `ShortOldResultsBecomeOneLineTest`, `ASessionNeverSendsItsThinkingBackTest` (native
+and textual tool history), `UsageReportWarningsTest` (this build's figures give seven warnings; a
+run of small calls gives none; a row from before says nothing of requests),
+`AnAgentSessionsCallsAreCountedOneByOneTest` (a row keeps its requests' sizes). Run with them and
+unchanged: `TheReviewerLooksFactsUpBeforeItObjectsTest`,
+`TheDesignReviewerPutsRulesAboveTheGoalTest`, `HistoryTrimTest`,
+`OldLookupResultsAreReplacedByTheirFirstLinesTest`, `ACutLeavesTheSessionWhatItWorksFromTest`,
+`OldWriteArgumentsAreTrimmedLikeOldResultsTest`, `ARolesSessionTidiesItsOldLookupResultsTest`,
+`UsageLedgerTest`, `UsageReportsTest`, `HarnessRunReportTest`.
+
+**Not checked.**
+
+- Nothing was run against a model, a live build or the running application. Whether the
+  reviewer makes fewer calls with its new instructions is a matter of what the model does.
+- Why the paid server counts earlier thinking, and whether another paid server does.
+- A reviewer conversation continued across a restart of the application: it is held in memory,
+  and a run resumed after a restart opens a new session.
+- A kept reviewer conversation in a small room: `LookupAgent.resume` refuses one that would
+  fill three quarters of the room and a new session is opened; not run against a small room.
+- A store written before this change, opened with the new fields of `ModelUsageRecord`: only
+  fields were added, as the class allows; no old store was opened by the new code.
+- The full test suite was not run; the classes above were.

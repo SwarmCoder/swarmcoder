@@ -180,10 +180,15 @@ public final class UsageLedger implements RunMeter.Recorder {
         String endpointClass = paid ? ModelUsageRecord.CLOUD : ModelUsageRecord.LOCAL;
         synchronized (lock) {
             Book book = bookOf(where);
-            book.models.computeIfAbsent(keyOf(call.role(), call.task(), call.model(), endpointClass),
-                    k -> new ModelUsageRecord(call.role(), call.task(), call.model(), endpointClass))
-                .addCall(input, output, call.cachedPromptTokens(), call.millis(), call.failed(),
-                    estimated);
+            ModelUsageRecord row = book.models.computeIfAbsent(
+                keyOf(call.role(), call.task(), call.model(), endpointClass),
+                k -> new ModelUsageRecord(call.role(), call.task(), call.model(), endpointClass));
+            row.addCall(input, output, call.cachedPromptTokens(), call.millis(), call.failed(),
+                estimated);
+            // The request's own size beside the server's count of it, and how much of it
+            // repeated the request before: only where the server's count is its own.
+            row.addRequest(estimated ? -1 : call.promptTokens(), call.requestChars(),
+                call.samePrefixChars());
         }
         if (paid && gate != null) {
             try {

@@ -121,6 +121,16 @@ class AnAgentSessionsCallsAreCountedOneByOneTest {
             assertThat(architect.inputTokens()).isEqualTo(100L * calls);
             assertThat(architect.outputTokens())
                 .as("what the session wrote is output, call by call").isEqualTo(20L * calls);
+            assertThat(architect.sizedCalls())
+                .as("and beside the server's count, the size of each request as it went out")
+                .isEqualTo(calls);
+            assertThat(architect.sizedInputTokens()).isEqualTo(100L * calls);
+            assertThat(architect.requestChars()).isGreaterThan(300L * calls);
+            assertThat(architect.repeatCalls()).as("every call after the first")
+                .isEqualTo(calls - 1);
+            assertThat(architect.samePrefixChars())
+                .as("a session's request begins as its last one did: what a prompt cache serves")
+                .isBetween(100L * (calls - 1), architect.repeatRequestChars());
 
             assertThat(gate.spendOfRun(run))
                 .as("and the budget holds the same figures: before, this session was charged "

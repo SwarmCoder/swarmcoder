@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.swarmcoder.domain.ApiContract;
 import com.swarmcoder.domain.ArchDecision;
 import com.swarmcoder.domain.DesignDocument;
+import com.swarmcoder.domain.DesignFinding;
+import com.swarmcoder.domain.KillReason;
 import com.swarmcoder.domain.Task;
 import com.swarmcoder.inference.EndpointOutage;
 import com.swarmcoder.inference.LlmJson;
@@ -31,8 +33,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -199,7 +205,9 @@ public class DesignReviewerClient {
             String user = (hasRules ? rulesBrief.strip() + "\n\n" : "")
                 + (hasFact ? buildFact.strip() + "\n\n" : "")
                 + "Goal: " + design.goal() + "\n\nDesign:\n" + designText;
-            return callReviewer("design review", system, user);
+            return oneShotReview("design review", system, user);
+        } catch (CloudGate.BudgetExhaustedException spent) {
+            throw spent; // a spent budget parks the run; it is never "approved, review unavailable"
         } catch (EndpointOutage outage) {
             // This role fails soft on purpose — an unavailable reviewer must never block a run. But
             // "unavailable" has to mean the reviewer refused or answered unusably. When the endpoint
@@ -274,8 +282,10 @@ public class DesignReviewerClient {
                 + "would be. " + ONLY_WHAT_THE_CHANGE_TOUCHES
                 + "Respond ONLY with JSON: {\"approved\": true|false, \"objections\": "
                 + "[\"task '<task title>' conflicts with rule '<rule title>': <one sentence>\"]}";
-            String user = rulesBrief + "\n\nThe plan's tasks:\n" + tasksSummary(tasks);
-            return callReviewer("plan-versus-rules review", system, user, true);
+            return callReviewer("plan-versus-rules review", system, rulesBrief,
+                "The plan's tasks:\n" + tasksSummary(tasks), "");
+        } catch (CloudGate.BudgetExhaustedException spent) {
+            throw spent; // see review(DesignDocument, String, String)
         } catch (EndpointOutage outage) {
             throw outage;
         } catch (Exception e) {
@@ -330,8 +340,11 @@ public class DesignReviewerClient {
                 + ONLY_WHAT_THE_CHANGE_TOUCHES + "Respond ONLY with JSON: "
                 + "{\"approved\": true|false, \"objections\": [\"decision '<the decision or "
                 + "contract, in a few words>' conflicts with rule '<rule title>': <one sentence>\"]}";
-            String user = rulesBrief + "\n\nThe design's own decisions and contracts:\n" + content;
-            return callReviewer("design-versus-rules review", system, user, true);
+            return callReviewer("design-versus-rules review", system, rulesBrief,
+                "The design's own decisions and contracts:\n" + content,
+                establishedFacts(design));
+        } catch (CloudGate.BudgetExhaustedException spent) {
+            throw spent; // see review(DesignDocument, String, String)
         } catch (EndpointOutage outage) {
             throw outage;
         } catch (Exception e) {
@@ -377,12 +390,15 @@ public class DesignReviewerClient {
                 + "ONLY with JSON: {\"approved\": true|false, \"objections\": [\"line '<the "
                 + "offending line, copied>' in <file path> conflicts with rule '<rule title>': "
                 + "<one sentence>\"]}";
-            StringBuilder user = new StringBuilder(rulesBrief).append("\n\nThe test file(s):\n");
+            StringBuilder user = new StringBuilder("The test file(s):\n");
             for (Map.Entry<String, String> file : testFiles.entrySet()) {
                 user.append("\n--- ").append(file.getKey()).append(" ---\n")
                     .append(file.getValue()).append('\n');
             }
-            return callReviewer("tests-versus-rules review", system, user.toString(), true);
+            return callReviewer("tests-versus-rules review", system, rulesBrief,
+                user.toString(), "");
+        } catch (CloudGate.BudgetExhaustedException spent) {
+            throw spent; // see review(DesignDocument, String, String)
         } catch (EndpointOutage outage) {
             throw outage;
         } catch (Exception e) {
@@ -442,54 +458,117 @@ public class DesignReviewerClient {
     }
 
     /**
-     * One reviewer round trip: charge, call, parse — with one retry, the parser's own complaint
-     * fed back, when the first reply does not parse (mirrors {@code ArchitectClient#callForJson}).
-     * A second parse failure propagates as an {@link IOException}; every call site above catches it
-     * and fails soft.
+     * One reading against the project's rules (design, plan, tests). It runs in the reviewer's
+     * lookup session when one is configured, so a reading that depends on a fact - does this
+     * type exist, how does this library do it, what does the rule mean here - is looked up
+     * rather than guessed. The one-shot answer is what a session that fails falls back to, said
+     * in the log: charge, call, parse, with one retry when the reply does not parse. The rubric
+     * review of the design is not one of these; it is always one reply.
+     *
+     * @param rules what the reading is against, exactly as the roles were shown it
+     * @param body  what is read: the design's decisions, the plan's tasks, the test files
+     * @param facts what the architect established for the design, rendered, or "" - given to a
+     *              session when it is opened, never to the one-shot review
      */
-    private Review callReviewer(String roleLabel, String system, String user) throws Exception {
-        return callReviewer(roleLabel, system, user, false);
-    }
-
-    /**
-     * @param withLookups true for the readings against the project's rules (design, plan, tests):
-     *                    they run as a lookup session when one is configured, so a reading that
-     *                    depends on a fact - does this type exist, how does this library do it,
-     *                    what does the rule mean here - is looked up rather than guessed. The
-     *                    one-shot answer is what a session that fails falls back to, said in the
-     *                    log. The rubric review of the design is not one of them.
-     */
-    private Review callReviewer(String roleLabel, String system, String user,
-                                boolean withLookups) throws Exception {
+    private Review callReviewer(String roleLabel, String system, String rules, String body,
+                                String facts) throws Exception {
         LookupAgent agent = lookupAgent;
-        if (withLookups && agent != null) {
+        if (agent != null) {
             try {
-                Review viaSession = reviewInSession(agent, roleLabel, system, user);
+                Review viaSession = reviewInSession(agent, roleLabel, system, rules, body, facts);
                 if (viaSession != null) {
                     return viaSession;
                 }
-            } catch (EndpointOutage outage) {
-                throw outage;
+            } catch (EndpointOutage | CloudGate.BudgetExhaustedException stop) {
+                throw stop;
             } catch (RuntimeException e) {
                 log.warn("The reviewer's lookup session for the {} failed ({}); falling back to "
                     + "the one-shot review without tools", roleLabel, e.toString());
             }
         }
-        return oneShotReview(roleLabel, system, user);
+        return oneShotReview(roleLabel, system, rules + "\n\n" + body);
+    }
+
+    /**
+     * The reviewer's conversation of one run, kept between its readings (section 94).
+     *
+     * <p>Measured on a paid server, 2026-10-13: each of the four readings of one story opened a
+     * session of its own and learned the project and its framework again - 34, 28, 51 and 8
+     * calls, 370 lookups returning 847,632 characters, 9.1 million tokens. The second reading of
+     * the design, after a revision that changed one decision, made 99 lookups of its own. A
+     * reading that follows another in the same run is now the next message of the same
+     * conversation: the rules, the facts and every lookup are already in it.
+     *
+     * @param rules the rules the conversation was opened with; a later reading against the same
+     *              rules does not send them again
+     */
+    private record Kept(LookupAgent.Conversation conversation, ReviewerTools tools, String rules) {}
+
+    /** How many runs' reviewer conversations are held at once; the oldest is let go first. */
+    static final int KEPT_CONVERSATIONS = 8;
+
+    private final Map<UUID, Kept> keptByRun = Collections.synchronizedMap(
+        new LinkedHashMap<>() {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<UUID, Kept> eldest) {
+                if (size() <= KEPT_CONVERSATIONS) {
+                    return false;
+                }
+                eldest.getValue().conversation().close();
+                return true;
+            }
+        });
+
+    /** The run this thread works for, or null: a reading for no run keeps no conversation. */
+    private static UUID runOfThisThread() {
+        CloudGate.Where where = CloudGate.current();
+        return where == null ? null : where.runId();
     }
 
     /** The verdict of a lookup session, or null when the session gave none. */
     private Review reviewInSession(LookupAgent agent, String roleLabel, String system,
-                                   String user) {
-        ReviewerTools[] own = new ReviewerTools[1];
-        LookupAgent.Outcome outcome = agent.run(client, new LookupAgent.Ask("reviewer",
-            sessionSystem(system), user, LookupAgent.Limits.configured(), SESSION_FINISH_ADVICE,
-            List.of(), session -> {
-                own[0] = new ReviewerTools(session);
-                return own[0].bindings();
-            }));
-        if (own[0] != null && own[0].handedIn()) {
-            Review review = own[0].review();
+                                   String rules, String body, String facts) {
+        UUID run = runOfThisThread();
+        Kept kept = run == null ? null : keptByRun.remove(run);
+        LookupAgent.Outcome outcome = null;
+        ReviewerTools tools = null;
+        String heldRules = rules;
+        if (kept != null) {
+            kept.tools().startsAnotherReading();
+            Optional<LookupAgent.Outcome> continued = agent.resume(client, kept.conversation(),
+                anotherReading(system, rules.equals(kept.rules()) ? null : rules, body));
+            if (continued.isPresent()) {
+                outcome = continued.get();
+                tools = kept.tools();
+                heldRules = kept.rules();
+            }
+        }
+        if (outcome == null) {
+            ReviewerTools[] own = new ReviewerTools[1];
+            outcome = agent.run(client, new LookupAgent.Ask("reviewer", sessionSystem(system),
+                rules + "\n\n" + (facts == null || facts.isBlank() ? "" : facts + "\n") + body,
+                LookupAgent.Limits.configured(), SESSION_FINISH_ADVICE, List.of(), session -> {
+                    own[0] = new ReviewerTools(session);
+                    return own[0].bindings();
+                }));
+            tools = own[0];
+        }
+        if (outcome.conversation() != null) {
+            if (run != null && tools != null) {
+                keptByRun.put(run, new Kept(outcome.conversation(), tools, heldRules));
+            } else {
+                outcome.conversation().close();
+            }
+        }
+        if (outcome.stopped().filter(reason -> reason == KillReason.BUDGET_EXCEEDED).isPresent()) {
+            // The session was stopped before its next call because a token limit was passed.
+            // Asking the gate again throws what parks the run with the budget question. A
+            // one-shot review in its place would be one more paid call, and when that was
+            // refused too the reading used to come back "approved, review unavailable".
+            cloudGate.charge(0);
+        }
+        if (tools != null && tools.handedIn()) {
+            Review review = tools.review();
             log.info("The reviewer handed in its {} after {} turn(s) and {} tool call(s): {}",
                 roleLabel, outcome.turns(), outcome.toolsUsed().size(),
                 review.approved ? "approved" : review.objections.size() + " objection(s)");
@@ -511,15 +590,71 @@ public class DesignReviewerClient {
         return null;
     }
 
+    /**
+     * What the architect established while it designed, as the reviewer's session is given it:
+     * each fact with the lookup it was copied from (section 73). The reviewer was looking the
+     * same facts up again - 63 whole files and 101 document sections in the measured run.
+     * Bounded like a task's handover; "" when the design carries none.
+     */
+    static String establishedFacts(DesignDocument design) {
+        List<DesignFinding> findings = design == null ? null : design.findings();
+        if (findings == null || findings.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(FACTS_HEADING);
+        int room = ArchitectHandover.maxChars();
+        int left = 0;
+        for (DesignFinding finding : findings) {
+            if (finding == null) {
+                continue;
+            }
+            String rendered = finding.render();
+            if (rendered.length() > room) {
+                left++;
+                continue;
+            }
+            room -= rendered.length();
+            sb.append(rendered);
+        }
+        if (left > 0) {
+            sb.append("(").append(left).append(" more are not shown here; the lookup tools "
+                + "return them.)\n");
+        }
+        return sb.toString();
+    }
+
+    static final String FACTS_HEADING = "WHAT THE ARCHITECT ESTABLISHED WHILE DESIGNING - how "
+        + "this project and its framework do it. Each line is a fact the architect looked up, "
+        + "with the lookup it came from and, indented under it, the lines that lookup returned, "
+        + "as they are. They are established: rely on them, and do not look them up again.\n";
+
     /** The review's own instructions, and what a session adds to them. */
     static String sessionSystem(String system) {
         return system + " YOU WORK IN STEPS WITH READ-ONLY LOOKUP TOOLS over this project and its "
-            + "reference material. Before you object on a reading that depends on a fact - does "
-            + "a type exist, how does this library do the thing, what does a rule mean here - look "
-            + "the fact up; never object on a guess, and never approve on one. Give your verdict "
-            + "with report_done: `approved`, and `objections` one per line in exactly the wording "
-            + "described above. The JSON object described above is the shape of that verdict; "
-            + "give it through report_done, not as text.";
+            + "reference material. Your work is to read the text you are given against the rules, "
+            + "not to learn the project: read it first, and where its own wording shows no "
+            + "conflict with a rule there is nothing to look up. Look a fact up only when an "
+            + "objection you are about to raise depends on it - does a type exist, how does this "
+            + "library do the thing, what does a rule mean here - and look up that fact alone, "
+            + "with every lookup you can already name in ONE reply. Facts already established "
+            + "for you are given with the text: rely on them. Never object on a guess. Give "
+            + "your verdict with report_done: `approved`, and `objections` one per line in "
+            + "exactly the wording described above. The JSON object described above is the "
+            + "shape of that verdict; give it through report_done, not as text.";
+    }
+
+    /**
+     * A further reading as the next message of a kept conversation: its own instructions (the
+     * conversation's system prompt is the first reading's), the rules only when they are not the
+     * ones the conversation already holds, and the text to read.
+     */
+    static String anotherReading(String system, String rulesIfNew, String body) {
+        return "ANOTHER READING, IN THIS SAME CONVERSATION. Everything you looked up before is "
+            + "above and still stands: do not look it up again. For this reading these "
+            + "instructions replace the earlier ones, and its verdict is given with report_done "
+            + "like the last.\n\n" + system + "\n\n"
+            + (rulesIfNew == null ? "The project's rules are the ones at the start of this "
+                + "conversation.\n\n" : rulesIfNew + "\n\n") + body;
     }
 
     private static final String SESSION_FINISH_ADVICE = "Stop looking things up and hand in your "

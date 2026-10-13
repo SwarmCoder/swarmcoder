@@ -119,6 +119,16 @@ query for a method body, a module's contents or a build file, and nobody measure
 actually used. It went unnoticed because the model was local and its tokens were free, and because
 the coordinating session (Claude) tracked run time and delivery instead of tokens and tool use.
 
+**Again, 2026-10-13.** One small story cost 15.1 million paid tokens: the reviewer made 121 calls
+at 75,500 tokens and the architect 55 at 83,600. In the application the reviewer was an agent
+that opened a new session for each of its four readings and learned the project each time; the
+harness ran it as one question, so no harness report had ever shown it. The paid server also
+counted the model's earlier thinking as input on every call. The budget did not stop the run and
+the report warned of nothing. The guards now: a run's report begins with a `WARNING:` line for a
+paid role above 30,000 input tokens a call or above the calls its work needs; the run's budget is
+charged with the server's own figures and stops every role, the reviewer included, before its
+next call (section 94 of `docs/DEVELOPER_CORRECTIONS.md`). Read the warnings of every paid run.
+
 ## 2. Tokens are money (paid cloud models)
 
 Planning roles may run on a paid cloud model. Report and judge runs by tokens per role, not by
