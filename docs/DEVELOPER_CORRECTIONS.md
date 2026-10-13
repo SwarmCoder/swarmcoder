@@ -9825,3 +9825,192 @@ starter file names the setting), `UsageReportWarningsTest` (question limit; look
 - The report limit for `question` is the count of readings and revisions in one run; a report
   of several runs added up can exceed 8 without a fault.
 - The full test suite was not run.
+
+## 97. An architect that read for 59 paid calls and wrote nothing, on a project that already held the answers (live build, 2026-10-13)
+
+**What was observed.** The second of five stories of a small three-module project ("edit a
+record's details and find the change still there after a restart"), built on the first story,
+which the same project had delivered a few hours before. The run reached its limit of 3,000,000
+tokens while still in DESIGN and was stopped. From the ledger of section 93: architect 59 calls,
+2,896,600 input tokens (2,478,720 from the server's prompt cache), 137,507 output, 49,094 input
+a call, the largest 83,534; 10,483,315 characters sent; 233 lookups returned 396,392
+characters, 56% of them about the reference material.
+
+**What was established**, from a copy of the instance's store with
+`WhatARolesCallsWereForTest` (no model; it does nothing unless told where a copy is). It
+replays the stored session through the product's own tidy and prints each tidy's figures; they
+fall within 3% of the instance's log, at the same calls but two that are one call apart.
+
+*1. What the 59 calls were for.* Every one was a lookup call. No draft was given to
+`check_design`, nothing was kept with `keep_for_workers`, nothing was handed in; the 59th call
+made no tool call and the budget ended the session. A call is put in a group from the tools it
+called and nothing else: a draft check, a finding, a hand-in, a call after a hand-in was sent
+back, and otherwise by whether its lookups returned more characters about the reference
+material or about the project.
+
+| group | calls | tokens (input and output) | share |
+|---|---|---|---|
+| learning the reference material | 30 | 1,712,717 | 56% |
+| reading the project as the first story left it | 28 | 1,259,534 | 41% |
+| no tool call (the last) | 1 | 61,856 | 2% |
+| checking a draft, revising, writing findings | 0 | 0 | 0 |
+
+The two kinds alternate through the whole session, in 25 stretches of one to six calls. For
+comparison the first story's architect (55 calls, 4,598,614 tokens, before the fixes of
+sections 94 to 96): 40 calls learning the reference (61%), 5 reading the project, 3 writing 22
+findings, 4 draft checks, 3 hand-ins. All four of its checks answered "NO OBJECTIONS" in 125
+characters: no draft failed a mechanical check; it wrote the design four times because the
+reviewer sent it back twice.
+
+*2. What had been looked up before.* A lookup's target is the type, file or document it
+names; a question in words is its own target. 88 targets in 233 lookups.
+
+| | targets | lookups | characters | of them reference |
+|---|---|---|---|---|
+| everything | 88 | 233 | 396,392 | 218,862 |
+| a target the first story's architect had looked up | 41 | 115 | 175,307 (44%) | 146,650 (67%) |
+| a target any planning role of the first story had looked up | 55 | 152 | 261,416 (66%) | 172,641 (79%) |
+| a target a finding of the delivered design was copied from | 7 | 29 | 43,095 (11%) | 37,944 (17%) |
+
+The delivered design held 22 findings, 11,480 characters for those seven targets, among them
+the shape of a write that changes a stored object - the question this story turns on. Nothing
+showed them to the second architect: its opening names the story, the rules and the map.
+
+Inside the session: 143 of the 233 lookups (246,316 characters) were about a target it had
+already looked up. 26 were the very same call (27,458). 52 (91,330) came after every earlier
+answer about that target had been shortened by a tidy; 91 (154,986) while one was still whole,
+which is mostly another part of the same class.
+
+*3. What a request was made of.* Characters of the conversation, replayed:
+
+| part | an average request | the largest call (call 43) |
+|---|---|---|
+| system prompt | 7,897 | 7,897 |
+| opening: map (about 1,700), rules (about 10,200), story and what the project has | 16,173 | 16,173 |
+| lookup results still whole | 82,062 | 121,367 |
+| results cut to their first lines | 6,881 | 10,480 |
+| results cut to one line | 11,583 | 16,159 |
+| arguments of its lookups | 7,312 | 10,433 |
+| its own text, drafts, findings | 58 | 59 |
+| all | 132,415 | 183,200 |
+
+In tokens the 2,896,600 of input are about 1.95 million of conversation, 0.19 million of tool
+descriptions (3,247 a call) and 0.71 million that the server counted for the model's earlier
+thinking (section 94; a new message was begun eight times, each at a tidy, with 5,800 to
+27,900 such tokens standing). Old results are shortened at 20,000 tokens, and were, nine times;
+the conversation was still 24,000 to 41,000 tokens after each, because a tidy leaves 8,000
+tokens of saving uncut, never touches the last four turns, and keeps results asked for again.
+So two thirds of every request was lookup results still whole. No draft was ever in the
+conversation here. In the first story's run the earlier drafts were: each `check_design` and
+the hand-in carried the whole design (26,692 to 34,823 characters) as a call argument, nothing
+shortens those, and the largest call held 65,400 characters of them. `check_design` itself
+answers with the objections only.
+
+*4. Parts of files.* 46 reads by line range: 35 of a Java source (110,842 characters, 3,167
+each, typically 50 to 170 lines), 8 that were all the lines of a file whose outline had been
+given (22,814), 2 of a document (12,374, the same 200 lines twice, where its sections have a
+query), 1 of a settings file. None was after one method. The largest group is one 259-line
+class of the project read in two halves four times, about 38,000 characters: `body_of`
+answers a type that large with its member list, so the role read it by lines, and read it
+again after each tidy. The answers were the size of what was asked; what cost was asking again.
+
+**Directions, confirmed or rejected.**
+
+- *A, a project learns what it builds on once: confirmed, and built.* 44% of what this session
+  looked up, and 67% of what it looked up in the reference material, was about something the
+  project's own architect had looked up hours before. Only 11% was about something that had
+  been written down as a finding, so the findings as they are kept today cover a quarter of the
+  overlap.
+- *B, a draft is not carried many times: half true, not built.* `check_design` does not echo
+  the draft. Earlier drafts do stay in the conversation as call arguments. In this run there
+  was no draft. In the first story's run, replacing each draft by a line once a newer one
+  exists would have taken 308,434 characters off five calls, about 77,000 of 4.6 million tokens.
+- *C, parts and search at the size of the question: rejected for ranges.* See 4. Search and
+  documentation answers were 15 calls and 47,413 characters, one of 7,238; left as they are.
+- *D, tokens by group in the run report: the engine can tell the groups apart* from the tool
+  calls alone, by the rule in 1 (`WhatARolesCallsWereForTest.groupOf`). Not built: a call's
+  tokens are recorded before its tools run, and a group would be a new key on the stored usage
+  rows (`ModelUsageRecord`).
+
+**What changed.**
+
+- *`KnownFacts` (sc-knowledge).* What the architects of a project's DELIVERED stories kept:
+  each finding as recorded - what it is about, the lookup it was copied from, the sentence, the
+  copied lines - with the story's key and the commit it was delivered as. Read from the designs
+  the store already holds (`KnownFacts.ofDelivered`); nothing new is stored. A run that was not
+  delivered contributes nothing.
+- *`known_about <type, file or document>`*, a lookup of every role's session
+  (`ExpertTools.knownAbout`, first in the tool list, counted in the run report under its own
+  kind, "facts the project already holds"). It answers with each fact about that name: the
+  sentence, the lookup it came from, the story and commit, and what became of its source. Names
+  are compared as names: a type by its simple or full name, a source by its file, type or
+  document. An empty question lists every title. Its result can be kept for this story's
+  workers with `keep_for_workers` like any lookup.
+- *A fact whose source changed is not served as true.* The lines a finding carries were copied
+  from its source by a tool, so "is it still so" has an exact answer with no model and no
+  history: are those lines still in that file now (`KnownFacts.held`; a type is placed by the
+  tree). If not, the answer says "CHANGED SINCE", withholds the lines and says to make the
+  lookup again; a source that is gone is said to be gone.
+- *Titles in the opening* (`LookupAgent.withKnown`): after the project map, each subject with
+  how many facts are held and what they were copied from, at most 2,400 characters, and a line
+  in the tool guide. No sentence and no code: the text of a fact is a lookup (CLAUDE.md
+  section 1). A project that holds nothing gets neither the tool nor the titles.
+- *Wired in the application* for the architect, the planner, the test author and the reviewer
+  when it works with lookups (`ProjectContext`). Not in the harness.
+
+**The computed effect**, from the stored run. Tokens are taken in proportion to the lookups
+not made, at this run's 49,094 a call and four lookups a call.
+
+| change | lookups | characters | tokens |
+|---|---|---|---|
+| A as built, if the role reads the 22 facts instead of the seven sources | 29 of 233 | 43,095, less 11,480 read as facts | about 0.35 million of 2.9 |
+| A if everything the first architect looked up had been kept (not built: only findings are kept) | 115 | 175,307 | up to 1.4 million |
+| B (not built), on the first story's run | | 308,434 | about 77,000 of 4.6 million |
+| C | | 0 | 0 |
+
+*This story's design afterwards.* To reach the point where it stopped: about 2.5 million
+instead of 2.9. It had not begun to draft; the first story needed twelve more calls from its
+first finding to its last hand-in, about 0.7 million at this run's call size. So about 3.2
+million, still above the limit of 3.0. What has been built does not by itself bring this story's
+design under its budget.
+
+**Not decided here** - each needs a decision the stored run cannot settle:
+
+- *The thinking the server counts again, 0.71 million tokens (24% of the input).* A new message
+  is begun only at a tidy. Beginning one whenever the count passes the tolerance would remove
+  most of it, and each such call is then read without the prompt cache, which is where 86% of
+  this run's input came from. Tokens against money.
+- *The tidy.* Lookup results still whole were 1.2 million tokens of this run. A lower mark cuts
+  that, and 52 lookups here were already a second reading of something a tidy had cut.
+- *Keeping more than the findings.* The findings are chosen for workers. What would spare the
+  next architect is every target the last one settled; see the second row above.
+- *The criteria named test methods that did not exist yet.* The opening gives each criterion
+  with the test method that will prove it, which the test author writes after the design. The
+  session read the two test classes named there five times each and searched for the two
+  method names: 24,244 characters. Whether that is why is not in the store (a turn's thinking is
+  kept as its size).
+
+**Tests.** `AProjectLearnsWhatItBuildsOnOnceTest` (sc-workflow; the model scripted, the
+runtime, lookups and tools real): the next story's architect is opened with the titles and no
+fact's text; `known_about` by subject gives the fact, its lookup, story, commit, "unchanged"
+and the lines; a fact whose lines are no longer in its source is marked and its lines
+withheld; asked by the file a fact was copied from; nothing recorded is said plainly; a known
+fact is kept for this story's workers; a project that holds nothing is opened as before; only
+this project's delivered stories count. Run with it and unchanged:
+`TheArchitectHandsItsFindingsToTheWorkersTest`,
+`TheArchitectAndThePlannerLookThingsUpAndCheckTheirDraftsTest`,
+`AnAnswerComesAtTheSizeOfTheQuestionTest`.
+
+**Not checked.**
+
+- Nothing was run against a model. Whether a role reads `known_about` before it looks up is
+  what the model does; the next run's report shows it as lookups of the kind "facts the
+  project already holds" against reference lookups.
+- `KnownFacts.ofDelivered` against a real store: the selection is tested on runs, designs and
+  stories held in maps; the copy that was analysed was not opened by it.
+- The application was not started; `ProjectContext` compiles with the wiring.
+- A story whose delivered commit is set and whose run was later abandoned.
+- The reviewer as one question a reading (the default, section 96) has no lookups and is not
+  given the titles.
+- The effect figures are proportions of a stored run, not a measurement.
+- The full test suite was not run; the classes above were.

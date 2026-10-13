@@ -1407,6 +1407,86 @@ public final class ExpertTools {
         return run("body_of", what, () -> new TreeQueries(curator).bodyOf(what));
     }
 
+    // -------------------------------------------------------------------------------------------
+    // What the project already knows (section 97).
+
+    /** What earlier stories' architects kept; never null. */
+    private volatile KnownFacts known = KnownFacts.none();
+
+    /** Gives this session the facts the project holds; null is none. */
+    void know(KnownFacts facts) {
+        this.known = facts == null ? KnownFacts.none() : facts;
+    }
+
+    /**
+     * {@code known_about}, or null when the project holds nothing: a session is then opened
+     * with the tools it always had.
+     */
+    ToolBinding knownBinding() {
+        if (known.isEmpty()) {
+            return null;
+        }
+        try {
+            return new ToolBinding("known_about",
+                "BEFORE YOU LOOK SOMETHING UP AGAIN: what the architect of an earlier, delivered "
+                    + "story of this project established and kept - how this project and what "
+                    + "it builds on do a thing, with the lines it was copied from, the story "
+                    + "and commit it was true at, and whether that source has changed since. "
+                    + "Give a type, or a file or document a fact was copied from, as your "
+                    + "opening lists them; an empty string lists every title. A fact whose "
+                    + "source changed is marked and its lines withheld.",
+                this, method("knownAbout", String.class));
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** {@code known_about}. The parameter name is the tool's schema - do not rename it. */
+    public String knownAbout(String what) {
+        return run("known_about", what, () -> known.about(what, this::sourceOf));
+    }
+
+    private static final Pattern BODY_ADDRESS = Pattern.compile("^// (\\S+?):\\d+");
+
+    /**
+     * What became of the source a fact was copied from: the file its lookup named - or, for a
+     * lookup that named a type, the file the tree has that type in - as it is now.
+     */
+    KnownFacts.Source sourceOf(KnownFacts.Fact fact) {
+        if (fact.snippet() == null || fact.snippet().isBlank()) {
+            return KnownFacts.Source.NO_LINES;
+        }
+        try {
+            String argument = KnownFacts.argumentOf(fact.source());
+            int hash = argument.indexOf('#');
+            String named = (hash >= 0 ? argument.substring(0, hash) : argument)
+                .replaceAll(":\\d+(-\\d+)?$", "").strip();
+            if (named.isEmpty()) {
+                return KnownFacts.Source.GONE;
+            }
+            String address = resolveInsideRoots(named);
+            if (address != null && !curator.isFolder(address)) {
+                String whole = curator.readFile(address, WHOLE_FILE_CHARS);
+                if (!whole.startsWith("error:")) {
+                    return KnownFacts.held(fact, whole, address);
+                }
+            }
+            // Not a file: a type, which the tree places.
+            String body = new TreeQueries(curator).bodyOf(named);
+            Matcher placed = BODY_ADDRESS.matcher(body == null ? "" : body);
+            if (!placed.find()) {
+                return KnownFacts.Source.GONE;
+            }
+            String whole = curator.readFile(placed.group(1), WHOLE_FILE_CHARS);
+            return whole.startsWith("error:") ? KnownFacts.Source.GONE
+                : KnownFacts.held(fact, whole, placed.group(1));
+        } catch (RuntimeException e) {                                     // noqa
+            log.debug("known_about: the source of '{}' could not be read: {}", fact.source(),
+                e.toString());
+            return KnownFacts.Source.GONE;
+        }
+    }
+
     /**
      * The string literals of a type, by member (section 63): what the application shows and how
      * its screens are named, without the code that draws them. In every session's list since
@@ -1431,6 +1511,7 @@ public final class ExpertTools {
             case "search", "lookup_docs", "docs_for", "library_docs", "find_example" ->
                 com.swarmcoder.inference.LookupMeter.Kind.SEARCH;
             case "check_journey" -> com.swarmcoder.inference.LookupMeter.Kind.JOURNEY_CHECK;
+            case "known_about" -> com.swarmcoder.inference.LookupMeter.Kind.KNOWN;
             case "list_files" -> com.swarmcoder.inference.LookupMeter.Kind.LISTING;
             case "read_file" -> {
                 Matcher part = PART_OF_FILE.matcher(argument == null ? "" : argument.strip());
