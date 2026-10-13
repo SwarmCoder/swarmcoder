@@ -250,4 +250,83 @@ class AnAgentSessionsCallsAreCountedOneByOneTest {
                 .isEqualTo(new CloudGate.Spend(0, 0));
         }
     }
+
+    /**
+     * Section 98: beside the sums, each call of a session is kept by itself with what it was
+     * for and its thinking; a server that gives no count of the thinking has it estimated from
+     * the length of what it thought.
+     */
+    @Test
+    void eachCallOfASessionIsKeptWithWhatItWasForAndItsThinking() throws Exception {
+        CloudGate gate = new CloudGate(Limits.NONE, b -> { });
+        gate.countFromUsage();
+        try (ScriptedExpertEndpoint endpoint = endpoint()) {
+            endpoint.thinking(turn -> "x".repeat(400 * turn));
+            UsageLedger ledger = new UsageLedger(gate, null,
+                UsageLedger.normalized(endpoint.baseUrl())::equals); // the operator's own server
+            RunMeter.recordTo(ledger);
+
+            runArchitect(endpoint, gate);
+
+            int calls = endpoint.turnsServed();
+            RunUsageRecord usage = ledger.usageOf(run);
+            assertThat(usage.calls()).hasSize(calls);
+            assertThat(usage.calls()).allSatisfy(call -> {
+                assertThat(call.role()).isEqualTo("architect");
+                assertThat(call.purpose()).isEqualTo("a turn of the session architect");
+                assertThat(call.paid()).isFalse();
+                assertThat(call.input()).isEqualTo(100);
+                assertThat(call.output()).isEqualTo(20);
+            });
+            assertThat(usage.calls().get(0).thinking())
+                .as("400 characters of thinking, counted by nobody: about 100 tokens")
+                .isEqualTo(100);
+            assertThat(usage.calls().get(1).thinking()).isEqualTo(200);
+            assertThat(usage.models().get(0).thinkingCalls()).isEqualTo(calls);
+            assertThat(usage.models().get(0).estimatedThinkingCalls()).isEqualTo(calls);
+        }
+    }
+
+    @Test
+    void aCallThatAsksOneQuestionSaysWhatItIsFor() throws Exception {
+        try (ScriptedExpertEndpoint endpoint = new ScriptedExpertEndpoint(turn ->
+                ScriptedExpertEndpoint.Reply.text("The second one."))) {
+            UsageLedger ledger = new UsageLedger(null, null,
+                UsageLedger.normalized(endpoint.baseUrl())::equals);
+            RunMeter.recordTo(ledger);
+            VllmClient client = new VllmClient(endpoint.baseUrl(), "", "expert-fake",
+                ModelQuirks.DEFAULTS.withLabel("expert-fake"));
+            List<Map<String, String>> question =
+                List.of(Map.of("role", "user", "content", "Which is better?"));
+
+            try (var in = CloudGate.enter(new Where(project, story, run))) {
+                try (var lines = client.as("judge", "task-1", "3")
+                        .purpose("judging one candidate")
+                        .chatCompletionStream(question, null, 0.0)) {
+                    lines.collect(Collectors.joining());
+                }
+                try (var lines = client.as("test author")
+                        .chatCompletionStream(question, null, 0.0)) {
+                    lines.collect(Collectors.joining());
+                }
+            }
+            // The Console's chat: a call made for no run at all.
+            try (var lines = client.as("chat").purpose("the Console's chat")
+                    .chatCompletionStream(question, null, 0.0)) {
+                lines.collect(Collectors.joining());
+            }
+
+            RunUsageRecord usage = ledger.usageOf(run);
+            assertThat(usage.calls()).hasSize(2);
+            assertThat(usage.calls().get(0).role()).isEqualTo("judge");
+            assertThat(usage.calls().get(0).purpose()).isEqualTo("judging one candidate");
+            assertThat(usage.calls().get(0).task()).isEqualTo("task-1");
+            assertThat(usage.calls().get(0).worker()).isEqualTo("3");
+            assertThat(usage.calls().get(1).purpose())
+                .as("a caller that says nothing is a single question").isEqualTo("one question");
+            assertThat(ledger.outsideRuns().calls()).as("and the chat's call is kept too")
+                .extracting(call -> call.role() + ": " + call.purpose())
+                .containsExactly("chat: the Console's chat");
+        }
+    }
 }

@@ -41,6 +41,13 @@ public class LookupUsageRecord {
      */
     private int referenceCalls;
     private long referenceChars;
+    /**
+     * How many of {@link #calls} asked a question a lookup had already answered earlier in the
+     * same run, to this role or to another, and the characters those returned. Added with
+     * section 98; a record stored before it reads 0 for both.
+     */
+    private int repeatCalls;
+    private long repeatChars;
 
     public LookupUsageRecord() {}
 
@@ -65,9 +72,16 @@ public class LookupUsageRecord {
         referenceChars += Math.max(0, moreChars);
     }
 
+    /** Of the lookups already added, this many repeated a question answered before. */
+    public void addRepeat(int moreCalls, long moreChars) {
+        repeatCalls += moreCalls;
+        repeatChars += Math.max(0, moreChars);
+    }
+
     public LookupUsageRecord copy() {
         LookupUsageRecord copy = new LookupUsageRecord(role, kind, label, structured, calls, chars);
         copy.addReference(referenceCalls, referenceChars);
+        copy.addRepeat(repeatCalls, repeatChars);
         return copy;
     }
 
@@ -79,4 +93,6 @@ public class LookupUsageRecord {
     public long chars() { return chars; }
     public int referenceCalls() { return referenceCalls; }
     public long referenceChars() { return referenceChars; }
+    public int repeatCalls() { return repeatCalls; }
+    public long repeatChars() { return repeatChars; }
 }

@@ -677,9 +677,15 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 role = role.substring(0, dash);
             }
             SessionMeta meta = spec.meta();
+            // What the call is for is the session it is a turn of, by the session's own full
+            // name ("worker-3", "expert-closing", "expert for architect"); and the candidate
+            // it works on, so a call's tokens can be set against what came of the candidate.
             return new com.swarmcoder.inference.RunMeter.Tag(role,
                 meta == null || meta.taskId() == null ? null : meta.taskId().toString(),
-                meta == null ? null : String.valueOf(meta.workerIndex()));
+                meta == null ? null : String.valueOf(meta.workerIndex()),
+                "a turn of the session " + (spec.role() == null ? "" : spec.role()),
+                meta == null || meta.candidateId() == null ? null
+                    : meta.candidateId().toString());
         }
 
         /**
@@ -760,6 +766,8 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 UsageTap.Seen seen = tap.last();
                 metered.cached(seen.cachedPromptTokens());
                 metered.reasoning(seen.reasoningTokens());
+                // What the thinking is estimated from when the server gives no count of it.
+                metered.thought(answer == null ? 0 : reasoningTokensEstimate(answer) * 4);
                 metered.request(seen.requestChars(), seen.samePrefixChars());
                 if (answer != null && answer.getMetaInfo() != null) {
                     Integer sent = answer.getMetaInfo().getInputTokensCount();

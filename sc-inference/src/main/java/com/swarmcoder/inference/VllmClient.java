@@ -184,7 +184,7 @@ public class VllmClient {
         HttpResponse<String> response;
         // One of the server's places while the request is in flight; see chatCompletionStream.
         try (ServerPlaces.Place place = ServerPlaces.enter(baseUrl)) {
-            metered = RunMeter.begin(RunMeter.currentTag(), modelName, baseUrl, null);
+            metered = RunMeter.begin(purposeOr("reading one image"), modelName, baseUrl, null);
             try {
                 response = httpClient.send(requestBuilder.build(),
                     HttpResponse.BodyHandlers.ofString());
@@ -215,6 +215,12 @@ public class VllmClient {
         return content.asText();
     }
 
+    /** This thread's tag, saying {@code what} the call is for when its caller did not. */
+    private static RunMeter.Tag purposeOr(String what) {
+        RunMeter.Tag tag = RunMeter.currentTag();
+        return tag.purpose() == null ? tag.forPurpose(what) : tag;
+    }
+
     /** The server's own token counts for this call, when the response (or stream chunk) has them. */
     private static void recordUsage(RunMeter.Open metered, JsonNode response) {
         JsonNode usage = response.get("usage");
@@ -224,6 +230,10 @@ public class VllmClient {
         metered.usage(usage.path("prompt_tokens").asInt(-1),
             usage.path("completion_tokens").asInt(-1));
         metered.cached(cachedPromptTokens(usage));
+        // How much of the answer was thinking, as the server counts it
+        // (completion_tokens_details.reasoning_tokens); nothing when it does not say.
+        JsonNode thinking = usage.path("completion_tokens_details").get("reasoning_tokens");
+        metered.reasoning(thinking != null && thinking.isNumber() ? thinking.asInt() : -1);
     }
 
     /**
@@ -263,6 +273,14 @@ public class VllmClient {
 
         private Tagged(RunMeter.Tag tag) {
             this.tag = tag;
+        }
+
+        /**
+         * The same calls, saying what they are for in the run's record of every call: a few
+         * fixed words chosen where the call is made ("judging a task's candidates").
+         */
+        public Tagged purpose(String what) {
+            return new Tagged(tag.forPurpose(what));
         }
 
         public Stream<String> chatCompletionStream(List<Map<String, String>> messages,
@@ -352,7 +370,8 @@ public class VllmClient {
         // counted with them. Nothing, at once, for a server nobody registered (see ServerPlaces).
         // Taken BEFORE the meter starts, so time spent waiting for a place is not time in a call.
         ServerPlaces.Place place = ServerPlaces.enter(baseUrl);
-        RunMeter.Open metered = RunMeter.begin(RunMeter.currentTag(), modelName, baseUrl, null);
+        RunMeter.Open metered = RunMeter.begin(purposeOr("one question"), modelName, baseUrl,
+            null);
         // The size of what was sent: what the input is estimated from if the server reports none.
         metered.request(body.length(), -1);
         HttpResponse<InputStream> response;
@@ -438,6 +457,7 @@ public class VllmClient {
                             metered.firstToken();
                             metered.answered((wrote ? delta.asText().length() : 0)
                                 + (reasoned ? thought.asText().length() : 0));
+                            metered.thought(reasoned ? thought.asText().length() : 0);
                         }
                         return delta.isMissingNode() || delta.isNull() ? "" : delta.asText();
                     } catch (Exception e) {

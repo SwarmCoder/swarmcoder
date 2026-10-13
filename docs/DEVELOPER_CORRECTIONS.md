@@ -10014,3 +10014,147 @@ this project's delivered stories count. Run with it and unchanged:
   given the titles.
 - The effect figures are proportions of a stored run, not a measurement.
 - The full test suite was not run; the classes above were.
+
+## 98. A local build of 87 million tokens that its own report could not show (audit of a five-story build, 2026-10-13)
+
+**What was observed.** `docs/AGENT_USAGE_AUDIT.md`: five stories built on the local server, ten
+runs, 278 sessions, 4,065 model calls, 87.2 million tokens. The usage ledger of section 93 held
+no row for any of the ten runs, so `run_report` would have said "not recorded call by call" for
+each. What the ledger keeps had gaps of its own (the audit's sections 8 and 9): warnings only
+for paid servers, sums and no row per call, the thinking dropped, no repeated lookup counted,
+tokens never set against what came of the work, the judge, the answer check, the wizards and
+the chat with no stored record, a planning session that named no run, and nothing of it in the
+Console.
+
+**Why the ledger had no rows for those runs** - established, not assumed.
+
+- *The program that ran them did not contain the ledger.* The ledger was first committed on
+  2026-10-13 at 17:00 (section 93). The copy of that instance's store, as it was taken and
+  before any newer code had opened it, has a type dictionary in which the store's root has no
+  `runUsage` field and in which neither `RunUsageRecord` nor `ModelUsageRecord` was ever
+  registered. A store's dictionary gains a type the first time the program that writes it
+  knows the type. So no version of the program that wrote that store, through the last of the
+  ten runs, had the ledger: the instance was started from a build made before section 93 and
+  was not restarted on a newer one. Before the ledger, calls were counted only while the test
+  harness switched its meter on (section 93's first cause).
+- *It was not that local calls go unrecorded.* With the ledger installed a local call is a row
+  of its run: `UsageLedgerTest` held that already, the build of section 97 was read "from the
+  ledger of section 93", and the new test below runs every role on a local server.
+- *What the ledger would still have missed*, had it been there (lines as on `master` before
+  this change):
+  - A call made on a thread that works for no run was added to an in-memory book and stored
+    nowhere (`UsageLedger.java:226-228`, `:334`): the Console's wizards and chat
+    (`DependencyGraph.java:1432-1442`), knowledge read at start.
+  - The thinking tokens reached the recorder and went no further: `RunMeter.Finished` carried
+    them, `UsageLedger.finished` did not read them (`UsageLedger.java:162-192`). The client
+    for single questions never read them from the server at all (`VllmClient.recordUsage`).
+  - Rows were sums per role, task, model and class of server. No call was kept, so there was
+    no middle call, no "what was the largest call for".
+  - A lookup was counted by role and kind with no word of what was asked (`LookupMeter.record`),
+    so the same question asked again could not be told.
+  - `UsageReport.warnings` skipped every row that was not paid (`UsageReport.java:247-249`).
+  - A session opened without the join keys was given a record with no run
+    (`TraceHub.java:190-191`); the planning roles open theirs so (`LookupAgent.java:574`).
+  - The Console's story planner and the run's task planner were both tagged "planner"
+    (`DependencyGraph.java:1442`).
+
+**What changed.**
+
+- *Every call is a row and a call of its run, on any server.* Nothing in the rules of section
+  93 changed for a run's calls. The application now says at start that the ledger is installed.
+- *A call for no run is kept and stored.* The ledger is told which project is open
+  (`UsageLedger.forCallsOutsideRuns`); a call or lookup made for no run goes into that
+  project's own record, stored in the same map under the project's id with no run id
+  (`RunUsageRecord.outsideRuns`, `ArtifactStore.recordUsage`), read by `project_report` as
+  "calls for no run", and removed with the project. The cloud gate counts such a call as it did
+  before, outside every run.
+- *Each call is kept by itself* (`CallLog` in `RunUsageRecord`, read as `CallUsageRecord`):
+  role, task, worker, model, class of server, what it was for, the candidate it worked on, when
+  it began, how long it took, input, cached input, output and thinking tokens, whether it
+  failed and whether a count is an estimate. A call is 13 numbers in a page of 256; a full page
+  is never changed, so each later copy of the record shares it and the store writes it once.
+  Section 93 kept sums because a stored object per call would have been written again on every
+  save; this is why pages.
+- *What a call is for* is said where the call is made, in fixed words (`RunMeter.Tag.purpose`,
+  `VllmClient.Tagged.purpose`): a session's calls are "a turn of the session (its full name)",
+  a single question says "judging one candidate", "checking stored answers against a
+  question", "the requirements wizard" and so on, and "one question" where its caller says
+  nothing. A session's calls also carry its candidate's id.
+- *Thinking is kept* per row (`ModelUsageRecord.thinkingTokens`, `thinkingCalls`) and per call,
+  as the server counts it (`completion_tokens_details.reasoning_tokens`, now read by the
+  single-question client too). Where a server gives no count it is the length of the thinking
+  text / 4, and the row and the report say how many calls were counted so. Thinking is part of
+  the output and is never added to it.
+- *Repeats.* A lookup is recorded with its question - the tool and its argument, as asked
+  (`LookupMeter.question`, at the eight places a lookup is counted). The run's record keeps a
+  hash of every question answered (`AskedQuestions`); a lookup whose question is already there
+  is a repeat of its role and kind (`LookupUsageRecord.repeatCalls`, `repeatChars`), whoever
+  asked first, and after a restart too.
+- *Warnings on a local server.* The same rules as on a paid one: input a call above 30,000,
+  more calls than the work needs, a server counting more than was sent, whole files above 25%,
+  reference material above 50%. The words say what is lost there: places and time, not money.
+  New for both: more than 40% of a role's lookups were repeats (from 20 lookups). A project's
+  report counts "the calls a role's work needs" once for each of its runs; before, a project
+  of several runs was warned as if it were one.
+- *The report* (`UsageReport.render`, behind `run_report` and `project_report`) gains a second
+  table per role - calls kept one by one, median input of a call, largest input of one call,
+  what the largest was for, thinking tokens, calls without an answer - a sentence of what was
+  used (tokens of the candidates that were chosen against all candidates'), what came of the
+  run (delivered, ended early with what it had taken, not ended), and repeats in each role's
+  lookup line. A project's report adds the runs delivered, ended early and not ended, each with
+  its tokens, and the calls for no run.
+- *The Console* shows the same figures: a "Tokens" tab on a run and a panel on the Insights
+  page for the project (`UsagePanel`, `ObserverService.usageTable`, `UsageTableDto`). The text
+  and the rows are made from one gathered set of figures (`UsageReports.Gathered`).
+- *A planning session names its run.* A session opened without a run id takes the run its
+  opening thread works for (`TraceHub`), so `run_detail` and the run's session list show it.
+- *The Console's story planner* is tagged "story planner".
+
+**Decisions made here, to be confirmed.**
+
+- A call for no run is filed under the project that is open when it is made. The Console has
+  one project open at a time; a call made in the background for another project would be
+  filed under the open one.
+- A repeat is the same question, not the same answer: a worker that reads a file again after
+  changing it is counted as a repeat.
+- The first table of the report is unchanged and the new figures are a second table, because
+  the test harness prints the first from the same code.
+- `run_report` for a run of seven roles grew from about 1,700 to about 2,600 characters.
+
+**Tests.** `EveryCallOfEveryRoleIsRecordedTest` in sc-runtime (every role on a local server is
+a row and a call of its run and story, stored; a call for no run stored under the open project
+and continued after a restart; thinking kept, and estimated where the server is silent; the
+same question a repeat for another role and after a restart; a session that names no run given
+its opener's), `EachRolesCallsAreShownOneByOneTest` in sc-domain (600 calls kept with their
+four counts and purpose, a full page shared by every later copy; median, largest, purpose and
+thinking in the table; a local server warned in words of places and time, and once per run;
+repeats shown and warned about; tokens of chosen against all candidates),
+`AnAgentSessionsCallsAreCountedOneByOneTest` in sc-knowledge, on the real agent runtime and
+the real single-question client against a scripted endpoint (each call of a session with its
+purpose and thinking; a judge's call with its purpose, task and worker; the chat's call kept),
+`UsageReportsTest` in sc-console (a local run's report with warnings, both tables, what was
+used, repeats, and the Console's rows holding the same figures; a run that ended early; a
+project's report with calls for no run and runs by outcome). Run with them and adjusted where
+they pinned the old behaviour: `UsageReportWarningsTest` (a local role is now warned),
+`UsageLedgerTest`, `SwarmMcpToolsTest`.
+
+**Not checked.**
+
+- Nothing was run against a model, a live build or the running application. The Console's
+  panel was compiled to JavaScript and not looked at in a browser.
+- That the local server reports `reasoning_tokens`. If it does not, thinking is the estimate.
+- A store written before this change, opened by it: only fields were added to the stored
+  classes, and a record without calls reads as "0 of N kept one by one". No old store was
+  opened by the new code in a test.
+- A store from before schema 14: `recordUsage` now writes the root once after the map is first
+  used, so the map is not left unreferenced until some other write stores the root. Not run
+  against such a store.
+- The repeats of a live build. The audit counted 78% of lookups as not first-time by a
+  question's target; this counts by tool and argument, which is stricter.
+- The harness does not install the ledger, so its report has none of the new figures.
+- Of the audit's section 9, still not recorded: how long a call waited for a place apart from
+  how long it took, what a request was made of part by part, whether the tree or the language
+  server answered a worker, why and by whom a run was ended early, whether an expert's answer
+  was used, and the server's own count of conversations in flight.
+- CLAUDE.md section 1 still says the report warns "for a paid role"; it was left as it is.
+- The full test suite was not run; the classes above were.

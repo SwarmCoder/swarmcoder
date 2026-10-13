@@ -131,6 +131,26 @@ public final class LookupMeter {
      *                  documents of what the project builds on - and not about the project
      */
     public static void record(String role, Kind kind, int chars, boolean reference) {
+        record(role, kind, chars, reference, null);
+    }
+
+    /**
+     * The question of a lookup as it is compared with the ones before it: the tool and its
+     * argument, as they were asked. Two lookups with the same text here asked the same thing.
+     */
+    public static String question(String tool, String argument) {
+        return (tool == null ? "" : tool.strip()) + "\u0000"
+            + (argument == null ? "" : argument.strip());
+    }
+
+    /**
+     * One lookup was answered.
+     *
+     * @param question the tool and its argument ({@link #question}), so that the run's record
+     *                 can say how many lookups asked what had already been answered; or null
+     */
+    public static void record(String role, Kind kind, int chars, boolean reference,
+                              String question) {
         if (kind == null) {
             return;
         }
@@ -138,7 +158,7 @@ public final class LookupMeter {
         if (recorder != null) {
             try {
                 recorder.lookup(role == null || role.isBlank() ? "untagged" : role, kind, chars,
-                    reference);
+                    reference, question);
             } catch (RuntimeException e) {                                 // noqa
                 // Counting must never fail the lookup it counts.
             }

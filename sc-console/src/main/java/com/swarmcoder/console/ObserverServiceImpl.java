@@ -104,6 +104,14 @@ public class ObserverServiceImpl implements ObserverService {
             ConsoleContext.get().currentProjectId());
     }
 
+    @Override
+    public com.swarmcoder.console.api.UsageTableDto usageTable(String runId) {
+        return runId == null || runId.isBlank()
+            ? UsageReports.tableOfProject(ConsoleContext.get().store(),
+                ConsoleContext.get().currentProjectId())
+            : UsageReports.tableOfRun(ConsoleContext.get().store(), runId);
+    }
+
     /**
      * What each run has spent, in one pass over the session records.
      *

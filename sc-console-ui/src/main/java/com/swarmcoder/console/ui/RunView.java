@@ -42,6 +42,8 @@ final class RunView extends Div implements Disposable {
     private final List<Disposable> disposables = new ArrayList<>();
     private final RunGraphView graphView;
     private final PlanView planView;
+    /** The run's model calls per role; made when its tab is first opened, so it loads then. */
+    private UsagePanel usagePanel;
 
     RunView(String runId) {
         addClassName("flex flex-col flex-1 min-h-0");
@@ -55,18 +57,26 @@ final class RunView extends Div implements Disposable {
         segment.addClassName("inline-flex rounded-lg bg-base-200 p-0.5 gap-0.5");
         segment.add(segButton("graph", "Graph"));
         segment.add(segButton("plan", "Requirements"));
+        segment.add(segButton("tokens", "Tokens"));
         toolbar.add(segment);
         add(toolbar);
 
         Div stack = new Div();
         stack.addClassName("flex-1 min-h-0 flex flex-col");
-        stack.add(graphView, planView);
+        Div tokens = new Div();
+        tokens.addClassName("flex-1 min-h-0 overflow-auto p-4");
+        stack.add(graphView, planView, tokens);
         add(stack);
 
         disposables.add(Effect.create(() -> {
-            boolean graph = "graph".equals(tab.get());
-            graphView.setVisible(graph);
-            planView.setVisible(!graph);
+            String shown = tab.get();
+            graphView.setVisible("graph".equals(shown));
+            planView.setVisible("plan".equals(shown));
+            tokens.setVisible("tokens".equals(shown));
+            if ("tokens".equals(shown) && usagePanel == null) {
+                usagePanel = new UsagePanel(runId);
+                tokens.add(usagePanel);
+            }
         }));
     }
 

@@ -1975,7 +1975,8 @@ public final class ExpertTools {
             : answeredByServer.get() ? com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER
             : kindOf(tool, argument);
         com.swarmcoder.inference.LookupMeter.record(user == null ? "expert" : user.name(),
-            metered, capped.length(), metered != null && aboutReference(argument, capped));
+            metered, capped.length(), metered != null && aboutReference(argument, capped),
+            com.swarmcoder.inference.LookupMeter.question(tool, argument));
         return capped + countdown();
     }
 

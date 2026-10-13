@@ -75,7 +75,8 @@ class UsageReportWarningsTest {
                 + "architect's requests of 9350000 characters in all (2.0 characters a token)");
         assertThat(warnings).as("6 calls of 27,300 are the planner's work")
             .doesNotContain("planner");
-        assertThat(warnings).as("local tokens are not money").doesNotContain("worker");
+        assertThat(warnings).as("249 local calls of 18,300 break no rule")
+            .doesNotContain("worker");
 
         ReviewerMode.configure("lookups");
         String report;
@@ -152,7 +153,11 @@ class UsageReportWarningsTest {
                 + "server (43 files, 248177 of 487401 characters); above 25%")
             .contains("WARNING: reference material was 62% of what the architect looked up on a "
                 + "paid server (108 lookups, 304692 of 487401 characters); above 50%");
-        assertThat(warnings).as("local tokens are not money").doesNotContain("worker");
+        assertThat(warnings).as("a local role is judged by the same rules (section 98)")
+            .contains("WARNING: whole files were 100% of what the worker looked up on the local "
+                + "server (90 files, 400000 of 400000 characters); above 25%")
+            .contains("WARNING: reference material was 97% of what the worker looked up on the "
+                + "local server (80 lookups, 390000 of 400000 characters); above 50%");
         String report = UsageReport.render("One run:", models, lookups);
         assertThat(report).contains("WARNING: whole files were 50%")
             .contains("- architect: ").contains("reference 108/304692 (62%)");

@@ -748,7 +748,8 @@ public final class KnowledgeCurator {
                 return "";
             }
             log.info("Distilling framework primer for context root '{}' (one-time, cached)", root.label());
-            String primer = primerModel.as("knowledge").chatCompletionStream(List.of(
+            String primer = primerModel.as("knowledge").purpose("writing a primer")
+                .chatCompletionStream(List.of(
                     Map.of("role", "system", "content",
                         "You distill a FRAMEWORK PRIMER for coding agents from the source excerpts "
                         + "given. Sections: 1) Purpose & architecture (3 sentences max). "

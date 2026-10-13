@@ -81,7 +81,8 @@ public final class LocalAnswerJudge implements StoredAnswerJudge {
             return -1;
         }
         String prompt = prompt(question, candidates);
-        try (Stream<String> reply = client.as(ROLE).chatCompletionStream(List.of(
+        try (Stream<String> reply = client.as(ROLE)
+                .purpose("checking stored answers against a question").chatCompletionStream(List.of(
                 Map.of("role", "system", "content", SYSTEM),
                 Map.of("role", "user", "content", prompt)), null, 0.0)) {
             int chosen = verdict(reply.collect(Collectors.joining()), candidates.size());
