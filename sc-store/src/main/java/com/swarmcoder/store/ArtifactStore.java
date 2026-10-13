@@ -143,7 +143,7 @@ public class ArtifactStore implements AutoCloseable {
                 root.changeEvents(), root.criterionVerifications(),
                 root.guidedFlows(), root.flowQuestions(), root.flowProposals(),
                 root.flowDiscussions(), root.pendingExecs(), root.cloudSpend(), root.cloudBreaches(),
-                root.runUsage());
+                root.runUsage(), root.established());
             storageManager.storeRoot(); // covers newly initialized fields after class evolution
             written();
             return result;
@@ -209,6 +209,111 @@ public class ArtifactStore implements AutoCloseable {
 
     /** Set once the root has been written since {@link StoreRoot#runUsage()} was first used. */
     private boolean usageMapIsRooted;
+
+    /**
+     * Writes what a project has established since the last such write, and forgets what no
+     * longer holds (section 101). Queued, not awaited: a lookup calls this. Every answer and
+     * finding must be a fresh instance that nobody changes afterwards.
+     *
+     * @param answers  answers to keep, each replacing the one kept for the same question
+     * @param noLonger questions whose kept answer is to be forgotten
+     * @param findings what roles concluded, appended
+     */
+    public void recordEstablished(UUID projectId,
+                                  List<com.swarmcoder.domain.EstablishedAnswer> answers,
+                                  List<String> noLonger,
+                                  List<com.swarmcoder.domain.EstablishedAnswer> findings) {
+        if (projectId == null) {
+            return;
+        }
+        synchronized (establishedWaiting) {
+            establishedWaiting.add(new Established(projectId,
+                answers == null ? List.of() : List.copyOf(answers),
+                noLonger == null ? List.of() : List.copyOf(noLonger),
+                findings == null ? List.of() : List.copyOf(findings)));
+            if (establishedWriteQueued) {
+                return; // the write already queued takes this one with it
+            }
+            establishedWriteQueued = true;
+        }
+        try {
+            writerThread.submit(this::writeEstablished);
+        } catch (java.util.concurrent.RejectedExecutionException closed) {
+            log.debug("what project {} established was not written: the store is closed",
+                projectId);
+        }
+    }
+
+    /** One call of {@link #recordEstablished}, waiting for the writer thread. */
+    private record Established(UUID projectId, List<com.swarmcoder.domain.EstablishedAnswer> answers,
+                               List<String> noLonger,
+                               List<com.swarmcoder.domain.EstablishedAnswer> findings) {}
+
+    private final List<Established> establishedWaiting = new ArrayList<>();
+    private boolean establishedWriteQueued;
+
+    /**
+     * Writes everything waiting in one go. A project's answers are one map, and storing a map
+     * writes every reference in it, so a build's thousand lookups are written as the few
+     * batches that gathered while the writer was busy, not one map each.
+     */
+    private Void writeEstablished() {
+        List<Established> batch;
+        synchronized (establishedWaiting) {
+            batch = new ArrayList<>(establishedWaiting);
+            establishedWaiting.clear();
+            establishedWriteQueued = false;
+        }
+        Set<com.swarmcoder.domain.ProjectEstablished> changed =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Established one : batch) {
+            com.swarmcoder.domain.ProjectEstablished kept =
+                root.established().get(one.projectId());
+            if (kept == null) {
+                kept = new com.swarmcoder.domain.ProjectEstablished(one.projectId());
+                root.established().put(one.projectId(), kept);
+                storageManager.store(root.established());
+            }
+            one.noLonger().forEach(kept.answers()::remove);
+            for (var answer : one.answers()) {
+                kept.answers().put(answer.question(), answer);
+            }
+            kept.findings().addAll(one.findings());
+            changed.add(kept);
+        }
+        for (com.swarmcoder.domain.ProjectEstablished kept : changed) {
+            storageManager.storeAll(kept.answers(), kept.findings());
+        }
+        return null;
+    }
+
+    /**
+     * What a project has established, as it is on the writer thread once every write queued
+     * before this call is done: the kept answers, then the kept findings, oldest first. Copies;
+     * empty lists for a project that has kept nothing.
+     */
+    public List<List<com.swarmcoder.domain.EstablishedAnswer>> established(UUID projectId) {
+        if (projectId == null) {
+            return List.of(List.of(), List.of());
+        }
+        try {
+            return writerThread.submit(() -> {
+                com.swarmcoder.domain.ProjectEstablished kept = root.established().get(projectId);
+                return kept == null
+                    ? List.<List<com.swarmcoder.domain.EstablishedAnswer>>of(List.of(), List.of())
+                    : List.<List<com.swarmcoder.domain.EstablishedAnswer>>of(
+                        new ArrayList<>(kept.answers().values()),
+                        new ArrayList<>(kept.findings()));
+            }).get();
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("what project {} has established could not be read ({})", projectId,
+                e.toString());
+            return List.of(List.of(), List.of());
+        }
+    }
 
     /**
      * Records that a worker's {@code exec} tool call is about to run — see
@@ -492,6 +597,7 @@ public class ArtifactStore implements AutoCloseable {
                 // and would survive the flow they belong to as unreferenced rows.
                 scope.flowQuestionIds.forEach(root.flowDiscussions()::remove);
                 root.autonomousDecisions().remove(projectId);
+                root.established().remove(projectId);
                 // The project's rules go with it (author decision 2026-09-02). They used to be
                 // files under the checkout, indexed here, and survived every deletion: a project
                 // deleted and recreated four times against one folder was reopened with every

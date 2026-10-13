@@ -198,6 +198,39 @@ class AWorkersOpeningAndItsLookupsAreSharedTest {
     }
 
     @Test
+    void aWorkerIsServedWhatARoleComputedWrittenWithAWorkersAddresses() {
+        // Section 101: the fact under a role's answer and a worker's is one computation.
+        SharedAnswers answers = librarian.curator().answers();
+        ExpertTools architect = new ExpertTools(librarian.curator(), null, null,
+            new CloudGate(0, null), MaterialBudget.forWorkingContext(983_040), 0,
+            new ExpertTools.User("architect", "hand in", 0, null, 0, 0));
+        String rolesBody = architect.bodyOf("com.shop.Basket#size");
+        String rolesSection = architect.docSection("project/docs/persistence.md#The rule");
+        String rolesBuild = architect.buildOf("");
+        long computed = answers.asked() - answers.served();
+        assertThat(computed).isEqualTo(3);
+
+        WorkerLookups lookups = new WorkerLookups(librarian, app, false, null);
+        String body = lookups.tree("body_of", "com.shop.Basket#size");
+        String section = lookups.tree("doc_section", "docs/persistence.md#The rule");
+        String build = lookups.tree("build_of", "");
+
+        assertThat(answers.asked() - answers.served()).as("nothing was computed for the worker")
+            .isEqualTo(computed);
+        assertThat(answers.served()).isEqualTo(3);
+        assertThat(rolesBody).contains("// project/src/main/java/com/shop/Basket.java:");
+        assertThat(body).contains("// src/main/java/com/shop/Basket.java:", "return 0;")
+            .doesNotContain("project/")
+            .isEqualTo(rolesBody.replace("project/src/main", "src/main"));
+        assertThat(rolesSection).startsWith("[project/docs/persistence.md:");
+        assertThat(section).startsWith("[docs/persistence.md:")
+            .contains("Everything about persistence is done one way here.");
+        assertThat(rolesBuild).contains("project/pom.xml");
+        assertThat(build).contains("pom.xml", "com.shop:shop").doesNotContain("project/");
+        assertThat(lookups.answeredByLanguageServer()).isFalse();
+    }
+
+    @Test
     void aCheckedRuleKeepsItsCommandAndAShortPreferenceStaysWhole() {
         LearnedGuideline checked = new LearnedGuideline(UUID.randomUUID(), 1, GuidelineScope.PROJECT,
             "no-sql", "The server module holds no SQL: every query is a method of the store, "
@@ -245,7 +278,7 @@ class AWorkersOpeningAndItsLookupsAreSharedTest {
             .isEqualTo(computed);
         assertThat(answers.served()).isEqualTo(2);
 
-        // A role's answer carries a role's addresses; a worker is never given it.
+        // A role's answer carries a role's addresses; a worker is never given those.
         ExpertTools planner = new ExpertTools(librarian.curator(), null, null,
             new CloudGate(0, null), MaterialBudget.forWorkingContext(983_040), 0,
             new ExpertTools.User("planner", "hand in", 0, null, 0, 0));

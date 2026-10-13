@@ -315,6 +315,9 @@ public final class ProjectContext {
             // (section 100): the findings of its delivered stories are read into it from here.
             librarian.curator().answers().delivered(() ->
                 com.swarmcoder.knowledge.KnownFacts.ofDelivered(shared.store(), project.id()));
+            // And what it establishes is kept in the same store as those findings, so a
+            // restart of the application does not lose it (section 101).
+            librarian.curator().answers().keptIn(shared.store(), project.id());
         }
         SwarmEngineImpl engine = new SwarmEngineImpl(roles.judge(), shared.store(), shared.scheduler(),
             shared.runtime(), shared.profiles(), gitService, shared.blobSink(), shared.cloudGate(),

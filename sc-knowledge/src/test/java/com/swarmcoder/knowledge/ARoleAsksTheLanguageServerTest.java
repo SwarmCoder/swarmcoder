@@ -226,6 +226,6 @@ class ARoleAsksTheLanguageServerTest {
         // Appended, never inserted: anything that keeps a kind by its position stays right.
         assertThat(LookupMeter.Kind.values()).extracting(Enum::name).containsExactly("TREE",
             "SEARCH", "WHOLE_FILE", "FILE_PART", "LISTING", "SHELL_READ", "LANGUAGE_SERVER",
-            "DOCUMENT", "ACCEPTANCE_TEST", "JOURNEY_CHECK");
+            "DOCUMENT", "ACCEPTANCE_TEST", "JOURNEY_CHECK", "KNOWN");
     }
 }

@@ -61,9 +61,25 @@ public final class TreeQueries {
         this(curator, null);
     }
 
+    /** True when each address is marked for every reader instead of written for one. */
+    private final boolean forEveryone;
+
     private TreeQueries(KnowledgeCurator curator, String ownRoot) {
+        this(curator, ownRoot, false);
+    }
+
+    private TreeQueries(KnowledgeCurator curator, String ownRoot, boolean forEveryone) {
         this.curator = curator;
         this.ownRoot = ownRoot;
+        this.forEveryone = forEveryone;
+    }
+
+    /**
+     * The same queries with every address marked ({@link Addresses#mark}), so that one answer
+     * is kept for roles and workers alike and written for each when it is given (section 101).
+     */
+    static TreeQueries forEveryReaderOf(KnowledgeCurator curator) {
+        return new TreeQueries(curator, null, true);
     }
 
     /**
@@ -86,6 +102,13 @@ public final class TreeQueries {
 
     private String address(String rootLabel, String file) {
         String path = file.replace('\\', '/');
+        if (forEveryone) {
+            // A root itself, or a file of no root, is written by rules of each reader's own.
+            if (rootLabel == null || rootLabel.isBlank() || path.isEmpty()) {
+                throw Addresses.notForEveryone("no root, or no path under it");
+            }
+            return Addresses.mark(rootLabel + "/" + path);
+        }
         if (ownRoot == null) {
             return (rootLabel == null || rootLabel.isBlank() ? "" : rootLabel + "/") + path;
         }
@@ -95,10 +118,15 @@ public final class TreeQueries {
     private SemanticIndex index() {
         try {
             SemanticIndex index = curator == null ? null : curator.semanticIndex();
-            return index != null && index.available() ? index : null;
+            if (index != null && index.available()) {
+                return index;
+            }
         } catch (Throwable unusable) {                                     // noqa
-            return null;
+            // answered as "not available" below
         }
+        // That the tree is not available says nothing about the project: it is not kept.
+        SharedAnswers.unsettled();
+        return null;
     }
 
     private static final String NO_TREE = "The project's syntax tree is not available here, so "

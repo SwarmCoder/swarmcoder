@@ -1478,7 +1478,7 @@ public final class ExpertTools {
      */
     private String formOf(String tool) {
         if (!"read_file".equals(tool)) {
-            return "role";
+            return SharedAnswers.ROLE;
         }
         String question = lastDocsQuestion.get();
         return "role|" + maxToolChars + "|" + (question == null ? "" : question);
@@ -1974,11 +1974,14 @@ public final class ExpertTools {
         try {
             index = curator.semanticIndex();
         } catch (Throwable e) {                                            // noqa
+            SharedAnswers.unsettled();
             return "The structural index is not usable for this project (" + e + "), so this "
                 + "question cannot be answered from the compiler. Use lookup_docs or read_file "
                 + "instead.";
         }
         if (index == null || !index.available()) {
+            // That the index is not available says nothing about the project: it is not kept.
+            SharedAnswers.unsettled();
             return "The structural index is not available for this project"
                 + (index == null ? "" : " (" + index.unavailableReason() + ")")
                 + ", so this question cannot be answered from the compiler. Use lookup_docs or "
@@ -2076,8 +2079,8 @@ public final class ExpertTools {
             if (reach == null) {
                 answer = body.get();
             } else {
-                SharedAnswers.Served given = shared.answer(formOf(tool), tool, argument, reach,
-                    user == null ? "expert" : user.name(), () -> {
+                SharedAnswers.Served given = shared.answerFor(Addresses.OF_A_ROLE, formOf(tool),
+                    tool, argument, reach, user == null ? "expert" : user.name(), () -> {
                         String text = body.get();
                         com.swarmcoder.inference.LookupMeter.Kind as = answeredAs.get();
                         return new SharedAnswers.Computed(text, as != null ? as.name()

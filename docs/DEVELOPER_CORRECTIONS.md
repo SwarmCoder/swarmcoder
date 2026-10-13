@@ -10576,3 +10576,117 @@ they pinned the old behaviour: `UsageReportWarningsTest` (a local role is now wa
   was used, and the server's own count of conversations in flight.
 - CLAUDE.md section 1 still says the report warns "for a paid role"; it was left as it is.
 - The full test suite was not run; the classes above were.
+
+## 101. What a project established was lost at every restart, and a role and a worker each computed the same fact (what section 100 left open, 2026-10-13)
+
+**What was open** (section 100, "Not done"). The store of answers and the findings kept with
+`keep_finding` lived in memory; the audited build restarted the application 15 times. A
+role's answer and a worker's answer to the same question were kept apart because their
+addresses differ. A reference folder's state was `RootIdentity`'s.
+
+**1. The store is kept between starts, in the product's own object store.** Section 97's
+findings are the `DesignFinding`s of delivered designs, in `StoreRoot.designs`; this follows
+that. `StoreRoot.established` (schema 15) holds one `ProjectEstablished` per project: its
+answers by question and its kept findings, each an `EstablishedAnswer` (a plain class, not a
+record; no enum is stored). `ArtifactStore.recordEstablished` queues a write and
+`ArtifactStore.established` reads; deleting a project removes it. A project's answers are
+one map and storing a map writes every reference in it, so calls that arrive while the
+writer is busy are written as one batch. `SharedAnswers.keptIn(store, projectId)` is wired in
+`ProjectContext` beside `delivered(...)`.
+
+- *Read back at the first question after a start, and held against the disk then.* Each
+  answer's files are hashed (each file once) and the roots walked once. An answer whose
+  recorded states do not all hold is forgotten, in memory and in the store. What is left is
+  checked again every time it is served, exactly as an answer of the running process is.
+  The newest 5,000 answers are read back; older ones are forgotten.
+- *Never another tree's answer.* Section 100 could say "the store belongs to the same
+  curator" because both died together. Now an answer for which the syntax tree was asked is
+  kept with which reading of the tree answered: the facts file of each root by its folder
+  (named by the root's fingerprint), size and time (`SemanticIndex.stamp`, recorded where
+  `KnowledgeCurator.semanticIndex()` is called). It is served only by a curator that read the
+  same facts. For a git checkout that is until the next commit; for a folder that is not one,
+  until any file changes. An answer the tree was not asked for - a document's outline or
+  section, a resource, what the language server said - carries no such mark and outlasts a
+  commit while its files hold.
+- *An answer that says a tool was not there is not kept at all.* "The syntax tree is not
+  available", "The Java language server is not available" and a failed request say nothing
+  about the project. Kept in memory they lasted until the next file change; kept between
+  starts they would be served after the tool was back. The lookup marks itself
+  (`SharedAnswers.unsettled()`, called on the result's status, not on its words) and the
+  answer goes to its asker only.
+- *Not kept between starts:* a role's `read_file`, whose text is cut to its session's room
+  and shaped by its latest documentation question. It is kept while the application runs, as
+  before.
+- *Findings* are read back whole. One whose lookup stood on a file that has changed is told
+  with "CHANGED SINCE", as before; it is held against its files, not against the reading of
+  the tree.
+
+**2. One computation for a role and a worker** (`Addresses`, `ForEveryReader`,
+`SharedAnswers.answerFor`). A lookup that computes the same thing for both writes each
+address as `<root>/<path>` between two marks, is kept once in that form, and is written for
+its reader when it is given: unchanged for a role; for a worker the project's own files by
+their path and the rest as `/reference/<root>/<path>`. Only what the lookup itself marked is
+rewritten; no text is searched for something that looks like a path. A computation whose
+text holds a mark it did not make (a quoted source line with one of the two characters, an
+address cut short) is refused and computed for its asker as before; the refusal is remembered
+on the thread, because `resourcesOf` catches what goes wrong inside it and would otherwise
+have answered something else.
+
+| lookup | shared | why, or why not |
+|---|---|---|
+| `types_in`, `build_of`, `body_of`, `resources_of` | whole answer | the tree queries read their argument the same way for both readers |
+| `doc_section`, `doc_outline` of one document or of all, `doc_search` | whole answer | a reader names a document its own way, so the document is found for the reader first and the question is then about that document: `docs/guide.md` from a worker and `project/docs/guide.md` from a role are one question |
+| `supertypes_of`, `callers_of`, `doc_of` | whole answer | the language server's own |
+| `find_usages` / `usages_of`, `find_implementations` / `implementations_of`, `public_shape` / `shape_of` | the language server's part | the server is asked once for both; each reader's tool words its own answer around it |
+| the same three, the tree's part | no | the two tools give different texts: a role is told what name was looked up and gets a heading, a worker the bare list or declaration. It is a read of the tree already in memory |
+| `find_symbol` | no | a role is also told what the tree knows of the name; a worker is not |
+| `doc_outline` of a folder, `resources_of` of a root itself | no | a path without a root means a different folder to each reader, and a root is written by rules of each reader's own |
+| `read_file`, `list_files`, `outline_of`, `files_using`, `call_chain`, `types_annotated_with`, `dependency_declaring`, `texts_of`, `callees_of` | no | a role's only; a worker has no such query |
+
+A worker is given the shared answer when its checkout is of the root labelled `project` and
+the language server reads that root or none, which is how the product wires it; any other
+worker is answered as before. `ARoleAndAWorkerShareOneComputationTest` holds 19 questions
+against each reader's own computation, character for character. A lookup that asks for a
+kept part now stands on what that part stood on. `SharedAnswers.servedChars` counts the text
+as a role reads it.
+
+**3. Reference folders.** `RootIdentity` is remembered for 60 seconds, and for a checkout
+with uncommitted changes it is the commit and the list of changed paths. So the gap was
+larger than section 100 said: a second edit of a path already on that list never moved it,
+not for 60 seconds but for good. Every root is now walked by path, size and time on every
+check of a whole-project answer, like the project. Cost: one walk of each reference folder
+for each such check, not measured on a large folder.
+
+**Tests.** `WhatAProjectEstablishedOutlastsARestartTest` (sc-knowledge; a real store closed
+and opened again): an answer, a worker's reading of it and a finding are served after a
+restart and after a second one; a file changed while closed takes its answer and the
+whole-project answer, leaves another file's, and marks the finding; a tree answer is not
+served by another reading of the tree while a document's section is; a session's `read_file`
+is not kept; an edit in a reference folder takes a whole-project answer at once.
+`ARoleAndAWorkerShareOneComputationTest` (sc-knowledge): the table above; a changed file
+takes the one fact from both; the server is asked once for the two; a server that did not
+answer is asked again. `AWorkersOpeningAndItsLookupsAreSharedTest` (sc-app): a worker's
+`WorkerLookups` is served what a role computed. Run with them and unchanged:
+`AProjectEstablishesAnAnswerOnceTest`, `ADocumentIsReadBySectionTest`,
+`ARoleLearnsTheProjectFromItsObjectGraphTest`, `AProjectLearnsWhatItBuildsOnOnceTest`,
+`WorkerLookupsTest`, `StoreArchitectureTest`, `StoreRootReachabilityTest`,
+`ProjectDeleteStoreTest`. `ARoleAsksTheLanguageServerTest`: the list of `LookupMeter.Kind`
+now ends with `KNOWN`. `WorkerWriteReplayTest` was run and is skipped without a live server;
+the workflow rules in it are the recorded prompt it replays, not a copy held against the
+product's, so there was nothing to correct.
+
+**Not done, not checked.**
+
+- Nothing was run against a model, and nothing that is sent in a conversation was changed.
+- No count of how much of a real build is now served after a restart. The reading of the
+  tree changes with every commit, so the tree's answers last from a restart to the next
+  delivered story at most; the documents', the resources' and the server's last longer.
+- The language server is taken to answer the same for the same files. A server that was
+  still reading the project when it was asked can have answered short; that answer is kept
+  until a file changes, as in section 100, and now across a restart too.
+- A different text for the two readers is still two computations (the table's "no" rows).
+- The run report still does not show served against computed lookups (another change owns
+  the reports).
+- No test deletes a project that holds established answers; the removal is one line in
+  `ArtifactStore.deleteProject`.
+- The full test suite was not run; the classes above were.

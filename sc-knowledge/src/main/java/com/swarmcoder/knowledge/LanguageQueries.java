@@ -63,9 +63,32 @@ public final class LanguageQueries {
     /** What a project file's path is prefixed with for this asker: "project/" for a role. */
     private final String prefix;
 
+    /** The project whose store keeps what the server said; null for a checkout's own server. */
+    private final KnowledgeCurator curator;
+    /**
+     * What a project file is prefixed with when it is written for every reader: the label of
+     * the root the server reads and a slash, or "" when that root has no label.
+     */
+    private final String rootPrefix;
+    /** Who the answers are written for; null when each place is marked for every reader. */
+    private final Addresses reader;
+
     private LanguageQueries(LspService server, String prefix) {
+        this(server, prefix, null, "", Addresses.OF_A_ROLE);
+    }
+
+    private LanguageQueries(LspService server, String prefix, KnowledgeCurator curator,
+                            String rootPrefix, Addresses reader) {
         this.server = server == null ? LspService.UNAVAILABLE : server;
         this.prefix = prefix;
+        this.curator = curator;
+        this.rootPrefix = rootPrefix;
+        this.reader = reader;
+    }
+
+    private static String rootPrefixOf(KnowledgeCurator curator) {
+        String label = curator.languageServerRootLabel();
+        return label.isBlank() ? "" : label + "/";
     }
 
     /** For a planning role or the expert: a project file is {@code <root label>/<path>}. */
@@ -73,18 +96,77 @@ public final class LanguageQueries {
         if (curator == null) {
             return new LanguageQueries(null, "");
         }
-        String label = curator.languageServerRootLabel();
-        return new LanguageQueries(curator.languageServer(), label.isBlank() ? "" : label + "/");
+        String rootPrefix = rootPrefixOf(curator);
+        return new LanguageQueries(curator.languageServer(), rootPrefix, curator, rootPrefix,
+            Addresses.OF_A_ROLE);
     }
 
     /** For a worker: a project file is its path in the repository, which is what {@code read} takes. */
     public static LanguageQueries forAWorkerOf(KnowledgeCurator curator) {
-        return new LanguageQueries(curator == null ? null : curator.languageServer(), "");
+        if (curator == null) {
+            return new LanguageQueries(null, "");
+        }
+        return new LanguageQueries(curator.languageServer(), "", curator, rootPrefixOf(curator),
+            Addresses.ofAWorker(curator.languageServerRootLabel()));
+    }
+
+    /**
+     * The same queries with every project file marked ({@link Addresses#mark}), so that one
+     * answer is kept for roles and workers alike (section 101).
+     */
+    static LanguageQueries forEveryReaderOf(KnowledgeCurator curator) {
+        return new LanguageQueries(curator.languageServer(), "", null, rootPrefixOf(curator),
+            null);
     }
 
     /** For one checkout with a server of its own - a worker's refactorings and checks. */
     public static LanguageQueries over(LspService server) {
         return new LanguageQueries(server, "");
+    }
+
+    /**
+     * What the server said, with a result that says nothing about the project - no server, a
+     * request that failed - marked as not to be kept: the next asker asks the server again.
+     */
+    private static LspResult heard(LspResult result) {
+        if (result != null && (result.status() == LspResult.Status.NOT_AVAILABLE
+                || result.status() == LspResult.Status.FAILED)) {
+            SharedAnswers.unsettled();
+        }
+        return result;
+    }
+
+    /**
+     * One thing the project's server said, asked once for roles and workers alike and written
+     * for this reader: the two are worded differently around it, and the server's part is the
+     * same (section 101). {@code ask} gives null when the server is not the one to answer.
+     */
+    private String said(String what, String about, java.util.function.Supplier<LspResult> ask) {
+        SharedAnswers store = curator == null || reader == null ? null : curator.answers();
+        if (store == null) {
+            LspResult result = ask.get();
+            return result == null ? null : render(result);
+        }
+        return store.fact("the server's " + what, about, reader, () -> {
+            LspResult result = ask.get();
+            return result == null ? null : marked(result);
+        }, () -> {
+            LspResult result = ask.get();
+            return result == null ? null : render(result);
+        });
+    }
+
+    /** The answer as text with each project file marked for every reader. */
+    private String marked(LspResult result) {
+        heard(result);
+        if (rootPrefix.isEmpty()) {
+            return result.render();
+        }
+        List<LspHit> addressed = result.hits().stream()
+            .map(hit -> hit.file() == null || hit.file().isBlank() || inAJar(hit) ? hit
+                : new LspHit(Addresses.mark(rootPrefix + hit.file()), hit.line(), hit.text()))
+            .toList();
+        return new LspResult(result.status(), result.note(), addressed, result.total()).render();
     }
 
     /** True when a language server is installed for this project; it may not have started yet. */
@@ -107,9 +189,11 @@ public final class LanguageQueries {
         if (!installed()) {
             return null;
         }
-        LspResult members = server.members(type);
-        return members.answered() || members.status() == LspResult.Status.AMBIGUOUS
-            ? render(members) : null;
+        return said("members", type, () -> {
+            LspResult members = heard(server.members(type));
+            return members.answered() || members.status() == LspResult.Status.AMBIGUOUS
+                ? members : null;
+        });
     }
 
     /**
@@ -118,19 +202,23 @@ public final class LanguageQueries {
      * then.
      */
     public String usagesOrNull(String what) {
-        return declaredInTheProject(what) ? render(server.references(what)) : null;
+        if (!installed() || what == null || what.isBlank()) {
+            return null;
+        }
+        return said("references", what,
+            () -> declaredInTheProject(what) ? server.references(what) : null);
     }
 
     /** As {@link #usagesOrNull}, for what implements, extends or overrides a symbol. */
     public String implementationsOrNull(String what) {
-        return declaredInTheProject(what) ? render(server.implementations(what)) : null;
+        return declaredInTheProject(what) ? implementationsOf(what) : null;
     }
 
     private boolean declaredInTheProject(String what) {
         if (!installed() || what == null || what.isBlank()) {
             return false;
         }
-        LspResult declared = server.definition(what);
+        LspResult declared = heard(server.definition(what));
         if (declared.status() == LspResult.Status.AMBIGUOUS) {
             // Several project types of that name: the server's list of them is the answer.
             return declared.hits().stream().anyMatch(hit -> !inAJar(hit));
@@ -145,7 +233,7 @@ public final class LanguageQueries {
     // ------------------------------------------------------------- the language server's own
 
     public String implementationsOf(String what) {
-        return render(server.implementations(what));
+        return said("implementations", what, () -> server.implementations(what));
     }
 
     public String supertypesOf(String type) {
@@ -237,6 +325,10 @@ public final class LanguageQueries {
 
     /** The answer as text, each project file addressed the way this asker reads files. */
     public String render(LspResult result) {
+        if (reader == null) {
+            return marked(result);
+        }
+        heard(result);
         if (prefix.isEmpty()) {
             return result.render();
         }
