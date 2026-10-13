@@ -389,8 +389,84 @@ public class GreenfieldWorkflow {
         // Every cloud token charged while this run is driven (and by the threads it starts) is
         // this run's, its story's and its project's: that is what the three token limits count.
         CloudGate.Where whose = new CloudGate.Where(run.projectId(), run.storyId(), run.id());
+        driving.add(run.id());
         try (CloudGate.Entered inRun = cloudGate == null ? () -> { } : CloudGate.enter(whose)) {
             drive(run, whose);
+        } finally {
+            driving.remove(run.id());
+        }
+    }
+
+    /**
+     * The runs a thread of this workflow is in right now. A build that takes over from an
+     * earlier build of its story must not share that build's plan and tasks while a thread is
+     * still writing to them (section 99): a build that was replaced runs its stage to the end.
+     */
+    private final Set<UUID> driving = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * INTAKE: what this build takes over from the build of its story before it (section 99).
+     * Decided from stored facts and the repository by {@link EarlierBuild}; no model is asked.
+     * The decision is written on the run, sentence by sentence, and said in the log, and the
+     * run starts at the first stage it has to do itself.
+     */
+    private Run startFromEarlierBuild(Run run) {
+        Story story = run.storyId() == null ? null : artifactStore.getStory(run.storyId());
+        if (story == null) {
+            return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
+        }
+        run.setInputsFingerprint(EarlierBuild.fingerprint(run, scopeFor(run)));
+        Run earlier = EarlierBuild.predecessor(id -> artifactStore.root().runs.get(id), story, run);
+        if (earlier == null) {
+            return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
+        }
+        DesignDocument design = earlier.designId() == null ? null
+            : artifactStore.root().designs.get(earlier.designId());
+        TaskGraph graph = earlier.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(earlier.taskGraphId());
+        boolean git = gitService != null && gitService.isEnabled();
+        EarlierBuild.Decision decision = EarlierBuild.decide(run, story, earlier, design, graph,
+            driving.contains(earlier.id()), isAChangeToExistingCode(run),
+            (from, to) -> git ? gitService.changedPaths(from, to) : null);
+        List<String> record = new ArrayList<>(decision.lines());
+        com.swarmcoder.domain.RebuildFrom.Keep keep = decision.keep();
+        String testsCommit = earlier.acceptanceTestsCommit();
+        if (decision.keepsTests() && testsCommit != null && !testsCommit.isBlank()
+                && !(git && gitService.branchAt(testsBranch(run), testsCommit))) {
+            // The tests are a commit. Without it there is nothing to verify a candidate with,
+            // and the tasks that were judged by those tests cannot be carried under new ones.
+            keep = com.swarmcoder.domain.RebuildFrom.Keep.DESIGN;
+            record = new ArrayList<>(record.subList(0, Math.min(2, record.size())));
+            record.add("Plan, tests and tasks: made again, because the earlier build's tests "
+                + "commit " + shortSha(testsCommit) + " is no longer in the repository.");
+        }
+        run.setSentBackNote(decision.note());
+        run.setReuseRecord(record);
+        run.setReusedFromRunId(
+            keep == com.swarmcoder.domain.RebuildFrom.Keep.NOTHING ? null : earlier.id());
+        record.forEach(line -> log("INTAKE: " + line));
+        switch (keep) {
+            case DESIGN -> {
+                return transition(run, RunState.PLAN, earlier.designId(), null);
+            }
+            case PLAN -> {
+                return transition(run, RunState.TEST_AUTHORING, earlier.designId(),
+                    earlier.taskGraphId());
+            }
+            case TESTS_AND_FINISHED_TASKS -> {
+                // Everything a build picked up again at EXECUTING reads from its run.
+                run.setAcceptanceTestsCommit(testsCommit);
+                run.setProgressCommit(earlier.progressCommit());
+                run.setBaselineFailingTests(earlier.baselineFailingTests());
+                run.setAlreadySatisfiedTests(earlier.alreadySatisfiedTests());
+                run.setNothingToBuild(earlier.nothingToBuild());
+                run.setCarriedWarnings(earlier.carriedWarnings());
+                return transition(run, RunState.EXECUTING, earlier.designId(),
+                    earlier.taskGraphId());
+            }
+            default -> {
+                return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
+            }
         }
     }
 
@@ -612,7 +688,7 @@ public class GreenfieldWorkflow {
         switch (run.state()) {
                 case INTAKE -> {
                     log("Processing INTAKE...");
-                    return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
+                    return startFromEarlierBuild(run);
                 }
                 case DESIGN -> {
                     log("Processing DESIGN...");
@@ -1500,7 +1576,14 @@ public class GreenfieldWorkflow {
      * feature run, a bugfix run and a refactor run, and the reason those are one path and not three.
      */
     private String briefFor(Run run) {
-        return RunBrief.forKind(run.kind(), goalOf(run), neighbourhoodBriefOf(run));
+        String goal = goalOf(run);
+        if (run.sentBackNote() != null && !run.sentBackNote().isBlank()) {
+            // Word for word, after the goal and apart from it (section 99): it is what whoever
+            // sent the story back said, and it is not part of what the story asks for.
+            goal += "\n\nAn earlier build of this story was sent back to be built again, with "
+                + "this note:\n" + run.sentBackNote().strip();
+        }
+        return RunBrief.forKind(run.kind(), goal, neighbourhoodBriefOf(run));
     }
 
     /**
@@ -5740,7 +5823,7 @@ public class GreenfieldWorkflow {
                     + "report_done; it is checked again after hand-in.");
             }
             return draftVerdict(tree, spec, task, List.copyOf(files.keySet()), stillToRun,
-                atWaveStart);
+                atWaveStart, designOf(run));
         }
 
         /** The tree a draft is compiled in: the repair's own, or one cut from the run's base. */
@@ -5828,9 +5911,9 @@ public class GreenfieldWorkflow {
      * {@link #redCheckOne}'s verdict on a draft, in words for its author. The same order of
      * questions and the same classifiers; the answers are the re-ask each fault already has.
      */
-    private TestAuthorTools.Verdict draftVerdict(Path tree, VerifySpec spec, Task task,
+    TestAuthorTools.Verdict draftVerdict(Path tree, VerifySpec spec, Task task,
                                                  List<String> paths, List<Task> stillToRun,
-                                                 boolean atWaveStart) {
+                                                 boolean atWaveStart, DesignDocument design) {
         RedChecker.RedCheckResult result;
         try {
             result = redCheck(buildTarget(tree), spec, task, paths, stillToRun);
@@ -5882,6 +5965,19 @@ public class GreenfieldWorkflow {
                     + "the work already delivered - " + result.note() + ". Hand it in with "
                     + "report_done.");
             }
+            // THE STORY MAY ALREADY BE MET (section 99; the audit's 7.76 million tokens on a
+            // story that needed no code). This is the first moment the product can measure a
+            // check: a test of it has compiled and run on the tree the build starts from. The
+            // same evidence the red check holds a green test to after hand-in
+            // (AlreadySatisfied.assess, and every contract the task delivers being in the
+            // tree) is read here, on the draft. When it holds, the draft is what is wanted and
+            // the author is told to hand it in as it is. It used to be called a broken test,
+            // and the author went on rewriting a correct test to make it fail.
+            String alreadyMet = draftShowsTheCheckIsMet(tree, design, task, paths, stillToRun,
+                result.results());
+            if (alreadyMet != null) {
+                return new TestAuthorTools.Verdict(true, alreadyMet);
+            }
             return new TestAuthorTools.Verdict(false, "BROKEN TEST: it passes on the code as it is "
                 + "now, before any of this task's work is done, so it proves nothing about that "
                 + "work - " + result.note() + ". A test must fail until the task is implemented: "
@@ -5896,6 +5992,37 @@ public class GreenfieldWorkflow {
         }
         return new TestAuthorTools.Verdict(true, "NOT CONCLUSIVE: " + result.note()
             + ". Nothing was found wrong with the draft. Hand it in with report_done.");
+    }
+
+    /**
+     * What the author is told when its draft passes on the tree the build starts from and that
+     * is proof the existing code meets the task's checks; null when it is not proof, and the
+     * draft is then a test that measures nothing, as before. The record on the task is still
+     * made by the red check after hand-in, from its own run.
+     */
+    private String draftShowsTheCheckIsMet(Path tree, DesignDocument design, Task task,
+                                           List<String> paths, List<Task> stillToRun,
+                                           TestResults results) {
+        try {
+            if (!task.deliveredContracts().isEmpty() && !com.swarmcoder.knowledge.ContractDelivery
+                    .shortfalls(tree, task.deliveredContracts()).isEmpty()) {
+                return null; // a contract the task delivers is not there: work is left
+            }
+            AlreadySatisfied.Evidence evidence =
+                AlreadySatisfied.assess(tree, design, task, paths, stillToRun, results);
+            if (!evidence.accepted()) {
+                return null;
+            }
+            return "ALREADY MET: the draft compiles and passes on the code as it is now, and it "
+                + "measures the project's own code: " + evidence.tests().size() + " test(s) "
+                + "passed, each file makes an assertion and names a type the project declares, "
+                + "and every contract this task delivers is already in the tree. So the "
+                + "existing code already meets this task's checks and no code will be written "
+                + "for it. Do not change the test to make it fail. Hand it in as it is with "
+                + "report_done.";
+        } catch (RuntimeException e) {
+            return null; // not established: the draft is judged as before
+        }
     }
 
     /**

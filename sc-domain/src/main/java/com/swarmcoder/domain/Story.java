@@ -111,6 +111,17 @@ public class Story {
      */
     private String nothingCreates;
     /**
+     * The last time this story was sent back to be built again (section 99): the note, word
+     * for word; the state the story was in; the build it was sent back after; and the first
+     * stage the next build does again, decided when it was sent back ({@link RebuildFrom}).
+     * They are read by the build that follows that one and by no later build. All null on a
+     * story that was never sent back.
+     */
+    private String sentBackNote;
+    private StoryState sentBackFrom;
+    private UUID sentBackAfterRunId;
+    private RunState sentBackRedoFrom;
+    /**
      * How many workers each of this story's tasks gets, or null to inherit.
      *
      * <p>The most specific of the three sizing layers — story, then project, then the global
@@ -281,6 +292,18 @@ public class Story {
     public String nothingCreates() { return nothingCreates; }
     public String getNothingCreates() { return nothingCreates; }
     public void setNothingCreates(String nothingCreates) { this.nothingCreates = nothingCreates; }
+    public String sentBackNote() { return sentBackNote; }
+    public String getSentBackNote() { return sentBackNote; }
+    public void setSentBackNote(String sentBackNote) { this.sentBackNote = sentBackNote; }
+    public StoryState sentBackFrom() { return sentBackFrom; }
+    public StoryState getSentBackFrom() { return sentBackFrom; }
+    public void setSentBackFrom(StoryState sentBackFrom) { this.sentBackFrom = sentBackFrom; }
+    public UUID sentBackAfterRunId() { return sentBackAfterRunId; }
+    public UUID getSentBackAfterRunId() { return sentBackAfterRunId; }
+    public void setSentBackAfterRunId(UUID runId) { this.sentBackAfterRunId = runId; }
+    public RunState sentBackRedoFrom() { return sentBackRedoFrom; }
+    public RunState getSentBackRedoFrom() { return sentBackRedoFrom; }
+    public void setSentBackRedoFrom(RunState stage) { this.sentBackRedoFrom = stage; }
     /** How many workers each of this story's tasks gets, or null to inherit the project's number. */
     public Integer workersPerTask() { return workersPerTask; }
     public Integer getWorkersPerTask() { return workersPerTask; }

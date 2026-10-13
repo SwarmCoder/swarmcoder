@@ -121,6 +121,15 @@ public class BacklogServiceImpl implements BacklogService {
 
     /** Sending a story back on behalf of someone other than the person at the Console. */
     String retryStoryAs(String storyId, String note, String actor) {
+        return retryStoryAs(storyId, note, actor, null);
+    }
+
+    /**
+     * @param redoFrom the first stage the next build does again, as whoever sends the story
+     *                 back named it; null when none was named (see {@code RebuildFrom})
+     */
+    String retryStoryAs(String storyId, String note, String actor,
+                        com.swarmcoder.domain.RunState redoFrom) {
         return mutate(storyId, (store, projectId, story) -> {
             // RUNNING is accepted too, and it has to be. A story is moved out of RUNNING only when
             // the workflow reaches its delivery check, so a process that dies mid-run — a restart,
@@ -141,6 +150,13 @@ public class BacklogServiceImpl implements BacklogService {
             // against a commit that was never accepted — evidence laundered through a retry.
             story.setDeliveredCommit(null);
             story.setIntegrationCommit(null);
+            // What the next build is told and what it may keep (section 99): the note word
+            // for word, where the story stood, the build it is sent back after, and the stage
+            // named as the one to do again when one was. Read by that next build only.
+            story.setSentBackNote(note == null || note.isBlank() ? null : note.trim());
+            story.setSentBackFrom(was);
+            story.setSentBackAfterRunId(lastRunOf(story));
+            story.setSentBackRedoFrom(redoFrom);
             store.saveStory(story);
             // The builds this retry leaves behind are over, for good. Each one still unfinished is
             // ended, its "stopped" mark goes with it, and every question any of them still has

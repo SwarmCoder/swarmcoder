@@ -1442,6 +1442,10 @@ public class ArtifactStore implements AutoCloseable {
         copy.setDependencyRetries(story.dependencyRetries());
         copy.setWaitingReason(story.waitingReason());
         copy.setNothingCreates(story.nothingCreates());
+        copy.setSentBackNote(story.sentBackNote());
+        copy.setSentBackFrom(story.sentBackFrom());
+        copy.setSentBackAfterRunId(story.sentBackAfterRunId());
+        copy.setSentBackRedoFrom(story.sentBackRedoFrom());
         copy.setWorkersPerTask(story.workersPerTask());
         copy.setAcceptedBy(story.acceptedBy());
         return copy;

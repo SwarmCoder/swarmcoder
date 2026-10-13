@@ -188,6 +188,35 @@ public class Run {
     private Integer acceptanceTestsPassed;
     private Integer journeysMade;
     private Integer journeysFailed;
+    /**
+     * The stage this run was last at before it ended, or is at now (section 99). A run that is
+     * ended keeps no stage in {@link #state}, and a later build of the same story has to know
+     * how far this one got: what it finished before that stage is what the later build may
+     * start from. Null on a run stored before this existed, which is read as "not known" and
+     * nothing of such a run is reused.
+     */
+    private RunState lastStage;
+    /**
+     * A fingerprint of what this run's design, plan and tests were made from, other than the
+     * project's tree: the story's words, its requirements and checks, the quality gates it
+     * inherits, the project's rules and the kind of run. Written once at INTAKE. A later build
+     * of the story reuses this run's work only when its own fingerprint is the same. Null on a
+     * run stored before this existed.
+     */
+    private String inputsFingerprint;
+    /** The earlier build of the story whose work this run started from; null when none. */
+    private UUID reusedFromRunId;
+    /**
+     * What this run took over from an earlier build of its story and what it did again, one
+     * sentence per stage with the reason, as decided at INTAKE. Null when the story had no
+     * earlier build. Never changed in place.
+     */
+    private List<String> reuseRecord;
+    /**
+     * The note the story was sent back with before this build, word for word. It is told to
+     * every role this build runs, after the goal. Null when the story was not sent back.
+     */
+    private String sentBackNote;
 
     public Run() {}
 
@@ -271,6 +300,13 @@ public class Run {
         next.acceptanceTestsPassed = this.acceptanceTestsPassed;
         next.journeysMade = this.journeysMade;
         next.journeysFailed = this.journeysFailed;
+        // The stage a run ends at is kept when its state becomes one of the endings.
+        next.lastStage = isAnEnding(state)
+            ? (isAnEnding(this.state) ? this.lastStage : this.state) : state;
+        next.inputsFingerprint = this.inputsFingerprint;
+        next.reusedFromRunId = this.reusedFromRunId;
+        next.reuseRecord = this.reuseRecord;
+        next.sentBackNote = this.sentBackNote;
         return next;
     }
 
@@ -381,6 +417,41 @@ public class Run {
     public Integer journeysFailed() { return journeysFailed; }
     public Integer getJourneysFailed() { return journeysFailed; }
     public void setJourneysFailed(Integer journeysFailed) { this.journeysFailed = journeysFailed; }
+    private static boolean isAnEnding(RunState state) {
+        return state == RunState.DELIVERED || state == RunState.ABORTED
+            || state == RunState.ABANDONED;
+    }
+
+    /**
+     * The stage this run was last at: its state while it is going, and the stage it ended at
+     * once it has ended. Null for an ended run stored before the stage was kept.
+     */
+    public RunState lastStage() {
+        if (!isAnEnding(state)) {
+            return state;
+        }
+        return lastStage;
+    }
+    public RunState getLastStage() { return lastStage; }
+    public void setLastStage(RunState lastStage) { this.lastStage = lastStage; }
+    public String inputsFingerprint() { return inputsFingerprint; }
+    public String getInputsFingerprint() { return inputsFingerprint; }
+    public void setInputsFingerprint(String inputsFingerprint) {
+        this.inputsFingerprint = inputsFingerprint;
+    }
+    public UUID reusedFromRunId() { return reusedFromRunId; }
+    public UUID getReusedFromRunId() { return reusedFromRunId; }
+    public void setReusedFromRunId(UUID reusedFromRunId) { this.reusedFromRunId = reusedFromRunId; }
+    public List<String> reuseRecord() {
+        return reuseRecord == null ? List.of() : List.copyOf(reuseRecord);
+    }
+    public List<String> getReuseRecord() { return reuseRecord(); }
+    public void setReuseRecord(List<String> lines) {
+        this.reuseRecord = lines == null || lines.isEmpty() ? null : new ArrayList<>(lines);
+    }
+    public String sentBackNote() { return sentBackNote; }
+    public String getSentBackNote() { return sentBackNote; }
+    public void setSentBackNote(String sentBackNote) { this.sentBackNote = sentBackNote; }
     public String parkReason() { return parkReason; }
     public String getParkReason() { return parkReason; }
     public void setParkReason(String parkReason) { this.parkReason = parkReason; }

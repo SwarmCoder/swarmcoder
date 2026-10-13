@@ -160,6 +160,53 @@ class AStoryHasOneBuildTest {
         }
     }
 
+    /**
+     * Section 99: a send-back writes on the story what the next build is told and may keep, and
+     * says so to whoever sent it back. The note is never read for what it is about.
+     */
+    @Test
+    void aSendBackSaysWhatTheNextBuildKeepsAndWritesItOnTheStory(@TempDir Path dir) throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            install(store);
+            Story stoppedStory = story(store, "S1", StoryState.BLOCKED);
+            UUID stopped = run(store, stoppedStory.id(), RunState.EXECUTING,
+                Instant.now().minusSeconds(30));
+            attach(store, stoppedStory, stopped);
+
+            String kept = desk.sendBack("S1", "the second task never compiles", "");
+
+            assertThat(kept).doesNotStartWith("error:")
+                .contains("keeps the design, the plan, the tests and every task that already "
+                    + "has a chosen candidate")
+                .contains("redo_from");
+            Story after = store.getStory(stoppedStory.id());
+            assertThat(after.sentBackNote()).isEqualTo("the second task never compiles");
+            assertThat(after.sentBackFrom()).isEqualTo(StoryState.BLOCKED);
+            assertThat(after.sentBackAfterRunId()).isEqualTo(stopped);
+            assertThat(after.sentBackRedoFrom()).isNull();
+            assertThat(store.root().runs.get(stopped).lastStage())
+                .as("an ended build keeps the stage it ended at")
+                .isEqualTo(RunState.EXECUTING);
+
+            Story delivered = story(store, "S2", StoryState.REVIEW);
+            UUID finished = run(store, delivered.id(), RunState.FINAL_INTEGRATION, null);
+            attach(store, delivered, finished);
+            assertThat(desk.sendBack("S2", "the list is in the wrong order", null))
+                .as("a refused delivery, no stage named: nothing that made it is kept")
+                .contains("makes the design, the plan, the tests and the code again");
+
+            Story objected = story(store, "S3", StoryState.BLOCKED);
+            UUID third = run(store, objected.id(), RunState.EXECUTING, null);
+            attach(store, objected, third);
+            assertThat(desk.sendBack("S3", "anything", "everything")).startsWith("error:");
+            assertThat(store.getStory(objected.id()).state()).isEqualTo(StoryState.BLOCKED);
+            assertThat(desk.sendBack("S3", "store it on the server", "design"))
+                .contains("makes the design, the plan, the tests and the code again");
+            assertThat(store.getStory(objected.id()).sentBackRedoFrom())
+                .isEqualTo(RunState.DESIGN);
+        }
+    }
+
     private void install(ArtifactStore store) {
         ConsoleContext.StoryRunStarter starter = (goal, kind, storyId) ->
             run(store, storyId, RunState.EXECUTING, null);
