@@ -1,2 +1,4 @@
 *.sh text eol=lf
 scripts/hooks/* text eol=lf
+# Third-party files shipped as they were published
+**/META-INF/resources/vendor/* -text

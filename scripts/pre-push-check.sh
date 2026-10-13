@@ -88,6 +88,7 @@ git ls-files 'sc-*.java' | grep -E '^sc-[^/]+/src/(main|test)/java/' \
 git diff --diff-filter=A --name-only "$base" "$tip" \
     | while IFS= read -r path; do
           size="$(git cat-file -s "$tip:$path" 2>/dev/null || echo 0)"
+          case "$path" in */META-INF/resources/vendor/*) continue ;; esac   # third-party files the Console ships instead of loading them from a CDN
           [ "$size" -gt 1000000 ] && echo "$path ($size bytes)"
       done \
     | report "Added files larger than 1 MB (a picture or a dump can show what text checks cannot):"

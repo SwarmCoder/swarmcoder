@@ -176,6 +176,11 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **The Console loads nothing from the internet.** Tailwind (3.4.17) and the daisyUI stylesheet
+  (5.6.14) were loaded by the browser from two public CDNs, the first with no version pinned. Both
+  are now files the application serves itself, so the Console works offline and no third-party
+  script is fetched into it.
+
 - **The documentation server was asked about the project's own name, and the answer was kept.**
   The background warm-up sent the artifact id of every entry in the root build file, the
   project's own modules included, and a worker's lookup sent the first word of its question as
