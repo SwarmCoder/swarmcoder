@@ -126,7 +126,14 @@ public final class StoreRoot {
      * as null; see the accessor.
      */
     private Map<UUID, com.swarmcoder.domain.RunUsageRecord> runUsage = new HashMap<>();
-    public long schemaVersion = 14;
+    /**
+     * What each project has established (schema v15), keyed by project id: the answers of its
+     * deterministic lookups and what its roles concluded from them, so that neither is worked
+     * out again after a restart (section 101). A store from before v15 loads this field as null;
+     * see the accessor.
+     */
+    private Map<UUID, com.swarmcoder.domain.ProjectEstablished> established = new HashMap<>();
+    public long schemaVersion = 15;
 
     /**
      * Class-evolution guard: stores written before schema v2 load this field as null
@@ -303,6 +310,14 @@ public final class StoreRoot {
             runUsage = new HashMap<>();
         }
         return runUsage;
+    }
+
+    /** What each project has established (v15 null-guard: older stores load this as null). */
+    public synchronized Map<UUID, com.swarmcoder.domain.ProjectEstablished> established() {
+        if (established == null) {
+            established = new HashMap<>();
+        }
+        return established;
     }
 
     /** The last project switched to, or null on a pre-v9 store or a first run. */

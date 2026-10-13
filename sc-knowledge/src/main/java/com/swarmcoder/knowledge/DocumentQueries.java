@@ -57,9 +57,36 @@ public final class DocumentQueries {
         this(curator, null);
     }
 
+    /** True when each address is marked for every reader instead of written for one. */
+    private final boolean forEveryone;
+
     private DocumentQueries(KnowledgeCurator curator, String ownRoot) {
+        this(curator, ownRoot, false);
+    }
+
+    private DocumentQueries(KnowledgeCurator curator, String ownRoot, boolean forEveryone) {
         this.curator = curator;
         this.ownRoot = ownRoot;
+        this.forEveryone = forEveryone;
+    }
+
+    /** The same queries with every address marked; see {@link TreeQueries#forEveryReaderOf}. */
+    static DocumentQueries forEveryReaderOf(KnowledgeCurator curator) {
+        return new DocumentQueries(curator, null, true);
+    }
+
+    /** The queries as {@code reader} asks them: what it writes is read as its own addresses. */
+    static DocumentQueries of(KnowledgeCurator curator, Addresses reader) {
+        return new DocumentQueries(curator, reader.ofAWorker() ? reader.ownRoot() : null);
+    }
+
+    /**
+     * The document {@code asked} names for this asker, as {@code <root>/<path>}; null when it
+     * names none. Two askers who write the same document differently are given one answer by it.
+     */
+    String addressOf(String asked) {
+        Read document = curator == null || asked == null || asked.isBlank() ? null : read(asked);
+        return document == null ? null : document.address();
     }
 
     /** The same queries for a worker in a checkout of {@code project}; see {@link TreeQueries}. */
@@ -80,6 +107,9 @@ public final class DocumentQueries {
 
     /** {@code <root>/<relative>} as the asker's read tool takes it. */
     private String shown(String address) {
+        if (forEveryone) {
+            return Addresses.mark(address);
+        }
         if (ownRoot == null) {
             return address;
         }
@@ -216,8 +246,13 @@ public final class DocumentQueries {
             sb.append(listed("The project's documents", own, true));
         }
         for (Map.Entry<String, List<ReferenceIndex.DocEntry>> root : byRoot.entrySet()) {
-            String label = shown(root.getKey() + "/x");
-            label = label.substring(0, label.length() - 2);
+            String label;
+            if (forEveryone) {
+                label = shown(root.getKey());
+            } else {
+                label = shown(root.getKey() + "/x");
+                label = label.substring(0, label.length() - 2);
+            }
             if (own == null && byRoot.size() == 1) {
                 sb.append(listed("Documents in `" + label + "`", root.getValue(),
                     root.getValue().size() <= OUTLINED_TOGETHER));

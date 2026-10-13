@@ -103,6 +103,18 @@ public final class SemanticIndex {
     private final String unavailable;
     private final Stats stats;
     private volatile String degraded = "";
+    /**
+     * Which reading of the roots this index is: the facts file of each root by its place, size
+     * and time. The same value in a later start of the application means the same facts were
+     * read, so an answer kept from them is the answer this index gives (section 101). An index
+     * that could not be read or written has a value no other index has.
+     */
+    private volatile String stamp = "unread-" + System.nanoTime();
+
+    /** Which reading of the roots this index is; see the field. */
+    public String stamp() {
+        return stamp;
+    }
 
     // Read once, on construction, because every query needs them and a run asks many.
     private final Map<String, List<SemanticFacts.TypeFact>> typesByFqn = new HashMap<>();
@@ -197,6 +209,7 @@ public final class SemanticIndex {
         List<SemanticFacts.RootFacts> built = new ArrayList<>();
         long bytes = 0L;
         List<String> problems = new ArrayList<>();
+        StringBuilder read = new StringBuilder();
         for (KnowledgeCurator.Root root : roots) {
             if (root == null || root.path() == null || !Files.isDirectory(root.path())) {
                 continue;
@@ -223,8 +236,13 @@ public final class SemanticIndex {
             built.add(facts);
             try {
                 bytes += Files.isRegularFile(file) ? Files.size(file) : 0L;
+                read.append(root.label()).append('=').append(file.getParent().getFileName())
+                    .append('|').append(Files.size(file)).append('|')
+                    .append(Files.getLastModifiedTime(file).toMillis()).append(';');
             } catch (Exception e) {                                        // noqa
-                // a size is a report, not a result
+                // a size is a report, not a result; a reading nobody can name is no other's
+                read.append(root.label()).append("=unwritten-").append(System.nanoTime())
+                    .append(';');
             }
         }
         if (built.isEmpty()) {
@@ -234,6 +252,9 @@ public final class SemanticIndex {
         }
         SemanticIndex index = new SemanticIndex(built, "", bytes);
         index.degraded = String.join("; ", problems);
+        // Only the roots that were read are named: one that could not be parsed this time and
+        // can be the next makes a different reading.
+        index.stamp = read.toString();
         if (!problems.isEmpty()) {
             // ONCE, and loudly enough to find, because a partial index is the state a person will
             // want to know about and the state nothing else will make visible.

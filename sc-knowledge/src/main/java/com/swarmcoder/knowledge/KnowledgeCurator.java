@@ -346,6 +346,12 @@ public final class KnowledgeCurator {
     }
 
     public SemanticIndex semanticIndex() {
+        // An answer for which the tree is asked stands on this reading of it (SharedAnswers).
+        SharedAnswers.readingTheTree();
+        return theIndex();
+    }
+
+    private SemanticIndex theIndex() {
         SemanticIndex cached = semanticCache;
         if (cached == null) {
             synchronized (this) {
@@ -362,6 +368,15 @@ public final class KnowledgeCurator {
             }
         }
         return cached;
+    }
+
+    /**
+     * Which reading of the syntax tree this curator answers from: the same for its whole life,
+     * and the same in a later start only when the same facts are read again.
+     */
+    String treeStamp() {
+        SemanticIndex index = theIndex();
+        return index == null ? "none" : index.stamp();
     }
 
     /**

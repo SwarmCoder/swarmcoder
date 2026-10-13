@@ -17,6 +17,7 @@
  */
 package com.swarmcoder.app;
 
+import com.swarmcoder.knowledge.Addresses;
 import com.swarmcoder.knowledge.DocumentQueries;
 import com.swarmcoder.knowledge.LanguageQueries;
 import com.swarmcoder.knowledge.Librarian;
@@ -154,8 +155,12 @@ public final class WorkerLookups implements ApiLookup {
         if (reach == null) {
             return answerOf(query, argument);
         }
-        SharedAnswers.Served given = shared.answer("worker", query, argument, reach, "worker",
-            () -> {
+        // What a role has had computed is a worker's too, written with a worker's addresses
+        // (section 101).
+        Addresses reader = Addresses.ofAWorker(
+            Addresses.rootLabelOf(librarian.curator(), projectPath));
+        SharedAnswers.Served given = shared.answerFor(reader, SharedAnswers.WORKER, query,
+            argument, reach, "worker", () -> {
                 String text = answerOf(query, argument);
                 return new SharedAnswers.Computed(text, byLanguageServer.get() ? "server" : null);
             });
