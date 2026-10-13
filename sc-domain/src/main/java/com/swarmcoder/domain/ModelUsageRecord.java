@@ -64,6 +64,18 @@ public class ModelUsageRecord {
     private int estimatedCalls;
     /** The most input tokens one call of this row was sent. */
     private long largestInput;
+    /**
+     * Calls of which both are known: the size of the request as it went out, and the input
+     * tokens the server counted for it. Their sums follow (section 94): a server that counts
+     * more than the request holds shows as few characters per token.
+     */
+    private int sizedCalls;
+    private long requestChars;
+    private long sizedInputTokens;
+    /** Calls that followed another of the same session, and what their requests shared with it. */
+    private int repeatCalls;
+    private long repeatRequestChars;
+    private long samePrefixChars;
 
     public ModelUsageRecord() {}
 
@@ -112,6 +124,31 @@ public class ModelUsageRecord {
         }
     }
 
+    /**
+     * Adds what is known of one call's request, for a call {@link #addCall} has counted.
+     *
+     * @param input           tokens the server says it was sent, or negative
+     * @param chars           the size of the request body as it went out, or not positive when
+     *                        it was not seen
+     * @param samePrefixChars how many leading characters of that body were the same as the
+     *                        session's request before it, or negative for a first request
+     */
+    public void addRequest(long input, long chars, long samePrefixChars) {
+        if (chars <= 0) {
+            return;
+        }
+        if (input >= 0) {
+            sizedCalls++;
+            requestChars += chars;
+            sizedInputTokens += input;
+        }
+        if (samePrefixChars >= 0) {
+            repeatCalls++;
+            repeatRequestChars += chars;
+            this.samePrefixChars += Math.min(chars, samePrefixChars);
+        }
+    }
+
     /** Adds every count of {@code other} to this row. */
     public void add(ModelUsageRecord other) {
         calls += other.calls;
@@ -126,6 +163,12 @@ public class ModelUsageRecord {
         millisInCalls += other.millisInCalls;
         estimatedCalls += other.estimatedCalls;
         largestInput = Math.max(largestInput, other.largestInput);
+        sizedCalls += other.sizedCalls;
+        requestChars += other.requestChars;
+        sizedInputTokens += other.sizedInputTokens;
+        repeatCalls += other.repeatCalls;
+        repeatRequestChars += other.repeatRequestChars;
+        samePrefixChars += other.samePrefixChars;
     }
 
     /** A new row with the same key and the same counts. */
@@ -156,4 +199,10 @@ public class ModelUsageRecord {
     public long millisInCalls() { return millisInCalls; }
     public int estimatedCalls() { return estimatedCalls; }
     public long largestInput() { return largestInput; }
+    public int sizedCalls() { return sizedCalls; }
+    public long requestChars() { return requestChars; }
+    public long sizedInputTokens() { return sizedInputTokens; }
+    public int repeatCalls() { return repeatCalls; }
+    public long repeatRequestChars() { return repeatRequestChars; }
+    public long samePrefixChars() { return samePrefixChars; }
 }

@@ -417,27 +417,37 @@ public final class HistoryTrim {
         Set<String> superseded = supersededCalls(messages);
         askedAgain.removeAll(superseded);
         int droppable = 0;
+        // What cutting them would take off the conversation: less than their size, because
+        // each leaves its first lines or a line naming its call (section 94).
+        int savable = 0;
         int last = messages.size() - PROTECTED_TAIL_MESSAGES;
         for (int i = firstDroppableIndex(messages); i < last; i++) {
             if (messages.get(i) instanceof Message.User user) {
                 for (MessagePart part : user.getParts()) {
                     if (part instanceof MessagePart.Tool.Result result && !isAlreadyDropped(result)
                             && !askedAgain.contains(result.getId())) {
-                        droppable += result.getOutput().length() / CHARS_PER_TOKEN;
+                        int length = result.getOutput().length();
+                        droppable += length / CHARS_PER_TOKEN;
+                        savable += Math.max(0, length - lengthOnceCut(length, digestChars))
+                            / CHARS_PER_TOKEN;
                     }
                 }
             }
         }
         // The whole file bodies and diffs the worker sent in earlier write_file / apply_diff calls
         // are resent every turn too, and the files are on disk now.
-        droppable += trimmableArgumentTokens(messages);
+        int oldArguments = trimmableArgumentTokens(messages);
         // And the first lines an earlier tidy kept of results older still (run 93).
-        droppable += earlierDigestTokens(messages);
-        if (droppable <= aboveTokens) {
+        int earlierDigests = earlierDigestTokens(messages);
+        droppable += oldArguments + earlierDigests;
+        savable += oldArguments + earlierDigests;
+        if (droppable <= aboveTokens || savable <= Math.max(0, toTokens)) {
             return new Result(messages, 0, 0, before, before);
         }
         List<Message> out = new ArrayList<>(messages);
-        int target = before - (droppable - Math.max(0, toTokens));
+        // Counted in what a cut saves, not in what is cut: counted by size, the mark could not
+        // be reached once many results were short, and every tidy then cut everything it could.
+        int target = before - (savable - Math.max(0, toTokens));
         int dropped = emptyOldToolOutputs(out, target, before, Math.max(1, digestChars),
             superseded);
         int running = dropped == 0 ? before : estimateTokens(out);
@@ -782,6 +792,11 @@ public final class HistoryTrim {
                     String stub = digestChars > 0
                         ? digest(result, argsByCallId.get(result.getId()), digestChars)
                         : stub(result, argsByCallId.get(result.getId()));
+                    if (digestChars > 0 && stub.length() == result.getOutput().length()
+                            && stub.length() > ONE_LINE_NOT_WORTH_IT) {
+                        // Too short to keep first lines of, and old: one line (section 94).
+                        stub = oneLine(result, argsByCallId.get(result.getId()));
+                    }
                     saved += result.getOutput().length() - stub.length();
                     droppedHere++;
                     // Koog 1.2.0: MessagePart.Tool.Result.copy() now takes the output as a
@@ -946,6 +961,38 @@ public final class HistoryTrim {
         return ELIDED_MARK + " You read this earlier with " + result.getTool() + shortArgs
             + "; only its beginning is kept (" + output.length() + " characters were returned)."
             + " Make the same call again if you need the rest.\n" + head + "\n...";
+    }
+
+    /** About what a line naming a call takes, and what a digest adds to the head it keeps. */
+    private static final int ONE_LINE_CHARS = 200;
+
+    /** About how long a result of {@code length} characters is once a tidy has cut it. */
+    private static int lengthOnceCut(int length, int digestChars) {
+        int digest = Math.max(1, digestChars);
+        if (length > digest + DIGEST_NOT_WORTH_IT) {
+            return digest + ONE_LINE_CHARS;
+        }
+        return length > ONE_LINE_NOT_WORTH_IT ? Math.min(length, ONE_LINE_CHARS) : length;
+    }
+
+    /** A result this short is left as it is: the line naming its call would be no shorter. */
+    static final int ONE_LINE_NOT_WORTH_IT = 400;
+
+    /**
+     * An old result that is too short to keep first lines of, as one line naming its call
+     * (section 94). {@link #digest} leaves a result of up to {@code digestChars} plus
+     * {@value #DIGEST_NOT_WORTH_IT} characters whole, and nothing ever shortened one: after the
+     * architect's 199 lookups on 2026-10-13, 98 results of up to 1,000 characters - a type's
+     * members, a build declaration, a document section - were 46,282 characters resent on every
+     * call. They counted toward the mark, so they also made every tidy cut every longer result,
+     * since the mark could not be reached without them. The same words as {@link #collapse}.
+     */
+    static String oneLine(MessagePart.Tool.Result result, String args) {
+        String shortArgs = args == null || args.isBlank() ? ""
+            : " " + (args.length() > MAX_ARGS_IN_STUB ? args.substring(0, MAX_ARGS_IN_STUB) + "..." : args);
+        return ELIDED_MARK + " You read this earlier with " + result.getTool() + shortArgs
+            + "; none of it is kept (" + result.getOutput().length()
+            + " characters were returned). Make the same call again if you need it.";
     }
 
     /** How a digest says it kept a head; what tells a digest from a stub or a collapsed one. */

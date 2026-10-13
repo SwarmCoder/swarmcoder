@@ -188,6 +188,19 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **One small story cost 15.1 million paid tokens; the reviewer alone made 121 calls.** With the
+  planning roles on a paid server, each of the reviewer's four readings of a story (the design
+  against the rules, the revised design, the plan, the tests) opened a lookup session of its own
+  and learned the project and its framework again. Now a run's readings are one conversation,
+  it starts from the facts the architect established, and it is told to look up only what an
+  objection depends on. A reviewer stopped by the token budget used to be recorded as "approved,
+  review unavailable" and the run went on; now the run parks with the budget question. Old
+  lookup results of up to 1,000 characters were never shortened and are now one line each once
+  the mark is passed. `run_report` and `project_report` begin with a `WARNING:` line for a paid
+  role that was sent more than 30,000 input tokens a call, for one that made more calls than its
+  work needs, and for a paid server that counted more input than the requests held (in this
+  build the server counted the model's earlier thinking as input: about 6.3 million tokens).
+  Section 94 of `docs/DEVELOPER_CORRECTIONS.md` has the figures and what is not yet decided.
 - **A build's model tokens are counted call by call, input and output apart, paid and local
   apart, and reported per role.** A build whose planning roles ran on a paid model was reported
   as "Cloud tokens of this build: 1163749 in, 2369 out"; its architect alone had made 51 calls.

@@ -66,6 +66,13 @@ public final class ReviewerTools {
         });
     }
 
+    /** A kept conversation is given another reading: no verdict has been handed in for it yet. */
+    void startsAnotherReading() {
+        handedIn = false;
+        approved = false;
+        objections.clear();
+    }
+
     List<ToolBinding> bindings() {
         try {
             return List.of(new ToolBinding(LookupAgent.SUBMIT_TOOL,

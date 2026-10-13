@@ -65,12 +65,37 @@ final class ScriptedExpertEndpoint implements AutoCloseable {
         }
     }
 
+    /** The same turn, with {@code said} written before its calls - as most models do. */
+    static Reply saying(String said, Reply calls) {
+        return new Reply(said, calls.toolName(), calls.toolArgsJson(), calls.moreArgsJson());
+    }
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final HttpServer server;
     private final IntFunction<Reply> script;
     /** Every request body, in order — what actually went on the wire. */
     final List<String> requests = new ArrayList<>();
+
+    /**
+     * What the model "thought" before each answer, by turn; null (the default) is a model that
+     * reports no thinking. Sent as {@code reasoning_content}, the field a thinking model's server
+     * answers with.
+     */
+    private volatile IntFunction<String> thinking;
+
+    /** Every answer from now on carries the thinking {@code byTurn} gives for its turn. */
+    ScriptedExpertEndpoint thinking(IntFunction<String> byTurn) {
+        this.thinking = byTurn;
+        return this;
+    }
+
+    /** One request body, by turn (1-based) - what went on the wire for that call. */
+    String request(int turn) {
+        synchronized (requests) {
+            return requests.get(turn - 1);
+        }
+    }
 
     /** @param script turn number (1-based) to the reply for it */
     ScriptedExpertEndpoint(IntFunction<Reply> script) throws IOException {
@@ -87,7 +112,9 @@ final class ScriptedExpertEndpoint implements AutoCloseable {
                 JsonNode request = MAPPER.readTree(raw);
                 Reply reply = script.apply(turn);
                 boolean stream = request.path("stream").asBoolean(false);
-                byte[] body = stream ? sse(reply) : completion(reply);
+                IntFunction<String> thoughts = thinking;
+                byte[] body = stream ? sse(reply)
+                    : completion(reply, thoughts == null ? null : thoughts.apply(turn));
                 exchange.getResponseHeaders().set("Content-Type",
                     stream ? "text/event-stream" : "application/json");
                 exchange.sendResponseHeaders(200, body.length);
@@ -123,11 +150,18 @@ final class ScriptedExpertEndpoint implements AutoCloseable {
         }
     }
 
-    private static byte[] completion(Reply reply) throws IOException {
+    private static byte[] completion(Reply reply, String thought) throws IOException {
         ObjectNode message = MAPPER.createObjectNode();
         message.put("role", "assistant");
+        if (thought != null) {
+            message.put("reasoning_content", thought);
+        }
         if (reply.toolName() != null) {
-            message.putNull("content");
+            if (reply.text() == null) {
+                message.putNull("content");
+            } else {
+                message.put("content", reply.text());
+            }
             ArrayNode toolCalls = message.putArray("tool_calls");
             ObjectNode call = toolCalls.addObject();
             call.put("id", "call_" + Math.abs(reply.toolArgsJson().hashCode()));
