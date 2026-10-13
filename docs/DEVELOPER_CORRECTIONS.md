@@ -10014,3 +10014,129 @@ this project's delivered stories count. Run with it and unchanged:
   given the titles.
 - The effect figures are proportions of a stored run, not a measurement.
 - The full test suite was not run; the classes above were.
+
+## 98. Every session worked out what the project already knew, and a worker's opening was sent 2,300 times (audit of a five-story local build, 2026-10-13)
+
+**What was observed** (`docs/AGENT_USAGE_AUDIT.md`, sections 4, 6 and 7, items 3, 4 and 7). Of
+6,031 lookups 1,345 were the first time anybody in the build asked about that target. 101
+targets were each looked up by three roles or more: 3,460 lookups, at least 13.8 million tokens
+carried. First-round workers made 621 lookups a sibling candidate of the same task also made.
+A worker's system text was about 26,000 characters on each of 2,308 calls; 13,022 of a
+first-round worker's characters were also, word for word, in other roles' openings. Section 97
+had given the architect a lookup of what earlier stories kept; nothing else was shared.
+
+**What changed, 1: one store of what a project has established** (`SharedAnswers`, one per
+`KnowledgeCurator`, so one per project and per reading of its syntax tree).
+
+- *What is kept.* The answer of a deterministic lookup: the tree and graph queries, the
+  language server's, a document's outline or section, a build declaration, a file or a part
+  of one. Not kept: `search`, `docs_for`/`lookup_docs`, `find_example` and `library_docs`,
+  which are chosen by what the session was already given, and anything a model answers.
+- *The key* is the question: who the answer is written for (a role's addresses are
+  `<root>/<path>`, a worker's are paths of its checkout), the query and its argument. A role's
+  `read_file` also carries the reader's room and the session's latest documentation question,
+  because both shape that one answer.
+- *What an answer stands on* is recorded with it and held against the disk before it is
+  served. Every file the lookup read through the curator while it ran (recorded where the
+  curator resolves an address, with the file's state taken before the read) and every file its
+  question or answer names, each with a SHA-256 of its bytes. A question whose answer can
+  change with any file (usages, implementations, callers, what a folder or module holds, a
+  build, a symbol search), an answer for which a folder was read, and an answer that names no
+  file at all also stand on the state of every root: the project's files walked by path, size
+  and time on every check; a reference folder by `RootIdentity`, which is what the product's
+  own indexes over it are kept by.
+- *Invalidation.* If anything is not as recorded the answer is dropped and computed again. So
+  a changed file takes the body, shape, outline and section answers built on it and every
+  whole-project answer, and leaves the one-place answers of other files. A file that appears
+  takes the answer that said it was not there.
+- *Never another tree's answer.* The curator's syntax tree is read once and kept for the
+  curator's life; the store belongs to the same curator and is not written to disk.
+- *Siblings.* A question's place is taken while its answer is computed: two candidates asking
+  at the same moment cause one computation. What a worker's own checkout changes is laid over
+  the answer afterwards by its toolbox (`CheckoutCode`), as before, and is never kept.
+  `find_usages` and `find_implementations` now ask the language server inside the lookup, so
+  a kept answer spares the server call too.
+- *Wired* in `ExpertTools.run` (every role and the expert) and `WorkerLookups.tree` (every
+  worker). The session's own counts, stops and record of lookups by kind are unchanged: the
+  lookup was made. The log line says "already established for this project; not computed
+  again", and `SharedAnswers.summary()` gives asked, served, dropped and characters.
+
+**Does a served answer cost fewer conversation tokens? Decided: only where the session already
+holds it, and that already exists.** A session that was never sent the answer needs its text;
+a title or a pointer in its place is a second call for the same characters. A session that
+still holds the same answer whole is answered "unchanged; the full answer is already in this
+conversation" (section 59, `HistoryTrim.unchangedRepeat`), which compares the new result with
+the one held. A kept answer is byte for byte the first one, so that line now applies whenever
+the files have not changed. What the store saves is the computation, the language server call,
+and differences between sessions that should read the same text. The 7.8 to 11.1 million
+tokens of audit item 4 are conversation tokens of lookups made again across sessions; this
+change does not remove them. They go only when a role asks less, which is what the findings
+below and the titles in the opening are for.
+
+**What changed, 2: findings.** A finding is what a role concluded, not what a lookup returned.
+
+- `keep_finding(about, lookup, note)` for every role's lookup session (`ExpertTools`, bound in
+  `LookupAgent`; not for the architect, whose `keep_for_workers` does the same and also hands
+  the finding to the story's workers). The lookup must be one the session made and that found
+  something; the note is at most 1,000 characters. Kept with the role's name and what that
+  lookup's answer stood on.
+- `KnownFacts.Fact` has `by`. `known_about` and the titles in the opening (section 97) now
+  hold the delivered stories' findings and the kept ones; a kept one says "found by: the
+  <role> ... no delivered build has proved it" and is marked CHANGED SINCE when a file its
+  lookup stood on has changed.
+- The expert is given `known_about` and the titles; a worker is given `known_about` when the
+  project holds something (`ApiLookup.answers`). Nothing is added to a worker's opening.
+
+**What changed, 3: the workers' opening.** Measured by
+`AWorkersOpeningAndItsLookupsAreSharedTest` on a project with 12 rules (4 hard, 5 recorded as
+preferences, 3 unclassified) and 7 documents; not on the audited build, whose store was not
+available here.
+
+| part | before | after | what moved, and to which lookup |
+|---|---|---|---|
+| project rules | 5,121 | 2,748 | why each rule exists; the wording of a rule recorded as a preference; two of the heading's three paragraphs: `rule_of <name>` |
+| knowledge brief | 1,350 | 637 | the catalogue of documents by name: `doc_outline` with an empty string |
+| whole opening | 9,744 | 6,658 | |
+
+- *Kept whole:* every HARD rule, every rule with a check command, and every rule nobody
+  classified, with its strength line and its command (`ConstraintBrief.renderForWorkers`). A
+  preference is named with one line saying it is a preference; by the product's own wording it
+  "costs quality, never the work", and the judge stops a candidate for hard rules only
+  (`JudgeClient`). **Unsure, and kept:** unclassified rules. They cannot stop the work either,
+  but nobody said so. The judge, the checks and every other role read all rules as before.
+- *Not touched:* the workflow rules (about 3,900 characters). Each sentence has a run behind
+  it and none was tried without it. Also the libraries list, the documentation slice and the
+  worked example of the brief, which are chosen for the task.
+- `-Dswarmcoder.workers.rulesWhole=true` and `-Dswarmcoder.brief.documentMap=true` put each
+  back. The candidates' opening is still one text per task: nothing of the store enters it.
+
+**Tests.** `AProjectEstablishesAnAnswerOnceTest` (sc-knowledge): a second role and the expert
+are given the first role's answer and nothing is computed; one computation for four askers;
+a changed file takes its answers and leaves another file's; a file that appears; four
+candidates at the same moment, one computation; what is not kept; a finding is kept with who
+found it, offered by title, and marked when its file changes.
+`AWorkersOpeningAndItsLookupsAreSharedTest` (sc-app): the sizes above and what stays whole;
+a checked rule keeps its command; a sibling is given the first candidate's lookup, a worker is
+never given a role's addresses, and the opening does not move. Run with them and unchanged:
+`ARoleLearnsTheProjectFromItsObjectGraphTest`, `AnAnswerComesAtTheSizeOfTheQuestionTest`,
+`ADocumentIsReadBySectionTest`, `AProjectLearnsWhatItBuildsOnOnceTest`, `WorkerLookupsTest`,
+`ProjectContextExpertWiringTest`, `AWorkerIsSentTheRulesForItsPartOfTheProjectTest`,
+`AWorkerIsShownHowThisCodebaseDoesItTest`.
+
+**Not done, not checked.**
+
+- Nothing was run against a model. Whether a role calls `keep_finding`, whether a worker calls
+  `rule_of` for a preference, and what a build then costs are what the next run's report shows.
+- The store is in memory: it lasts as long as the application holds the project, across its
+  runs and stories, and is empty after a restart. Findings kept with `keep_finding` are lost
+  with it; the delivered stories' findings are not.
+- A role and a worker do not share an answer: their addresses differ.
+- A reference folder's state is `RootIdentity`'s, which is remembered for 60 seconds and for a
+  checkout with uncommitted edits is the list of changed paths. A file of it that an answer
+  read or names is still held by its bytes.
+- The run report does not show served against computed lookups; the figures are in the log
+  and in `SharedAnswers.summary()`.
+- An expert's answer to a worker is not kept as a finding (audit item 9).
+- `ARoleAsksTheLanguageServerTest.theLastColumnOfTheKindEnum...` fails before and after this
+  change: its list of `LookupMeter.Kind` lacks `KNOWN`, which section 97 appended.
+- The full test suite was not run; the classes above were.

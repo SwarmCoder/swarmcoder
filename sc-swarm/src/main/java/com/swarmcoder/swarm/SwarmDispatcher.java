@@ -1048,8 +1048,8 @@ public class SwarmDispatcher {
                 //   whole, most of them to rewrite them).
                 // Static text, identical for every worker - the prefix hash is unaffected.
                 + "You will meet APIs that are not in your training data. That is expected and it "
-                + "is not your failure: call lookup_api FIRST (your knowledge brief lists the "
-                + "documents by name), then ask_expert with the exact question, and "
+                + "is not your failure: call lookup_api FIRST (doc_outline with an empty "
+                + "string lists the documents by name), then ask_expert with the exact question, and "
                 + "request_skeleton when you do not know how to begin a file. Asking is the fast "
                 + "path; do not guess. Do NOT unpack or decompile jars (`jar xf`, `javap`, a "
                 + "decompiler) to work an API out — those commands are REFUSED. Only when "

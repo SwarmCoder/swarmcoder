@@ -169,6 +169,121 @@ public final class ConstraintBrief {
         return written == 0 ? "" : sb.toString();
     }
 
+    // ---------------------------------------------------------------------------------------
+    // The same rules as a WORKER is opened with (section 98).
+
+    /**
+     * What stands above a worker's rules. The three paragraphs of {@link #HEADER} are said to a
+     * role once a session; a worker's opening is sent again on every call it makes.
+     */
+    private static final String WORKER_HEADER =
+        "HOW THIS PROJECT MUST BE BUILT. These are the project's standing rules, not features: "
+        + "they apply to all work here, and work that breaks one is wrong even when it passes "
+        + "its own tests. Where a rule contradicts what a project of this kind normally does, "
+        + "the rule wins; if the work seems to need something a rule forbids, say so with "
+        + "dispute_rule rather than doing it. rule_of <name> gives one rule in full: why it "
+        + "exists, and the wording of a rule that is listed here by its name.\n\n";
+
+    /** What a rule listed by its name says in place of its wording. */
+    public static final String BY_NAME_LINE = "A preference, listed by name: follow it where it "
+        + "fits; breaking it costs quality, never the work. rule_of gives its wording.";
+
+    /**
+     * The briefing a worker is opened with: every rule in force is named, and
+     * <ul>
+     *   <li>a rule that can stop the work - a HARD rule, a rule with a check command, and a
+     *       rule nobody classified - keeps its whole wording, its strength and its command;</li>
+     *   <li>a rule recorded as a preference, which by its own line costs quality and never the
+     *       work, is listed by its name when its wording is longer than the line saying so;</li>
+     *   <li>no rule carries why it exists: that is read when a rule seems not to fit.</li>
+     * </ul>
+     * What is left out is one {@code rule_of} away, as {@link #ruleOf} renders it. Empty when
+     * there are no rules, exactly as {@link #render}.
+     */
+    public static String renderForWorkers(List<LearnedGuideline> rules, int maxChars) {
+        if (rules == null || rules.isEmpty()) {
+            return "";
+        }
+        int cap = maxChars > 0 ? maxChars : DEFAULT_MAX_CHARS;
+        StringBuilder sb = new StringBuilder(WORKER_HEADER);
+        int written = 0;
+        for (LearnedGuideline rule : rules) {
+            String entry = rule == null ? "" : entryForAWorker(rule);
+            if (entry.isEmpty()) {
+                continue;
+            }
+            if (sb.length() + entry.length() > cap) {
+                sb.append("  … and ").append(rules.size() - written)
+                    .append(" further rule(s) not shown — the rule set is over ")
+                    .append(cap).append(" characters. rule_of with an empty string names them "
+                        + "all.\n");
+                break;
+            }
+            sb.append(entry);
+            written++;
+        }
+        return written == 0 ? "" : sb.toString();
+    }
+
+    /** True for a rule a worker is told by name: a recorded preference with a name of its own. */
+    static boolean byNameForAWorker(LearnedGuideline rule) {
+        String body = rule.markdownBody() == null ? "" : rule.markdownBody().strip();
+        return !nameOf(rule).isEmpty() && !rule.hard()
+            && rule.purpose() != null && !rule.purpose().isBlank()
+            && (rule.checkCommand() == null || rule.checkCommand().isBlank())
+            && body.length() > BY_NAME_LINE.length();
+    }
+
+    private static String entryForAWorker(LearnedGuideline rule) {
+        if (byNameForAWorker(rule)) {
+            return "- " + nameOf(rule) + "\n  " + BY_NAME_LINE + "\n";
+        }
+        String whole = entryFor(rule);
+        if (rule.purpose() == null || rule.purpose().isBlank()) {
+            return whole;
+        }
+        return whole.replace(purposeLine(rule), "");
+    }
+
+    private static String nameOf(LearnedGuideline rule) {
+        return rule.title() != null && !rule.title().isBlank() ? rule.title().strip()
+            : rule.slug() == null ? "" : rule.slug().strip();
+    }
+
+    private static String purposeLine(LearnedGuideline rule) {
+        return "  Why it exists: " + rule.purpose().strip().replace("\n", " ") + "\n";
+    }
+
+    /**
+     * {@code rule_of}: one rule exactly as every other role reads it, by its title or its
+     * short name, compared as names; every rule's name for an empty question or a name no
+     * rule has.
+     */
+    public static String ruleOf(List<LearnedGuideline> rules, String name) {
+        List<LearnedGuideline> all = rules == null ? List.of() : rules;
+        String asked = name == null ? "" : name.strip();
+        StringBuilder found = new StringBuilder();
+        if (!asked.isEmpty()) {
+            for (LearnedGuideline rule : all) {
+                if (rule != null && (asked.equalsIgnoreCase(nameOf(rule))
+                        || (rule.slug() != null && asked.equalsIgnoreCase(rule.slug().strip())))) {
+                    found.append(entryFor(rule));
+                }
+            }
+        }
+        if (found.length() > 0) {
+            return found.toString();
+        }
+        StringBuilder names = new StringBuilder(asked.isEmpty() ? "The project's rules in force, "
+            + "by name:\n" : "No rule in force is called `" + asked + "`. The rules, by name:\n");
+        for (LearnedGuideline rule : all) {
+            if (rule != null && !nameOf(rule).isEmpty()) {
+                names.append("- ").append(nameOf(rule)).append('\n');
+            }
+        }
+        return names.toString();
+    }
+
     /**
      * One rule as the agent reads it: its name, its wording, and the command that will decide it.
      *
@@ -194,8 +309,7 @@ public final class ConstraintBrief {
         // exists to prevent. Written only for a rule somebody classified, so a rule recorded
         // before this existed renders exactly as it did.
         if (rule.purpose() != null && !rule.purpose().isBlank()) {
-            entry.append("  Why it exists: ").append(rule.purpose().strip().replace("\n", " "))
-                .append('\n');
+            entry.append(purposeLine(rule));
         }
         if (rule.hard()) {
             entry.append("  ").append(HARD_RULE_LINE).append('\n');

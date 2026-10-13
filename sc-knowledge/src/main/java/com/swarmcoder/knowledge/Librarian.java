@@ -449,6 +449,9 @@ public class Librarian {
         return assembleBrief(repoRoot, task, null, null);
     }
 
+    /** {@code -Dswarmcoder.brief.documentMap=true}: a brief lists the documents by name again. */
+    public static final String DOCUMENT_MAP_PROPERTY = "swarmcoder.brief.documentMap";
+
     public KnowledgeBrief assembleBrief(Path repoRoot, Task task, OfflineLibraryBrief offline) {
         return assembleBrief(repoRoot, task, offline, null);
     }
@@ -538,8 +541,24 @@ public class Librarian {
             // cheap enough to always afford, and the thing that makes lookup_api worth calling
             // instead of reaching for javap. The SLICE is the handful of sections this task is
             // actually about. Bodies beyond that are on demand, not in the prefix.
-            String map = curator.documentationMap(
+            // The catalogue is reference material a lookup returns (doc_outline with an empty
+            // string: every document with its sections), and a brief is sent again on every
+            // call of every worker of the task. So the brief says how many documents there are
+            // and how to list them (section 98); DOCUMENT_MAP_PROPERTY puts the names back.
+            boolean mapInBrief = Boolean.getBoolean(DOCUMENT_MAP_PROPERTY);
+            String map = !mapInBrief ? "" : curator.documentationMap(
                 room.chars(haveExample ? DOC_MAP_CHARS_BESIDE_AN_EXAMPLE : DOC_MAP_CHARS));
+            long documents = mapInBrief ? 0 : curator.documents().stream()
+                .filter(entry -> entry.kind() != FileKinds.Kind.META).count();
+            if (documents > 0) {
+                rendered.append("\n### Reference documentation you can read\n")
+                        .append(referenceVersions())
+                        .append(versionMismatch(libraries))
+                        .append(documents).append(" document(s). doc_outline with an empty "
+                            + "string lists every one with its sections; lookup_api with a "
+                            + "topic searches ALL of them. Do NOT decompile jars to find an "
+                            + "API.\n");
+            }
             if (!map.isBlank()) {
                 rendered.append("\n### Reference documentation you can read (call lookup_api with a "
                     + "topic — it searches ALL of these; do NOT decompile jars to find an API)\n")

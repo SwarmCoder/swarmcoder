@@ -301,8 +301,21 @@ public final class ProjectContext {
         // anything when the ApiLookup the worker's toolbox holds actually forwards to it.
         // One class for the product and the live harness (run 82: the harness wired a method
         // reference here and its workers' tree queries all answered "not configured").
-        ApiLookup lookup = new WorkerLookups(librarian, projectPath, languageServerInstalled,
+        // The workers' opening names a rule that cannot stop the work and leaves out why each
+        // rule exists (section 98); rule_of, wired here beside it, gives one rule in full.
+        // -Dswarmcoder.workers.rulesWhole=true sends every rule whole, as before.
+        boolean rulesWhole = Boolean.getBoolean("swarmcoder.workers.rulesWhole");
+        WorkerLookups lookup = new WorkerLookups(librarian, projectPath, languageServerInstalled,
             checkoutServers);
+        if (!rulesWhole) {
+            lookup.rulesByName(projectRules::ruleByName);
+        }
+        if (librarian != null && librarian.curator() != null) {
+            // One store of what the project has established, for every role and every worker
+            // (section 98): the findings of its delivered stories are read into it from here.
+            librarian.curator().answers().delivered(() ->
+                com.swarmcoder.knowledge.KnownFacts.ofDelivered(shared.store(), project.id()));
+        }
         SwarmEngineImpl engine = new SwarmEngineImpl(roles.judge(), shared.store(), shared.scheduler(),
             shared.runtime(), shared.profiles(), gitService, shared.blobSink(), shared.cloudGate(),
             () -> projectRules.renderActive(maxGuidelineChars),
@@ -354,7 +367,9 @@ public final class ProjectContext {
         // lines above are not narrowed: the judge reads every rule and every check runs.
         projectRules.setParts(() -> com.swarmcoder.knowledge.ProjectParts.of(
             librarian.curator(), projectPath));
-        engine.setWorkerRules(paths -> projectRules.briefingFor(paths, maxGuidelineChars));
+        engine.setWorkerRules(paths -> rulesWhole
+            ? projectRules.briefingFor(paths, maxGuidelineChars)
+            : projectRules.briefingForWorkers(paths, maxGuidelineChars));
         // Where an operator's answer to a question about a rule is remembered: every candidate
         // broke the same hard rule, or two disputed it with evidence (harness runs 53 and 55,
         // 2026-10-01). The product asks a person; only an unattended run answers on its own.

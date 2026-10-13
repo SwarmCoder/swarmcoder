@@ -1826,7 +1826,9 @@ public final class WorkerToolbox {
             }
             String answer = truncate(fromTree, room.chars(MAX_TOOL_OUTPUT_CHARS));
             com.swarmcoder.inference.LookupMeter.record("worker",
-                query.startsWith("doc_") ? com.swarmcoder.inference.LookupMeter.Kind.DOCUMENT
+                "known_about".equals(query) ? com.swarmcoder.inference.LookupMeter.Kind.KNOWN
+                : "rule_of".equals(query) ? null
+                : query.startsWith("doc_") ? com.swarmcoder.inference.LookupMeter.Kind.DOCUMENT
                 : live == null && apiLookup.answeredByLanguageServer()
                     ? com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER
                     : com.swarmcoder.inference.LookupMeter.Kind.TREE, answer.length());
@@ -2168,6 +2170,16 @@ public final class WorkerToolbox {
         return tree("doc_search", words);
     }
 
+    /** {@code rule_of}: one project rule in full. The parameter name is the tool's schema. */
+    public String ruleOf(String name) {
+        return tree("rule_of", name == null ? "" : name);
+    }
+
+    /** {@code known_about}: what the project has already established about a type or file. */
+    public String knownAbout(String what) {
+        return tree("known_about", what == null ? "" : what);
+    }
+
     /** Tool bindings for {@code AgentRuntime.SessionSpec}; report_done's name is the loop's stop signal. */
     public List<ToolBinding> bindings() {
         try {
@@ -2360,6 +2372,24 @@ public final class WorkerToolbox {
                 afterTree++;
             }
             tools.addAll(afterTree, server);
+            // Offered only when there is something behind them (section 98), and by what the
+            // project holds, never by who the worker is: candidates of one task get one list.
+            if (apiLookup.answers("rule_of")) {
+                tools.add(tools.size() - 1, new ToolBinding("rule_of",
+                    "ONE PROJECT RULE IN FULL, by its name as your instructions list it: its "
+                    + "wording, why it exists and how it is checked. Your instructions carry "
+                    + "every rule that can stop the work whole; a preference is listed by name "
+                    + "and read here. An empty string lists every rule's name.",
+                    this, WorkerToolbox.class.getMethod("ruleOf", String.class)));
+            }
+            if (apiLookup.answers("known_about")) {
+                tools.add(0, new ToolBinding("known_about",
+                    "What this project has already established and kept - by the architect of "
+                    + "an earlier, delivered story or by a role of this run - about a type or a "
+                    + "file: the sentence, the lookup it came from, who found it, and whether "
+                    + "its source has changed since. An empty string lists every title.",
+                    this, WorkerToolbox.class.getMethod("knownAbout", String.class)));
+            }
             return List.copyOf(tools);
         } catch (NoSuchMethodException e) {
             throw new IllegalStateException(e);

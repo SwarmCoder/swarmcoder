@@ -145,6 +145,29 @@ public final class ProjectRules {
             chosen.inForce());
     }
 
+    /**
+     * {@link #briefingFor} as a worker is opened with it (section 98): the same rules, a rule
+     * that cannot stop the work listed by its name and none carrying why it exists. Only for
+     * workers that have {@code rule_of} ({@link #ruleByName}) to read the rest with.
+     */
+    public synchronized RuleScope.Briefing briefingForWorkers(Collection<String> paths,
+                                                              int maxChars) {
+        List<LearnedGuideline> active = activeForThisProject();
+        ProjectParts now = partsNow();
+        RuleScope.Selection chosen = now == null
+            ? new RuleScope.Selection(active, active.size())
+            : RuleScope.forPaths(active, paths, now::holds);
+        int cap = maxChars > 0 ? maxChars : DEFAULT_MAX_PREFIX_CHARS;
+        String text = ConstraintBrief.renderForWorkers(chosen.sent(), cap);
+        return new RuleScope.Briefing(text.isEmpty() ? null : text, chosen.sent().size(),
+            chosen.inForce());
+    }
+
+    /** {@code rule_of}: one rule in force in full, by its name; see {@link ConstraintBrief#ruleOf}. */
+    public synchronized String ruleByName(String name) {
+        return ConstraintBrief.ruleOf(activeForThisProject(), name);
+    }
+
     // ---- what a person does ----
 
     /**
