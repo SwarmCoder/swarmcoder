@@ -21,11 +21,19 @@ import com.swarmcoder.console.api.AttentionItem;
 import com.swarmcoder.console.api.Backlog;
 import com.swarmcoder.console.api.ContextFolder;
 import com.swarmcoder.console.api.FlowView;
+import com.swarmcoder.console.api.RequirementDetail;
+import com.swarmcoder.console.api.RequirementRow;
 import com.swarmcoder.console.api.SupervisorService;
+import com.swarmcoder.domain.AcceptanceCriterion;
 import com.swarmcoder.domain.AutonomousDecision;
 import com.swarmcoder.domain.AutonomousDecisionKind;
 import com.swarmcoder.domain.Brd;
+import com.swarmcoder.domain.BrdEdge;
 import com.swarmcoder.domain.BrdRequirement;
+import com.swarmcoder.domain.BrdRevision;
+import com.swarmcoder.domain.ChangeEntityType;
+import com.swarmcoder.domain.ChangeEvent;
+import com.swarmcoder.domain.ChangeKind;
 import com.swarmcoder.domain.Decision;
 import com.swarmcoder.domain.DecisionState;
 import com.swarmcoder.domain.FlowProposal;
@@ -34,6 +42,7 @@ import com.swarmcoder.domain.GuidedFlow;
 import com.swarmcoder.domain.GuidedFlowKind;
 import com.swarmcoder.domain.GuidedFlowState;
 import com.swarmcoder.domain.Project;
+import com.swarmcoder.domain.RequirementRelation;
 import com.swarmcoder.domain.RequirementStatus;
 import com.swarmcoder.domain.Run;
 import com.swarmcoder.domain.SourceDocument;
@@ -47,9 +56,11 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -264,13 +275,21 @@ public final class SupervisorDesk implements SupervisorService {
             }
         }
         if (!drafts.isEmpty() && !intakeBusy) {
-            items.add(new AttentionItem("AGREE_REQUIREMENTS", project, "",
-                drafts.size() + " drafted requirement(s) are not agreed. Agreeing one makes it "
-                    + "scope and accepts its checks; only agreed requirements are planned and "
-                    + "built.",
-                List.of("agree_requirements: agree all drafts, or one by its handle"),
-                listed(drafts.stream().map(r -> r.handle() + " " + nn(r.title())).toList(), 500),
-                "agree_requirements requirement=all"));
+            String question = drafts.size() + " drafted requirement(s) are not agreed. Agreeing "
+                + "one makes it scope and accepts its checks; only agreed requirements are "
+                + "planned and built. Read a draft before agreeing it.";
+            List<String> options = List.of(
+                "view_requirement: read one in full (text, checks, who drafted it and why)",
+                "agree_requirements: agree all drafts, or one by its handle",
+                "decline_requirement: take one draft out of scope");
+            String answerWith = "view_requirement requirement=<handle>, then "
+                + "agree_requirements requirement=<handle>|all";
+            int room = AttentionItem.MAX_CHARS - "AGREE_REQUIREMENTS".length() - project.length()
+                - question.length() - answerWith.length()
+                - options.stream().mapToInt(String::length).sum();
+            items.add(new AttentionItem("AGREE_REQUIREMENTS", project, "", question, options,
+                draftEvidence(drafts, creations(store, projectId), Math.max(200, room - 8)),
+                answerWith));
         }
         GuidedFlow planning = flowOf(store, projectId, true);
         boolean planningBusy = flowItems(store, project, planning, "planner", items);
@@ -872,6 +891,287 @@ public final class SupervisorDesk implements SupervisorService {
                 "Agreed, and its checks accepted.", true, null, null);
         }
         return result;
+    }
+
+    // --- reading and declining requirements ------------------------------------------------------
+
+    /** How much of a draft's text the attention item carries. */
+    private static final int DRAFT_TEXT_CHARS = 200;
+
+    @Override
+    public List<RequirementRow> listRequirements(String state) {
+        ConsoleContext context = ConsoleContext.get();
+        UUID projectId = context == null ? null : context.currentProjectId();
+        if (projectId == null) {
+            return List.of();
+        }
+        RequirementStatus wanted = statusOf(state);
+        Brd brd = context.store().ensureBrd(projectId);
+        Map<UUID, ChangeEvent> created = creations(context.store(), projectId);
+        List<RequirementRow> rows = new ArrayList<>();
+        for (BrdRequirement requirement : brd.requirements()) {
+            if (wanted == null || requirement.status() == wanted) {
+                rows.add(row(brd, requirement, created.get(requirement.id())));
+            }
+        }
+        rows.sort(Comparator.comparingInt(row -> handleNumber(row.handle())));
+        return rows;
+    }
+
+    @Override
+    public RequirementDetail viewRequirement(String requirement) {
+        ConsoleContext context = ConsoleContext.get();
+        UUID projectId = context == null ? null : context.currentProjectId();
+        if (projectId == null) {
+            return null;
+        }
+        ArtifactStore store = context.store();
+        Brd brd = store.ensureBrd(projectId);
+        BrdRequirement found = find(brd, requirement);
+        if (found == null) {
+            return null;
+        }
+        List<ChangeEvent> journal = store.changeHistory(projectId, found.id());
+        ChangeEvent created = journal.stream()
+            .filter(event -> event.kind() == ChangeKind.CREATED).findFirst().orElse(null);
+
+        List<String> checks = new ArrayList<>();
+        int number = 0;
+        for (AcceptanceCriterion criterion : found.criteria()) {
+            number++;
+            checks.add(found.handle() + ":C" + number + " [" + criterion.status().label() + "/"
+                + criterion.effectiveState(found.contentRevision()).name().toLowerCase(Locale.ROOT)
+                + "] " + nn(criterion.text()) + " - test: "
+                + (nn(criterion.testClassOrFile()).isBlank() ? "(none)" : criterion.testClassOrFile())
+                + (criterion.testRefIsProposal() ? " (proposed, not confirmed)" : ""));
+        }
+
+        List<String> dependents = new ArrayList<>();
+        for (BrdEdge edge : edges(brd)) {
+            if (edge.relation() == RequirementRelation.DEPENDS_ON
+                    && found.id().equals(edge.to())) {
+                dependents.add(handleOf(brd, edge.from()));
+            }
+        }
+
+        // Oldest first: the journal's events, then any whole-document revision that names this
+        // requirement and was not already said by an event (saving writes both with one summary).
+        record Dated(java.time.Instant at, String line) { }
+        List<Dated> dated = new ArrayList<>();
+        Set<String> said = new HashSet<>();
+        for (ChangeEvent event : journal) {
+            said.add(nn(event.summary()));
+            String change = event.kind() + " by " + nn(event.actor()) + ": " + nn(event.summary())
+                + (nn(event.field()).isEmpty() ? "" : " (" + event.field() + ": "
+                    + clip(event.before(), 60) + " -> " + clip(event.after(), 60) + ")");
+            dated.add(new Dated(event.at(), clip(change, 300)));
+        }
+        String handle = nn(found.handle());
+        for (BrdRevision revision : store.listBrdRevisions(projectId)) {
+            String summary = nn(revision.summary());
+            if (!said.contains(summary) && mentions(summary, handle)) {
+                dated.add(new Dated(revision.at(), clip("revision " + revision.revision()
+                    + " by " + nn(revision.author()) + ": " + summary, 300)));
+            }
+        }
+        dated.sort(Comparator.comparing(entry -> entry.at() == null
+            ? java.time.Instant.EPOCH : entry.at()));
+        List<String> history = new ArrayList<>();
+        for (Dated entry : dated) {
+            history.add((entry.at() == null ? "" : entry.at().toString()) + " " + entry.line());
+        }
+
+        String source = "";
+        if (found.sourceRef() != null && found.sourceRef().documentId() != null) {
+            SourceDocument document = store.getSourceDocument(found.sourceRef().documentId());
+            source = (document == null ? "a removed document" : nn(document.filename()))
+                + (nn(found.sourceRef().locator()).isEmpty() ? ""
+                    : ", " + found.sourceRef().locator());
+        }
+        return new RequirementDetail(row(brd, found, created), nn(found.text()),
+            nn(found.category()), source, reasonOf(created), checks, dependents, history);
+    }
+
+    @Override
+    public String declineRequirement(String requirement, String note) {
+        ConsoleContext context = ConsoleContext.get();
+        UUID projectId = context == null ? null : context.currentProjectId();
+        if (projectId == null) {
+            return "error: no project is selected";
+        }
+        BrdRequirement found = find(context.store().ensureBrd(projectId), requirement);
+        if (found == null) {
+            return "error: this project has no requirement " + nn(requirement).strip();
+        }
+        if (found.status() != RequirementStatus.DRAFT) {
+            return "error: " + found.handle() + " is " + found.status().label() + ", not a draft;"
+                + " only a draft can be declined here";
+        }
+        String result = new BrdServiceImpl().retireRequirementAs(found.id().toString(), ACTOR);
+        if (!failed(result)) {
+            record(AutonomousDecisionKind.DECLINED_REQUIREMENT,
+                found.handle() + " " + nn(found.title()), "Agree this drafted requirement?",
+                "Declined: taken out of scope." + (nn(note).isBlank() ? "" : " " + note.strip()),
+                true, null, null);
+            return found.handle() + " is out of scope. It is kept with its history; the Console "
+                + "can bring it back by setting it to draft.";
+        }
+        return result;
+    }
+
+    private static BrdRequirement find(Brd brd, String wanted) {
+        String key = nn(wanted).strip();
+        if (key.isEmpty()) {
+            return null;
+        }
+        for (BrdRequirement candidate : brd.requirements()) {
+            if (key.equalsIgnoreCase(candidate.handle())
+                    || key.equals(String.valueOf(candidate.id()))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** The status a state word names; null for blank; an exception for a word nobody knows. */
+    private static RequirementStatus statusOf(String state) {
+        String word = nn(state).strip().toLowerCase(Locale.ROOT);
+        if (word.isEmpty() || word.equals("all")) {
+            return null;
+        }
+        for (RequirementStatus status : RequirementStatus.values()) {
+            if (word.equals(status.label()) || word.equals(status.name().toLowerCase(Locale.ROOT))) {
+                return status;
+            }
+        }
+        throw new IllegalArgumentException("state must be draft, agreed, delivered or retired");
+    }
+
+    private static List<BrdEdge> edges(Brd brd) {
+        return brd.edges() == null ? List.of() : brd.edges();
+    }
+
+    private static String handleOf(Brd brd, UUID id) {
+        for (BrdRequirement candidate : brd.requirements()) {
+            if (candidate.id().equals(id)) {
+                return nn(candidate.handle());
+            }
+        }
+        return "?";
+    }
+
+    private static int handleNumber(String handle) {
+        String digits = nn(handle).replaceAll("\\D", "");
+        try {
+            return digits.isEmpty() ? Integer.MAX_VALUE : Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
+    }
+
+    private static boolean mentions(String summary, String handle) {
+        return !handle.isEmpty() && java.util.regex.Pattern
+            .compile("\\b" + java.util.regex.Pattern.quote(handle) + "\\b").matcher(summary).find();
+    }
+
+    private static RequirementRow row(Brd brd, BrdRequirement requirement, ChangeEvent created) {
+        List<String> dependsOn = new ArrayList<>();
+        for (BrdEdge edge : edges(brd)) {
+            if (edge.relation() == RequirementRelation.DEPENDS_ON
+                    && requirement.id().equals(edge.from())) {
+                dependsOn.add(handleOf(brd, edge.to()));
+            }
+        }
+        boolean draft = requirement.status() == RequirementStatus.DRAFT;
+        return new RequirementRow(nn(requirement.handle()), nn(requirement.title()),
+            requirement.status() == null ? "draft" : requirement.status().label(),
+            requirement.kind().name().toLowerCase(Locale.ROOT).replace('_', '-'),
+            requirement.priority() == null ? "" : requirement.priority().name().toLowerCase(Locale.ROOT),
+            requirement.criteria().size(), dependsOn,
+            draft ? originOf(created) : "",
+            draft && created != null && created.at() != null ? created.at().toString() : "");
+    }
+
+    /** Each requirement's creation event, by requirement id: who made it, when, and why. */
+    private static Map<UUID, ChangeEvent> creations(ArtifactStore store, UUID projectId) {
+        Map<UUID, ChangeEvent> created = new HashMap<>();
+        for (ChangeEvent event : store.listChangeEvents(projectId)) {
+            if (event.kind() == ChangeKind.CREATED && event.entityType() == ChangeEntityType.REQUIREMENT
+                    && event.entityId() != null) {
+                created.putIfAbsent(event.entityId(), event);
+            }
+        }
+        return created;
+    }
+
+    private static final String DESIGNING = " while designing ";
+
+    /**
+     * Who created a requirement, in a few words. The architect records its proposals with the
+     * story it was designing ("architect proposed R11 while designing S3: reason"); anything else
+     * is named by the actor the journal stored.
+     */
+    static String originOf(ChangeEvent created) {
+        if (created == null) {
+            return "";
+        }
+        String summary = nn(created.summary());
+        if (summary.startsWith("architect proposed")) {
+            int at = summary.indexOf(DESIGNING);
+            if (at < 0) {
+                return "architect";
+            }
+            String rest = summary.substring(at + DESIGNING.length());
+            int colon = rest.indexOf(':');
+            return "architect, while designing " + (colon < 0 ? rest : rest.substring(0, colon)).strip();
+        }
+        String actor = nn(created.actor());
+        return actor.isEmpty() ? "unknown" : actor;
+    }
+
+    /** The reason a role gave for raising a requirement, when the journal kept one. */
+    static String reasonOf(ChangeEvent created) {
+        if (created == null) {
+            return "";
+        }
+        String summary = nn(created.summary());
+        int at = summary.indexOf(DESIGNING);
+        int colon = at < 0 ? -1 : summary.indexOf(':', at);
+        return colon < 0 ? "" : summary.substring(colon + 1).strip();
+    }
+
+    /**
+     * One line per draft - handle, title, who drafted it, the first characters of its text -
+     * as many as fit in {@code room}; the rest are counted and the listing tool is named.
+     */
+    private static String draftEvidence(List<BrdRequirement> drafts,
+                                        Map<UUID, ChangeEvent> created, int room) {
+        List<BrdRequirement> ordered = new ArrayList<>(drafts);
+        ordered.sort(Comparator.comparingInt(r -> handleNumber(r.handle())));
+        StringBuilder out = new StringBuilder();
+        int shown = 0;
+        for (BrdRequirement draft : ordered) {
+            String origin = originOf(created.get(draft.id()));
+            String line = nn(draft.handle()) + " " + clip(draft.title(), 70)
+                + (origin.isEmpty() ? "" : " [" + origin + "]") + ": "
+                + clip(draft.text(), DRAFT_TEXT_CHARS);
+            int left = ordered.size() - shown - 1;
+            String tail = left == 0 ? "" : " | +" + left + " more: list_requirements state=draft";
+            int used = out.length() + (shown == 0 ? 0 : 3) + line.length() + tail.length();
+            if (used > room && shown > 0) {
+                break;
+            }
+            if (used > room) {
+                line = clip(line, Math.max(40, room - tail.length() - 1));
+            }
+            out.append(shown == 0 ? "" : " | ").append(line);
+            shown++;
+        }
+        if (shown < ordered.size()) {
+            out.append(" | +").append(ordered.size() - shown)
+                .append(" more: list_requirements state=draft");
+        }
+        return out.toString();
     }
 
     @Override

@@ -1491,6 +1491,9 @@ over `SupervisorService`, implemented by `SupervisorDesk`). No tool here calls a
 | `answer_flow_question`, `submit_answers` | yes | Answers (or skips) one question; submits the round. |
 | `apply_proposals` | yes | Accepts all proposals but those in `reject`, and applies them. |
 | `agree_requirements` | yes | `BrdService.promoteRequirement` / `promoteAllDrafts`. A gate a person normally passes. |
+| `list_requirements` | no | Every requirement of the project, one short line each: handle, title, state, kind, priority, checks, what it waits for, and for a draft who drafted it (role and story) and when. Optional `state`: draft, agreed, delivered, retired. Reads the same BRD and change journal as the Console's Requirements view. |
+| `view_requirement` | no | One requirement in full by handle: text, every check with its test and state, what it waits for and what waits for it, history (who changed what, when), and for a draft a model role raised during a build, who raised it, from which story and the reason given. Read it before `agree_requirements`. |
+| `decline_requirement` | yes | The Console's "Take out of scope" (`BrdService.retireRequirement`) for a DRAFT; refused for any other state. Kept with its history. Logged as the supervisor's decision. |
 | `promote_story`, `start_story` | yes | `BacklogService.promoteStory` / `startSession`. |
 | `accept_delivery` | yes | Accepts a story back for a verdict; the story records `acceptedBy = supervisor`. A gate a person normally passes. Slow: the merge and the whole project's build and test are made before it answers; the answer says what was done and how long it took. |
 | `send_back` | yes | `BacklogService.retryStory` with the note. |

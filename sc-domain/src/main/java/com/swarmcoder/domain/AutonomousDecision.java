@@ -202,6 +202,7 @@ public class AutonomousDecision {
             case STARTED_STORY -> "The supervisor started this build";
             case ADDED_CONTEXT_FOLDER -> "The supervisor added a reference folder";
             case REMOVED_CONTEXT_FOLDER -> "The supervisor removed a reference folder";
+            case DECLINED_REQUIREMENT -> "The supervisor declined this drafted requirement";
             default -> "The supervisor decided";
         };
     }
