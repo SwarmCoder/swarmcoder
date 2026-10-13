@@ -39,6 +39,18 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **The supervisor can read a drafted requirement before agreeing it, and decline one.** During
+  a supervised build a model role (the architect, while designing a story) can raise a new
+  DRAFT requirement; the attention item showed only its handle and title, so the supervisor
+  would have agreed it unread. New read tools `list_requirements` (every requirement, one short
+  line each; optional `state`) and `view_requirement` (text, checks, dependencies, history, who
+  raised it, from which story and why). The `AGREE_REQUIREMENTS` item now carries, per draft,
+  who drafted it and the first 200 characters of its text, says how many more there are when
+  they do not fit, and names `view_requirement` beside `agree_requirements`. New write tool
+  `decline_requirement` (secret required) does what the Console does for a draft nobody wants:
+  takes it out of scope. Recorded in the supervisor decision log
+  (`AutonomousDecisionKind.DECLINED_REQUIREMENT`, appended).
+
 - **The answers `screen` and `journey` for a build that stopped on a failed journey.** When
   the final integration of a story stops on a journey - its author called the journey wrong and
   no correction could be taken, its reviews are used up, or the task's repair round is - the

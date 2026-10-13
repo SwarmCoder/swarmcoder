@@ -7606,6 +7606,24 @@ now done:
   `ADDED_CONTEXT_FOLDER`, `REMOVED_CONTEXT_FOLDER` on the end). `create_project`'s answer now
   names `add_context_folder`. Tests: `SupervisorDeskTest`, `SupervisorMcpToolsTest`.
 
+- **Reading and declining drafted requirements (2026-10-13, branch
+  `feat/supervisor-read-requirements`).** A live supervised build showed the gap: the architect,
+  while designing a story, raised two DRAFT requirements, and the `AGREE_REQUIREMENTS` item
+  gave only handle and title, so agreeing meant agreeing unread. `list_requirements(state?)` and
+  `view_requirement(requirement)` (read, no secret) wrap the BRD and the change journal the
+  Console's Requirements view reads: text, checks with test and state, what it waits for, history,
+  and for a draft its origin and reason. Origin is not a field of the requirement; it is read from
+  its CREATED journal entry (the architect writes "architect proposed Rn while designing Sk:
+  reason"; the analyst's drafts carry the actor "agent"). The attention item adds per draft who
+  drafted it and the first 200 characters of its text within its 1,300-character cut, then
+  "+N more: list_requirements state=draft". `decline_requirement(requirement, note?)` (write,
+  secret required) is the Console's "Take out of scope" (`BrdServiceImpl.retireRequirementAs`,
+  actor "supervisor") for a draft only; logged as `DECLINED_REQUIREMENT` (appended). The Console
+  has no other way to refuse a draft (no reject or drop). A build does not wait for drafts: the
+  architect's proposals are not added to the design and nothing is built from them (see
+  `GreenfieldWorkflow.proposeMissingRequirements`); the story goes on and the draft only
+  waits for the supervisor. Tests: `SupervisorDeskTest`, `SupervisorMcpToolsTest`.
+
 
 ## 79. Cloud token budgets per run, story and project (2026-10-10)
 

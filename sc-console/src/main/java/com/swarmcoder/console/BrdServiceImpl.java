@@ -204,6 +204,11 @@ public class BrdServiceImpl implements BrdService {
      */
     @Override
     public String retireRequirement(String requirementId) {
+        return retireRequirementAs(requirementId, "human");
+    }
+
+    /** Taking a requirement out of scope on behalf of someone other than the person at the Console. */
+    String retireRequirementAs(String requirementId, String actor) {
         try {
             ConsoleContext context = ConsoleContext.get();
             UUID projectId = context.currentProjectId();
@@ -220,9 +225,9 @@ public class BrdServiceImpl implements BrdService {
             }
             requirement.setStatus(RequirementStatus.DEPRECATED);
             brd.setRequirements(new ArrayList<>(safe(brd.requirements())));
-            context.store().saveBrd(brd, "human", "retired " + requirement.handle());
+            context.store().saveBrd(brd, actor, "retired " + requirement.handle());
             try {
-                context.store().recordChange(projectId, "human", ChangeEntityType.REQUIREMENT,
+                context.store().recordChange(projectId, actor, ChangeEntityType.REQUIREMENT,
                     requirement.id(), ChangeKind.TOMBSTONED,
                     "took " + requirement.handle() + " out of scope");
             } catch (Exception ignored) {

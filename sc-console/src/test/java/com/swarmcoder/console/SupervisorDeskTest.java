@@ -429,6 +429,90 @@ class SupervisorDeskTest {
         }
     }
 
+    /**
+     * A model role raised two drafts during a build and the supervisor was shown only their
+     * titles. It can now list them, read one in full with who raised it and why, see the first
+     * words of each in the attention item, and decline one the way the Console does.
+     */
+    @Test
+    void draftRequirementsCanBeListedReadAndDeclinedBeforeTheyAreAgreed(@TempDir Path dir)
+            throws Exception {
+        try (ArtifactStore store = new ArtifactStore(dir)) {
+            store.saveProject(new Project(projectId, "bookshelf", dir.toString(),
+                new ArrayList<>(), Instant.now(), false));
+            install(store, false, false, null);
+            BrdAuthoring.addRequirement(store, projectId, "Which years are refused",
+                "A book published before 1900 is refused with a message.", "high", null,
+                "functional", null, null);
+            BrdAuthoring.addCriterion(store, projectId, "R1", "A 1850 book is refused",
+                "BookYearTest");
+            com.swarmcoder.domain.Brd brd = store.ensureBrd(projectId);
+            com.swarmcoder.domain.BrdRequirement raised = new com.swarmcoder.domain.BrdRequirement(
+                UUID.randomUUID(), "R2", "Whether a book carries a rating",
+                "Each book may carry a rating from one to five.",
+                com.swarmcoder.domain.Priority.MEDIUM,
+                com.swarmcoder.domain.RequirementStatus.DRAFT, null);
+            List<com.swarmcoder.domain.BrdRequirement> all = new ArrayList<>(brd.requirements());
+            all.add(raised);
+            brd.setRequirements(all);
+            store.saveBrd(brd, "agent", "architect proposed 1 requirement(s) from S3");
+            store.recordChange(projectId, "agent", com.swarmcoder.domain.ChangeEntityType.REQUIREMENT,
+                raised.id(), com.swarmcoder.domain.ChangeKind.CREATED,
+                "architect proposed R2 while designing S3: the screen shows a star rating");
+
+            assertThat(desk.listRequirements("draft")).extracting(
+                    com.swarmcoder.console.api.RequirementRow::handle)
+                .containsExactly("R1", "R2");
+            assertThat(desk.listRequirements("agreed")).isEmpty();
+            assertThat(desk.listRequirements("")).hasSize(2);
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> desk.listRequirements("bogus"));
+            com.swarmcoder.console.api.RequirementRow r2 = desk.listRequirements("draft").get(1);
+            assertThat(r2.draftedBy()).isEqualTo("architect, while designing S3");
+            assertThat(r2.draftedAt()).isNotBlank();
+
+            com.swarmcoder.console.api.RequirementDetail detail = desk.viewRequirement("r2");
+            assertThat(detail.text()).isEqualTo("Each book may carry a rating from one to five.");
+            assertThat(detail.reason()).isEqualTo("the screen shows a star rating");
+            assertThat(detail.history()).anyMatch(line -> line.contains("architect proposed R2"));
+            com.swarmcoder.console.api.RequirementDetail first = desk.viewRequirement("R1");
+            assertThat(first.checks()).singleElement().satisfies(check ->
+                assertThat(check).contains("R1:C1", "A 1850 book is refused", "BookYearTest"));
+            assertThat(desk.viewRequirement("R99")).isNull();
+
+            AttentionItem item = desk.nextAttention(0);
+            assertThat(item.kind()).isEqualTo("AGREE_REQUIREMENTS");
+            assertThat(item.evidence()).contains("R2", "architect, while designing S3",
+                "Each book may carry a rating");
+            assertThat(item.options()).anyMatch(o -> o.startsWith("view_requirement"));
+            assertThat(item.answerWith()).contains("view_requirement", "agree_requirements");
+
+            assertThat(desk.declineRequirement("R2", "not wanted")).doesNotStartWith("error:");
+            assertThat(store.ensureBrd(projectId).requirements().get(1).status())
+                .isEqualTo(com.swarmcoder.domain.RequirementStatus.DEPRECATED);
+            assertThat(desk.declineRequirement("R2", "")).startsWith("error:");
+            assertThat(desk.declineRequirement("R9", "")).startsWith("error:");
+            assertThat(desk.decisionLog()).singleElement().satisfies(entry -> {
+                assertThat(entry.kind()).isEqualTo(AutonomousDecisionKind.DECLINED_REQUIREMENT);
+                assertThat(entry.actor()).isEqualTo("supervisor");
+                assertThat(entry.answer()).contains("not wanted");
+            });
+            assertThat(desk.agreeRequirements("R1")).doesNotStartWith("error:");
+            assertThat(desk.declineRequirement("R1", ""))
+                .describedAs("an agreed requirement is not a draft").startsWith("error:");
+
+            for (int i = 0; i < 25; i++) {
+                BrdAuthoring.addRequirement(store, projectId, "Extra draft number " + i,
+                    "x".repeat(300), "low", null, "functional", null, null);
+            }
+            AttentionItem crowded = desk.nextAttention(0);
+            assertThat(crowded.kind()).isEqualTo("AGREE_REQUIREMENTS");
+            assertThat(crowded.chars()).isLessThanOrEqualTo(AttentionItem.MAX_CHARS);
+            assertThat(crowded.options()).hasSize(3);
+            assertThat(crowded.evidence()).contains("more: list_requirements state=draft");
+        }
+    }
+
     private void install(ArtifactStore store, boolean unattended, boolean supervised,
                          AtomicReference<UUID> resumed) {
         ConsoleContext context = context(store, unattended, supervised);

@@ -109,6 +109,23 @@ public interface SupervisorService {
     /** Agrees one draft requirement, by handle ("R3") or id, or every draft when blank or "all". */
     String agreeRequirements(String requirement);
 
+    /**
+     * The current project's requirements, one short row each, in handle order.
+     *
+     * @param state draft, agreed, delivered or retired; blank for every requirement
+     */
+    List<RequirementRow> listRequirements(String state);
+
+    /** One requirement in full by handle ("R3") or id, or null when the project has none. */
+    RequirementDetail viewRequirement(String requirement);
+
+    /**
+     * Declines one DRAFT requirement the way the Console does: takes it out of scope (it is kept
+     * with its history, never destroyed). Refused for a requirement that is not a draft. Returns
+     * "" or a sentence on success, "error: ..." on refusal.
+     */
+    String declineRequirement(String requirement, String note);
+
     /** The current project's backlog. */
     Backlog backlog();
 

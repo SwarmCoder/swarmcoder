@@ -235,6 +235,59 @@ class SupervisorMcpToolsTest {
     }
 
     @Test
+    void requirementsAreReadFreelyAndDeclinedOnlyWithTheSecret(@TempDir Path home)
+            throws Exception {
+        String secret = McpSecret.loadOrCreate(home.resolve(McpSecret.FILE_NAME));
+        List<String> calls = new ArrayList<>();
+        com.swarmcoder.console.api.RequirementRow row = new com.swarmcoder.console.api.RequirementRow(
+            "R11", "Which years are refused", "draft", "functional", "medium", 2, List.of("R3"),
+            "architect, while designing S3", "2026-10-13T08:00:00Z");
+        SupervisorService supervisor = Stubs.of(SupervisorService.class)
+            .answer("listRequirements", args -> List.of(row))
+            .answer("viewRequirement", args -> "R11".equals(args[0])
+                ? new com.swarmcoder.console.api.RequirementDetail(row, "Books before 1900 are refused.",
+                    "", "", "the screen needs it", List.of("R11:C1 [accepted/unverified] refused - test: YearTest"),
+                    List.of(), List.of("2026-10-13T08:00:00Z CREATED by agent: architect proposed R11"))
+                : null)
+            .answer("declineRequirement", args -> {
+                calls.add("decline " + args[0] + " " + args[1]);
+                return "R11 is out of scope.";
+            })
+            .returning("standing", "nothing is waiting")
+            .build();
+        server = new SwarmMcpServer(Stubs.of(ObserverService.class).build(),
+            Stubs.of(GraphService.class).build(), Stubs.of(ControlService.class).build(), 0, "",
+            false, supervisor, secret);
+        String url = server.start();
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        rpc(client, url, INITIALIZE, null);
+        rpc(client, url, INITIALIZED, null);
+
+        String list = rpc(client, url, """
+            {"jsonrpc":"2.0","id":21,"method":"tools/call",
+             "params":{"name":"list_requirements","arguments":{"state":"draft"}}}""", null).body();
+        assertThat(list).contains("R11 | Which years are refused | draft", "waits for R3",
+            "drafted by architect, while designing S3").doesNotContain("Refused");
+        String view = rpc(client, url, """
+            {"jsonrpc":"2.0","id":22,"method":"tools/call",
+             "params":{"name":"view_requirement","arguments":{"requirement":"R11"}}}""", null).body();
+        assertThat(view).contains("Books before 1900 are refused.", "the screen needs it",
+            "YearTest", "CREATED by agent");
+        String missing = rpc(client, url, """
+            {"jsonrpc":"2.0","id":23,"method":"tools/call",
+             "params":{"name":"view_requirement","arguments":{"requirement":"R99"}}}""", null).body();
+        assertThat(missing).contains("no requirement");
+
+        String decline = """
+            {"jsonrpc":"2.0","id":24,"method":"tools/call",
+             "params":{"name":"decline_requirement","arguments":{"requirement":"R11","note":"no"}}}""";
+        assertThat(rpc(client, url, decline, null).body()).contains("Refused");
+        assertThat(calls).isEmpty();
+        assertThat(rpc(client, url, decline, "Bearer " + secret).body()).contains("done");
+        assertThat(calls).containsExactly("decline R11 no");
+    }
+
+    @Test
     void withNoSecretEveryToolThatChangesSomethingIsRefused() throws Exception {
         server = new SwarmMcpServer(Stubs.of(ObserverService.class).build(),
             Stubs.of(GraphService.class).build(), Stubs.of(ControlService.class).build(), 0, "",

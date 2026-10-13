@@ -25,6 +25,8 @@ import com.swarmcoder.console.api.Backlog;
 import com.swarmcoder.console.api.ContextFolder;
 import com.swarmcoder.console.api.ControlService;
 import com.swarmcoder.console.api.FlowView;
+import com.swarmcoder.console.api.RequirementDetail;
+import com.swarmcoder.console.api.RequirementRow;
 import com.swarmcoder.console.api.SupervisorService;
 import com.swarmcoder.domain.AutonomousDecision;
 import com.swarmcoder.domain.FlowProposal;
@@ -60,7 +62,7 @@ final class SupervisorMcpTools {
         "create_project", "switch_project", "add_document", "start_flow", "answer_flow_question",
         "submit_answers", "apply_proposals", "agree_requirements", "promote_story", "start_story",
         "accept_delivery", "send_back", "answer_question", "add_context_folder",
-        "remove_context_folder");
+        "remove_context_folder", "decline_requirement");
 
     private final SupervisorService supervisor;
     private final ControlService control;
@@ -131,6 +133,25 @@ final class SupervisorMcpTools {
                 + "libraries it builds on (and any documentation sites), each with the name roles "
                 + "know it by. No arguments.",
             SwarmMcpTools.schema(), args -> contextFolders()));
+
+        tools.add(SwarmMcpTools.tool("list_requirements",
+            "Every requirement of the selected project, one short line each: handle, title, "
+                + "state, kind, priority, number of checks, what it waits for, and for a draft "
+                + "who drafted it and when. Read one in full with view_requirement.",
+            SwarmMcpTools.schema("""
+                {"state": {"type":"string","description":"draft | agreed | delivered | retired (default: all)."}}"""),
+            args -> listRequirements(SwarmMcpTools.str(args, "state"))));
+
+        tools.add(SwarmMcpTools.tool("view_requirement",
+            "One requirement in full, as the Console shows it: its text, every check with its "
+                + "test and state, what it waits for and what waits for it, its history (who "
+                + "changed what, when), and for one a model role raised during a build, who "
+                + "raised it, from which story, and the reason given. Read this before "
+                + "agree_requirements.",
+            SwarmMcpTools.schema("""
+                {"requirement": {"type":"string","description":"A handle such as R3."}}""",
+                "requirement"),
+            args -> viewRequirement(SwarmMcpTools.str(args, "requirement"))));
         return tools;
     }
 
@@ -236,6 +257,17 @@ final class SupervisorMcpTools {
                 {"requirement": {"type":"string","description":"A handle such as R3, or all (default all)."}}"""),
             args -> done(supervisor.agreeRequirements(SwarmMcpTools.str(args, "requirement")),
                 "Agreed.")));
+
+        tools.add(SwarmMcpTools.tool("decline_requirement",
+            "CHANGES SOMETHING. Declines one DRAFT requirement you do not want as scope: the "
+                + "Console's \"Take out of scope\". It is kept with its history and never built "
+                + "from; only a draft can be declined here. Recorded in decision_log.",
+            SwarmMcpTools.schema("""
+                {"requirement": {"type":"string","description":"A handle such as R11."},
+                 "note": {"type":"string","description":"Why, kept in the decision log."}}""",
+                "requirement"),
+            args -> done(supervisor.declineRequirement(SwarmMcpTools.str(args, "requirement"),
+                SwarmMcpTools.str(args, "note")), "Declined.")));
 
         tools.add(SwarmMcpTools.tool("promote_story",
             "CHANGES SOMETHING. Marks a suggested story ready to build.",
@@ -485,6 +517,61 @@ final class SupervisorMcpTools {
             node.put("answered", ReplyBudget.snippet(decision.answer()));
         }
         return ReplyBudget.clampReply(root.toString(), "a smaller limit (from decision_log)");
+    }
+
+    String listRequirements(String state) {
+        List<RequirementRow> found;
+        try {
+            found = supervisor.listRequirements(state);
+        } catch (IllegalArgumentException e) {
+            return problem(e.getMessage());
+        }
+        ObjectNode root = json.createObjectNode();
+        root.put("count", found.size());
+        ArrayNode rows = root.putArray("requirements");
+        for (RequirementRow row : found) {
+            StringBuilder line = new StringBuilder(row.handle()).append(" | ")
+                .append(ReplyBudget.snippet(row.title())).append(" | ").append(row.state())
+                .append(" | ").append(row.kind()).append(" | ").append(row.priority())
+                .append(" | ").append(row.checks()).append(row.checks() == 1 ? " check" : " checks");
+            if (!row.dependsOn().isEmpty()) {
+                line.append(" | waits for ").append(String.join(",", row.dependsOn()));
+            }
+            if (!row.draftedBy().isEmpty()) {
+                line.append(" | drafted by ").append(row.draftedBy());
+                if (!row.draftedAt().isEmpty()) {
+                    line.append(' ').append(row.draftedAt());
+                }
+            }
+            rows.add(line.toString());
+        }
+        return ReplyBudget.clampReply(root.toString(), "a state filter (from list_requirements)");
+    }
+
+    String viewRequirement(String requirement) {
+        RequirementDetail detail = supervisor.viewRequirement(requirement);
+        if (detail == null) {
+            return problem("There is no requirement '" + requirement + "' (list_requirements).");
+        }
+        RequirementRow row = detail.row();
+        ObjectNode root = json.createObjectNode();
+        root.put("handle", row.handle());
+        root.put("title", row.title());
+        root.put("state", row.state());
+        root.put("kind", row.kind());
+        root.put("priority", row.priority());
+        root.put("category", detail.category());
+        root.put("text", detail.text());
+        root.put("source", detail.source());
+        root.put("draftedBy", row.draftedBy());
+        root.put("draftedAt", row.draftedAt());
+        root.put("reason", detail.reason());
+        detail.checks().forEach(root.putArray("checks")::add);
+        detail.history().forEach(root.putArray("history")::add);
+        ArrayNode waitsFor = root.putArray("waitsFor");
+        row.dependsOn().forEach(waitsFor::add);
+        detail.dependents().forEach(root.putArray("neededBy")::add);
+        return ReplyBudget.clampReply(root.toString(), "nothing narrower (from view_requirement)");
     }
 
     private String contextFolders() {

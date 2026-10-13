@@ -77,5 +77,10 @@ public enum AutonomousDecisionKind {
     ADDED_CONTEXT_FOLDER,
 
     /** A read-only reference (context) folder taken out of the project's settings. */
-    REMOVED_CONTEXT_FOLDER
+    REMOVED_CONTEXT_FOLDER,
+
+    // --- appended 2026-10-13 ---------------------------------------------------------------------
+
+    /** A drafted requirement declined: taken out of scope instead of agreed. */
+    DECLINED_REQUIREMENT
 }
