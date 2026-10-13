@@ -350,6 +350,15 @@ public class Task {
     public void setChecksAlreadyProved(ChecksAlreadyProved checksAlreadyProved) {
         this.checksAlreadyProved = checksAlreadyProved;
     }
+    /**
+     * True when the product measured this task's acceptance tests green on the tree the task
+     * starts from and recorded that nothing has to be built for it (section 89; see
+     * {@link ChecksAlreadyProved#noChangeNeeded()}). Such a task is not dispatched, has no
+     * chosen candidate, and is not a task "without a winner" to anything that waits for it.
+     */
+    public boolean needsNoChange() {
+        return checksAlreadyProved != null && checksAlreadyProved.noChangeNeeded();
+    }
     /** Never null: a task that delivers no design contract returns an empty list. */
     public List<ApiContract> deliveredContracts() {
         return deliveredContracts == null ? List.of() : deliveredContracts;

@@ -280,6 +280,13 @@ public class GreenfieldWorkflow {
         if (this.swarmEngine instanceof SwarmEngineImpl engine) {
             engine.setWaveGate((run, wave, waveBase) ->
                 redCheckWave(run, scopeFor(run), wave, waveBase));
+            // A green run of a task's tests on a tree no worker changed (section 89) is held
+            // to the evidence a green red check is held to: see AlreadySatisfied.assess.
+            engine.setNoChangeEvidence((run, task, tree, acceptance) -> {
+                AlreadySatisfied.Evidence evidence = AlreadySatisfied.assess(tree,
+                    designOf(run), task, planTasksOf(run), acceptance);
+                return evidence.accepted() ? null : evidence.refusal();
+            });
         }
         // The engine's own container manager and reference roots, as they are when a box is
         // opened. A stand-in engine has none: its red checks are refused unless a test allowed
@@ -486,11 +493,14 @@ public class GreenfieldWorkflow {
                 listCarriedWarnings(entered);
                 return; // the stage parked the run with a question for the operator
             }
-            if (run.state() != before) {
+            if (run.state() != before && run.state() != RunState.ABORTED) {
                 // Real progress: whatever this run asked about while it was AT the state it just
                 // left no longer applies — it got past it. Withdrawing here, keyed to this run's own
                 // id, is what stops a card from saying "This build stopped and is asking you
                 // something" about a run that is now demonstrably not stopped at all.
+                // Not for a run that has just ENDED undelivered (section 89): what it asked in
+                // its last stage is why it ended, and withdrawing that left a stopped story
+                // with nothing said. It is withdrawn when the story is sent back (section 82).
                 withdrawStaleDecisions(run);
             }
             if (outageAttempts > 0 && run.state() != before) {
@@ -1295,6 +1305,25 @@ public class GreenfieldWorkflow {
                             return null;
                         }
                         return run; // stays EXECUTING; the next loop turn re-enters executeRun
+                    }
+                    // A task ended BLOCKED and asked its question, and nothing waited on it, so
+                    // the engine came back as if the stage were over (section 89). Going on
+                    // withdrew the question, integrated without the task and ended the story
+                    // with its checks unproved and nothing to answer. The run stops here behind
+                    // that question instead, as it does when another task waits on a blocked one.
+                    List<Task> stopped = tasksStoppedWithAQuestion(run);
+                    if (!stopped.isEmpty()) {
+                        String why = "EXECUTING stopped behind " + stopped.stream()
+                                .map(task -> "'" + task.title() + "'").toList()
+                            + ", which " + (stopped.size() == 1 ? "has" : "have") + " no chosen "
+                            + "candidate. Its own question, already raised, says why and is the "
+                            + "one to answer. Nothing is merged or delivered without it; every "
+                            + "task that already has a chosen candidate keeps it.";
+                        log(why);
+                        run.setParkedAt(Instant.now());
+                        run.setParkReason(why);
+                        persister.save(run); // stays in EXECUTING
+                        return null;
                     }
                     return transition(run, RunState.FINAL_INTEGRATION, run.designId(), run.taskGraphId());
                 }
@@ -2256,9 +2285,11 @@ public class GreenfieldWorkflow {
         // REVIEW, never DONE: "the tests pass" and "this is what I asked for" are different
         // claims, and only the operator can make the second one.
         story.setState(delivered ? StoryState.REVIEW : StoryState.BLOCKED);
-        if (delivered) {
-            story.setWaitingReason(null);   // whatever it was stuck on before, it is not stuck now
-        }
+        // A story never stops without its reason (section 89): which check has no proof, why
+        // no result exists for it, and what can be done. On the story, where the Console's card
+        // and the supervisor's STORY_STOPPED item read it, and as a question of the run.
+        String undelivered = delivered ? null : undeliveredReason(run, story, scope, report);
+        story.setWaitingReason(undelivered); // null: whatever it was stuck on, it is not now
         artifactStore.saveStory(story);
         String outcomeText =
             deliveryOutcomeText(story, scope, report, integrationSha, delivered, fromIntegration);
@@ -2279,7 +2310,80 @@ public class GreenfieldWorkflow {
         } else {
             log("Story " + story.key() + " → " + (delivered ? "REVIEW: " : "BLOCKED: ") + outcomeText);
         }
+        if (!delivered) {
+            log(undelivered);
+            queueDecision(run, undelivered);
+        }
         return delivered;
+    }
+
+    /**
+     * The tasks of the run's plan that ended BLOCKED - no chosen candidate, and not measured as
+     * needing no change - while a question of this run is open. Empty when there is none, and
+     * when no question is open: a stop nobody can answer is not made here.
+     */
+    private List<Task> tasksStoppedWithAQuestion(Run run) {
+        List<Task> stopped = new ArrayList<>();
+        for (Task task : planTasksOf(run)) {
+            if (task.state() == TaskState.BLOCKED && !task.needsNoChange()) {
+                stopped.add(task);
+            }
+        }
+        return stopped.isEmpty() || !hasOpenQuestion(run) ? List.of() : stopped;
+    }
+
+    /**
+     * Why a story was not delivered at final integration, for whoever has to act on it (section
+     * 89): each check that was not proved with its outcome and the reason the evidence gives,
+     * each task of the build that has no chosen candidate and was not measured as needing no
+     * change - that is why no result exists for what it claims - and what can be done now.
+     * Built from the report and the tasks' records; no log is read.
+     */
+    private String undeliveredReason(Run run, Story story, StoryScope scope,
+                                     VerificationReport report) {
+        StringBuilder why = new StringBuilder(story.key()).append(" was not delivered. ");
+        List<String> unproved = new ArrayList<>();
+        for (int i = 0; i < scope.criteria().size(); i++) {
+            AcceptanceCriterion criterion = scope.criteria().get(i);
+            CriterionEvidence.Evidence evidence =
+                CriterionEvidence.evidenceFor(criterion.testClassOrFile(), report);
+            if (evidence.outcome() != CriterionEvidence.Outcome.PASSED) {
+                unproved.add(scope.criterionRefs().get(i) + " " + evidence.outcome() + " - "
+                    + criterion.text() + " [" + evidence.reason() + "]");
+            }
+        }
+        if (scope.isEmpty()) {
+            why.append("It names no agreed check, so nothing could prove it.");
+        } else if (unproved.isEmpty()) {
+            why.append("Every check has a passing test, and the delivery was still refused.");
+        } else {
+            why.append(unproved.size()).append(" of ").append(scope.criteria().size())
+                .append(" check(s) had no proof at final integration:");
+            unproved.forEach(line -> why.append("\n- ").append(line));
+        }
+        List<String> missing = new ArrayList<>();
+        for (Task task : planTasksOf(run)) {
+            if (task.selectedCandidateId() == null && !task.needsNoChange()
+                    && task.state() != TaskState.DONE) {
+                missing.add("task '" + task.title() + "' (" + (task.state() == null ? "no state"
+                    : task.state().label()) + ") has no chosen candidate and was not measured "
+                    + "as needing no change, so nothing of it was merged"
+                    + (task.authoredTestPaths().isEmpty() ? ""
+                        : " and its acceptance test(s) " + task.authoredTestPaths()
+                            + " were not run on a merged tree"));
+            }
+        }
+        if (!missing.isEmpty()) {
+            why.append("\n\nWhy no result exists: ").append(String.join("; ", missing)).append('.');
+        } else if (report == null) {
+            why.append("\n\nWhy no result exists: no verification of a merged tree was made in "
+                + "this build.");
+        }
+        why.append("\n\nWhat can be done: this build has ended and is not taken up again. Send "
+            + "the story back to be built again (send_back) with a note saying what should be "
+            + "different; the note goes into the next build's brief. Answering this question "
+            + "records the answer and restarts nothing.");
+        return why.toString();
     }
 
     /**
@@ -4587,7 +4691,24 @@ public class GreenfieldWorkflow {
         } catch (RuntimeException e) {
             contractsPresent = false;
         }
-        if (contractsPresent) {
+        if (contractsPresent && !task.journeyPaths().isEmpty()) {
+            // A journey is carried out in a browser at final integration; no test run shows
+            // what it shows (section 89). The task stays in the plan and is built.
+            log("Task '" + task.title() + "' stays in the plan: it claims the journey(s) "
+                + task.journeyPaths() + ", which its acceptance tests do not show.");
+        } else if (contractsPresent) {
+            // Nothing left to prove and nothing left to build (section 89): no worker is
+            // started for it, whether or not something kept builds on it. Its tests are run
+            // again on the merged tree, and its checks are proved by that run.
+            record.setNoChangeNeeded(true);
+            record.setMeasuredWhen("at the red check, before any worker was started");
+            try {
+                artifactStore.saveTask(task);
+            } catch (RuntimeException e) {
+                log("Could not record that task '" + task.title() + "' needs no change: "
+                    + e.getMessage() + ".");
+            }
+            log("Task '" + task.title() + "' needs no change: no worker is started for it.");
             nothingLeftToProve.computeIfAbsent(run.id(),
                 id -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(task.id());
         } else {
@@ -5771,6 +5892,20 @@ public class GreenfieldWorkflow {
                         + "dispatched", browserOnlySurvey(repoLayout())));
             }
         }
+        if (result.red() && task != null && waveBase != null && task.needsNoChange()) {
+            // Measured green on the tree the run started from, red on the tree this wave is cut
+            // from: an earlier wave changed what the test measures (section 89). The record no
+            // longer holds, so it is taken back and the task is built like any other.
+            log("Task '" + task.title() + "' was recorded as needing no change, and its tests "
+                + "are red on " + waveBase + ", the tree its wave is cut from. The record is "
+                + "withdrawn and the task is built.");
+            task.setChecksAlreadyProved(null);
+            try {
+                artifactStore.saveTask(task);
+            } catch (RuntimeException e) {
+                log("Could not withdraw the record: " + e.getMessage());
+            }
+        }
         if (result.red() && task != null) {
             // RED, BUT THE TEST NEVER REACHED THE PLAN'S CODE (live harness run 51, 2026-09-30). A
             // test that boots a server or container and dies at class level, in frames none of
@@ -5885,6 +6020,8 @@ public class GreenfieldWorkflow {
             // candidates from each other.
             if (waveBase != null && task != null) {
                 recordAlreadyProved(run, scope, task, spec, waveBase, result.results());
+                needsNoChangeOnItsWaveBase(run, task, target.localRoot().orElse(null),
+                    stillToRun, result.results());
                 return RedGate.OK;
             }
             // AT TEST_AUTHORING IT IS A FACT TOO, WHEN THE TEST IS SHOWN TO MEASURE THE PROJECT'S
@@ -6008,11 +6145,24 @@ public class GreenfieldWorkflow {
             if (miscompiled != null) {
                 return miscompiled;
             }
+            if (!second.red() && second.results() != null && second.results().passed() > 0) {
+                // Nothing was asked here of a correction that passes; it was logged as "red
+                // again" (section 89). The same reading as every other correction.
+                String refused = greenCorrectionRefused(run, task, spec, redcheckWorktree,
+                    second, graph == null ? List.of() : graph.tasks());
+                if (refused != null) {
+                    return "Task '" + task.title() + "': its acceptance test named a type this "
+                        + "plan does not deliver, and the test author's correction passes on the "
+                        + "tree before any work was done - " + second.note() + refused;
+                }
+            }
             gitService.commitAll(worktree, "Correct broken acceptance test for task '"
                 + task.title() + "' in run " + run.id() + "\n\n" + String.join("\n", authored.paths()));
             run.setAcceptanceTestsCommit(gitService.headSha(branch));
             log("TEST_AUTHORING: broken acceptance test(s) " + authored.paths() + " for task '"
-                + task.title() + "' were corrected by the test author and are red again");
+                + task.title() + "' were corrected by the test author"
+                + (second.red() ? " and are red again" : " and pass on the tree the run starts "
+                    + "from, which is recorded as a check the existing code already satisfies"));
             return null;
         } catch (IOException e) {
             return BrokenAcceptanceTest.park(task.title(), undeliverableTypes, acceptanceModule,
@@ -6078,11 +6228,16 @@ public class GreenfieldWorkflow {
                 return miscompiled;
             }
             if (!second.red() && second.results() != null && second.results().passed() > 0) {
-                // Green on a tree nothing in this run has touched: the correction measures nothing
-                // new - the same verdict the red-check itself gives at TEST_AUTHORING.
-                return "Task '" + task.title() + "': its acceptance test died at start-up, and the "
-                    + "test author's correction passes on the tree before any work was done, so it "
-                    + "proves nothing about the work - " + second.note();
+                // Green on a tree nothing in this run has touched: the same verdict the
+                // red-check itself gives at TEST_AUTHORING - recorded when the test is shown to
+                // measure the project's code (section 89), a stop when it is not.
+                String refused = greenCorrectionRefused(run, task, spec, redcheckWorktree,
+                    second, planTasks);
+                if (refused != null) {
+                    return "Task '" + task.title() + "': its acceptance test died at start-up, "
+                        + "and the test author's correction passes on the tree before any work "
+                        + "was done - " + second.note() + refused;
+                }
             }
             List<String> undeliverable = second.red()
                 ? TypeDeliverability.undeliverable(second.missingTypes(), planTasks)
@@ -6175,11 +6330,16 @@ public class GreenfieldWorkflow {
             boolean greenNow = !second.red() && second.results() != null
                 && second.results().passed() > 0;
             if (greenNow && waveBase == null) {
-                // Green on a tree nothing in this run has touched: the correction measures nothing
-                // new — the same verdict the red-check itself gives at TEST_AUTHORING.
-                return "Task '" + task.title() + "': its acceptance test did not compile, and the "
-                    + "test author's correction passes on the tree before any work was done, so it "
-                    + "proves nothing about the work — " + second.note();
+                // Green on a tree nothing in this run has touched: the same verdict the
+                // red-check itself gives at TEST_AUTHORING - recorded when the test is shown to
+                // measure the project's code (section 89), a stop when it is not.
+                String refused = greenCorrectionRefused(run, task, spec, redcheckWorktree,
+                    second, planTasks);
+                if (refused != null) {
+                    return "Task '" + task.title() + "': its acceptance test did not compile, "
+                        + "and the test author's correction passes on the tree before any work "
+                        + "was done — " + second.note() + refused;
+                }
             }
             if (waveBase != null && second.red()) {
                 String nobodyDelivers = UndeliverableType.park(task, planTasks, second.missingTypes());
@@ -6205,9 +6365,11 @@ public class GreenfieldWorkflow {
                 + authored.paths() + " for task '"
                 + task.title() + "' did not compile for a reason no task could fix; the test "
                 + "author corrected them" + (second.red() ? " and they are red again" : ""));
-            if (greenNow) {
+            if (greenNow && waveBase != null) {
                 // On the wave's tree the earlier waves already delivered what it measures.
                 recordAlreadyProved(run, scope, task, spec, waveBase, second.results());
+                needsNoChangeOnItsWaveBase(run, task, redcheckWorktree, planTasks,
+                    second.results());
             }
             return null;
         } catch (IOException e) {
@@ -6309,12 +6471,16 @@ public class GreenfieldWorkflow {
                     survey);
             }
             if (!second.red() && second.results() != null && second.results().passed() > 0) {
-                // Green on a tree nothing in this run has touched: the correction measures nothing
-                // new — the same verdict the red-check itself gives at TEST_AUTHORING.
-                return "Task '" + task.title() + "': its acceptance test reached code that can only "
-                    + "run in a browser, and the test author's correction passes on the tree "
-                    + "before any work was done, so it proves nothing about the work — "
-                    + second.note();
+                // Green on a tree nothing in this run has touched: the same verdict the
+                // red-check itself gives at TEST_AUTHORING - recorded when the test is shown to
+                // measure the project's code (section 89), a stop when it is not.
+                String refused = greenCorrectionRefused(run, task, spec, redcheckWorktree,
+                    second, planGraph == null ? List.of() : planGraph.tasks());
+                if (refused != null) {
+                    return "Task '" + task.title() + "': its acceptance test reached code that "
+                        + "can only run in a browser, and the test author's correction passes on "
+                        + "the tree before any work was done — " + second.note() + refused;
+                }
             }
             TaskGraph graph = run.taskGraphId() == null ? null
                 : artifactStore.root().taskGraphs.get(run.taskGraphId());
@@ -6348,6 +6514,90 @@ public class GreenfieldWorkflow {
         } finally {
             removeTree(worktree); // the branch stays; the correction is on it
         }
+    }
+
+    /**
+     * A corrected acceptance test passes on the tree the run starts from, at TEST_AUTHORING.
+     * That used to stop the run whatever the test measured ("proves nothing about the work"),
+     * while the same result from a first-written test was recorded as a check the existing code
+     * already satisfies - so a story built on delivered code went one way or the other by
+     * whether its test needed a correction (section 89). One reading now: the evidence
+     * {@link AlreadySatisfied#assess} asks for. Accepted, it is recorded exactly as the red
+     * check records it and the correction is committed by the caller.
+     *
+     * @return null when the green run was accepted and recorded; otherwise the end of the
+     *         sentence the run stops on, saying why it was not
+     */
+    private String greenCorrectionRefused(Run run, Task task, VerifySpec spec, Path tree,
+                                          RedChecker.RedCheckResult second, List<Task> planTasks) {
+        AlreadySatisfied.Evidence evidence = AlreadySatisfied.assess(tree, designOf(run), task,
+            planTasks, second.results());
+        if (!evidence.accepted()) {
+            return ".\n\nThis was not recorded as a check the existing code already satisfies: "
+                + evidence.refusal() + ". So it proves nothing about the work.";
+        }
+        log("TEST_AUTHORING: the corrected acceptance test(s) of task '" + task.title()
+            + "' pass on the tree the run starts from and execute assertions against the "
+            + "project's own code.");
+        recordAlreadySatisfied(run, scopeFor(run), task, spec, tree, evidence, second.results());
+        return null;
+    }
+
+    /** The run's design, or null when it has none on record. */
+    private DesignDocument designOf(Run run) {
+        return run == null || run.designId() == null ? null
+            : artifactStore.root().designs.get(run.designId());
+    }
+
+    /** Every task of the run's plan; empty when it has none on record. */
+    private List<Task> planTasksOf(Run run) {
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        return graph == null || graph.tasks() == null ? List.of() : graph.tasks();
+    }
+
+    /**
+     * At the start of a later wave: the task's tests pass on the tree the wave is cut from, and
+     * {@link #recordAlreadyProved} has just written that down. When the run is also evidence
+     * that nothing is left to build - the tests execute assertions against the project's own
+     * code ({@link AlreadySatisfied#assess}), every contract the task was to deliver is in that
+     * tree, and the task claims no journey - the task needs no change and the engine starts no
+     * worker for it (section 89). Otherwise the task is built as before: its instructions may
+     * describe work its tests do not measure.
+     */
+    private void needsNoChangeOnItsWaveBase(Run run, Task task, Path tree, List<Task> stillToRun,
+                                            TestResults results) {
+        ChecksAlreadyProved record = task.checksAlreadyProved();
+        if (record == null || tree == null || !task.journeyPaths().isEmpty()) {
+            return;
+        }
+        try {
+            if (!task.deliveredContracts().isEmpty() && !com.swarmcoder.knowledge.ContractDelivery
+                    .shortfalls(tree, task.deliveredContracts()).isEmpty()) {
+                return; // a contract it delivers is not in the tree yet: that is still work
+            }
+            AlreadySatisfied.Evidence evidence =
+                AlreadySatisfied.assess(tree, designOf(run), task, stillToRun, results);
+            if (!evidence.accepted()) {
+                log("Task '" + task.title() + "' is still built: its tests pass on the tree its "
+                    + "wave is cut from, and that is not accepted as proof that nothing is left "
+                    + "to build - " + evidence.refusal() + ".");
+                return;
+            }
+        } catch (RuntimeException e) {
+            return; // not established: built as before
+        }
+        record.setNoChangeNeeded(true);
+        record.setMeasuredWhen("at the start of its wave, before any worker was started");
+        try {
+            artifactStore.saveTask(task);
+        } catch (RuntimeException e) {
+            log("Could not record that task '" + task.title() + "' needs no change: "
+                + e.getMessage() + ".");
+        }
+        log("Task '" + task.title() + "' needs no change: every contract it delivers is in the "
+            + "tree its wave is cut from and its tests pass there. No worker is started for it; "
+            + "its tests are run again on the merged tree.");
     }
 
     /**

@@ -167,6 +167,33 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A story the existing code already met ended stopped, with no reason and nothing to
+  answer.** Its one task was built on code earlier stories had delivered. Every worker changed
+  nothing and reported that the acceptance test passed; none had run it, because a worker's
+  checkout does not hold that test. Nothing measured the unchanged tree, the task was stopped
+  with a question that gave no reason, the question was withdrawn, and the story ended with
+  its check unproved. Now:
+  - When no worker of a task changes anything, the product runs the task's acceptance tests on
+    that unchanged tree itself. Green, and shown to measure the project's code: the task needs
+    no change and nothing is chosen for it. Red: the question says so with the first failing
+    test and its message, and takes `repair` and `retest`.
+  - A task whose tests pass on the tree it starts from, whose contracts are in that tree and
+    which claims no journey is not dispatched at all, whether that is found at the red check,
+    after the test's author corrected the test, or at the start of a later wave. A corrected
+    test that passes on the start tree no longer stops the build when it measures the
+    project's code.
+  - A build no longer goes on to final integration past a task that stopped with a question.
+    It stops behind that question.
+  - A story that is not delivered at final integration carries which check has no proof, why
+    no result exists for it and what can be done. The supervisor's stopped-story item shows
+    that instead of "Its last build ended at the ABORTED stage", and the build asks the same
+    as a question.
+  - A story whose every check is met with no code change is delivered for a verdict. The
+    evidence says no change was needed, how many acceptance tests pass and how many journeys
+    were made and failed; accepting it adds the story's tests and journeys to the delivery
+    branch. Journeys are now made for such a delivery too.
+  See `docs/DEVELOPER_CORRECTIONS.md` section 89.
+
 - **Correct candidates were failed for a constructor their type cannot have.** A design wrote
   the members of a nested class, its constructors among them, in the contract of the class it
   is declared in. A constructor is named for its type, so no code can make it a member of

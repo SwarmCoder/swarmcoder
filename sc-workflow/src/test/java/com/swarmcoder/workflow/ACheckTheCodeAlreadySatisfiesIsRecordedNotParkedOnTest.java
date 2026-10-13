@@ -143,6 +143,60 @@ class ACheckTheCodeAlreadySatisfiesIsRecordedNotParkedOnTest {
         assertThat(outcome.plan.tasks()).hasSize(2);
         assertThat(outcome.run.alreadySatisfiedTests()).isEmpty();
         assertThat(outcome.recordOf(titled).beforeTheRun()).isTrue();
+        // Section 89: it stays in the plan, and no worker is started for it. It used to be
+        // dispatched, and a worker that found nothing to change failed it.
+        assertThat(outcome.recordOf(titled).noChangeNeeded()).isTrue();
+        assertThat(outcome.recordOf(titled).measuredWhen()).contains("at the red check");
+        assertThat(outcome.recordOf(titled).describe(titled.title()))
+            .contains("already satisfied by the code this run started from")
+            .contains("no worker is started and it has no chosen candidate");
+        assertThat(outcome.recordOf(shelf)).isNull();
+    }
+
+    /** A task with a journey is still built: no test run shows what a journey shows. */
+    @Test
+    void aTaskThatClaimsAJourneyIsNotRecordedAsNeedingNoChange() throws Exception {
+        Task titled = claiming("Show the book's title", BOOK, TITLE_TEST, "A book has a title");
+        titled.setJourneyPaths(List.of(ACCEPT_DIR + "/title.journey.yaml"));
+        Task shelf = claiming("Add the shelf", SHELF, SHELF_TEST, "Books are kept on a shelf");
+        Outcome outcome = redCheck(REAL_TEST, List.of(titled, shelf), List.of());
+
+        assertThat(outcome.park).isNull();
+        assertThat(outcome.plan.tasks()).as("it is not dropped").hasSize(2);
+        assertThat(outcome.recordOf(titled).beforeTheRun()).isTrue();
+        assertThat(outcome.recordOf(titled).noChangeNeeded()).isFalse();
+    }
+
+    /**
+     * Section 89: every task of the plan was measured as needing no change while the run was
+     * being built - after its workers left the tree unchanged - so the run was never marked at
+     * TEST_AUTHORING as having nothing to build. Final integration still verifies the unchanged
+     * tree once, and the branch it delivers is the run's tests commit: the tests and no code.
+     */
+    @Test
+    void aPlanWhoseEveryTaskNeededNoChangeIsVerifiedUnchangedAndDeliversItsTests()
+            throws Exception {
+        Task titled = claiming("Show the book's title", BOOK, TITLE_TEST, "A book has a title");
+        Outcome outcome = redCheck(REAL_TEST, List.of(titled), List.of(), (store, run) -> {
+            run.setNothingToBuild(false);
+            run.setAlreadySatisfiedTests(List.of());
+            Task stored = store.getTask(titled.id());
+            stored.setChecksAlreadyProved(ChecksAlreadyProved.noChangeNeeded(Instant.now(),
+                base, List.of("swarm.accept.BookTitleTest#assignsRatingToBook"), List.of(), 1,
+                "after every worker of the task had left the tree unchanged"));
+            return new FinalIntegrator(new GitService(repoDir), store).integrate(run);
+        });
+
+        FinalIntegrator.Result integration = outcome.integration;
+        assertThat(integration.ok()).as(String.valueOf(integration.failure())).isTrue();
+        assertThat(outcome.run.nothingToBuild()).as("said on the run, for the delivery").isTrue();
+        assertThat(integration.verification().acceptance().getPassedIds())
+            .containsExactly("swarm.accept.BookTitleTest#assignsRatingToBook");
+        assertThat(outcome.run.journeysMade()).as("the tree holds no journey").isZero();
+        assertThat(outcome.plan.tasks().get(0).state()).isEqualTo(TaskState.DONE);
+        assertThat(git("rev-parse swarm/integration/" + outcome.run.id()).strip())
+            .as("the delivered branch is the run's tests commit: the tests and no code")
+            .isEqualTo(testsCommit);
     }
 
     @Test
