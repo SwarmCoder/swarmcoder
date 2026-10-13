@@ -220,7 +220,8 @@ public final class UsageReport {
      * known size; a paid role above its figure is warned about. The architect designs once and
      * answers a few revisions; the planner splits and orders a design; the reviewer reads a
      * design, a plan and tests against the rules; the test author writes and compiles a test a
-     * task. Roles not named here (workers, the expert, the judge) make as many calls as there
+     * task. The reviewer's figure here is that of {@link ReviewerMode#LOOKUPS}; the warning uses
+     * {@link ReviewerMode#expectedCalls()} of the mode in force (section 96). Roles not named here (workers, the expert, the judge) make as many calls as there
      * is work, and are judged by input per call alone.
      */
     public static final Map<String, Integer> WARN_CALLS = Map.of(
@@ -254,7 +255,9 @@ public final class UsageReport {
                     .append("); above ").append(WARN_INPUT_PER_CALL)
                     .append(" a conversation is carrying what it no longer needs.\n");
             }
-            Integer needs = WARN_CALLS.get(row.role());
+            Integer needs = "reviewer".equals(row.role())
+                ? Integer.valueOf(ReviewerMode.current().expectedCalls())
+                : WARN_CALLS.get(row.role());
             if (needs != null && sum.calls() > needs) {
                 sb.append("WARNING: the ").append(row.role()).append(" made ").append(sum.calls())
                     .append(" calls on a paid server; its work in one run needs at most ")

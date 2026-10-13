@@ -173,6 +173,15 @@ public class ConfigLoader {
             #     apiKey: ""
             #     modelName: "the-model-name"
             #     shape: "vision"
+            #
+            # How the design reviewer reads. It checks the design, the plan and the tests against
+            # your project's rules. "question" (the default, also when you leave this out) asks it
+            # one question each time, with no lookup tools: cheap, about 20,000 tokens a story.
+            # "lookups" makes it an agent that looks things up in the project and the reference
+            # material: one small story cost 121 calls and 9.1 million paid tokens that way.
+            #
+            # roles:
+            #   reviewerMode: question
 
             # How much SwarmCoder does at once.
             #

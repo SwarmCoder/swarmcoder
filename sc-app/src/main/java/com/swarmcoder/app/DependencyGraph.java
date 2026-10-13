@@ -37,6 +37,7 @@ import com.swarmcoder.swarm.SwarmDispatcher;
 import com.swarmcoder.swarm.WorkerSlots;
 import com.swarmcoder.swarm.WorkerPersonas;
 import com.swarmcoder.domain.OutsideLookups;
+import com.swarmcoder.domain.ReviewerMode;
 import com.swarmcoder.knowledge.Context7Client;
 import com.swarmcoder.knowledge.DocsIndex;
 import com.swarmcoder.knowledge.Librarian;
@@ -964,6 +965,13 @@ public class DependencyGraph {
     /** Per-role clients for a project: project.yaml overrides layered over the global roles config. */
     private RoleClients roleClientsFor(Project project) {
         RolesConfig global = this.config.roles();
+        // One setting for the whole application (section 96); a project does not override it.
+        String reviewerSetting = global == null ? null : global.reviewerMode();
+        if (!ReviewerMode.isRecognized(reviewerSetting)) {
+            log.warn("roles.reviewerMode '{}' is not 'question' or 'lookups'; using 'question'",
+                reviewerSetting);
+        }
+        ReviewerMode.configure(reviewerSetting);
         ProjectConfig pc =
             ProjectConfigLoader.load(project.primaryPath());
         RolesConfig over = pc != null ? pc.roles() : null;

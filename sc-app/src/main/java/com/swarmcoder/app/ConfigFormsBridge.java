@@ -72,7 +72,9 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
     @Override
     public String saveGlobalRoles(List<RoleEntryDto> roles) {
         try {
-            var updated = graph.config.withRoles(toRolesConfig(roles));
+            var existing = graph.config.roles();
+            var updated = graph.config.withRoles(
+                toRolesConfig(roles, existing == null ? null : existing.reviewerMode()));
             ConfigLoader.saveConfig(updated);
             graph.config = updated;
             return "";
@@ -251,6 +253,11 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
     }
 
     private static RolesConfig toRolesConfig(List<RoleEntryDto> entries) {
+        return toRolesConfig(entries, null);
+    }
+
+    /** {@code reviewerMode} is a setting of the file, not a form entry: it is carried over. */
+    private static RolesConfig toRolesConfig(List<RoleEntryDto> entries, String reviewerMode) {
         Map<String, AgentModelConfig> named = new HashMap<>();
         List<AgentModelConfig> workers = new ArrayList<>();
         for (RoleEntryDto entry : entries == null ? List.<RoleEntryDto>of() : entries) {
@@ -267,7 +274,7 @@ final class ConfigFormsBridge implements ConsoleContext.ConfigForms {
             named.get("librarian"), named.get("designReviewer"), named.get("judge"),
             named.get("approver"), workers, named.get("utility"), named.get("chat"),
             named.get("requirementsAnalyst"), named.get("storyPlanner"),
-            named.get("vision"), named.get("taskPlanner"));
+            named.get("vision"), named.get("taskPlanner"), reviewerMode);
     }
 
     /** An entry with no endpoint at all means "unset/inherit" — stored as null. */

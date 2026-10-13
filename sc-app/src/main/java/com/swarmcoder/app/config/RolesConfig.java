@@ -62,5 +62,24 @@ public record RolesConfig(
      * {@link #architect} keeps a strong one. Falls back to {@link #architect}, which is the
      * model it always ran on: a configuration that does not name it behaves as before.
      */
-    AgentModelConfig taskPlanner
-) {}
+    AgentModelConfig taskPlanner,
+    /**
+     * How the design reviewer works: {@code question} (the default, also when absent) reads
+     * the design, the plan and the tests one call each with no lookup tools; {@code lookups}
+     * makes it an agent with the roles' lookup tools (section 96). See
+     * {@link com.swarmcoder.domain.ReviewerMode}.
+     */
+    String reviewerMode
+) {
+    /** The shape before {@code reviewerMode} existed. */
+    public RolesConfig(AgentModelConfig architect, AgentModelConfig testAuthor,
+                       AgentModelConfig librarian, AgentModelConfig designReviewer,
+                       AgentModelConfig judge, AgentModelConfig approver,
+                       List<AgentModelConfig> workerFamilies, AgentModelConfig utility,
+                       AgentModelConfig chat, AgentModelConfig requirementsAnalyst,
+                       AgentModelConfig storyPlanner, AgentModelConfig vision,
+                       AgentModelConfig taskPlanner) {
+        this(architect, testAuthor, librarian, designReviewer, judge, approver, workerFamilies,
+            utility, chat, requirementsAnalyst, storyPlanner, vision, taskPlanner, null);
+    }
+}

@@ -19,6 +19,7 @@ package com.swarmcoder.app;
 
 import com.swarmcoder.swarm.WorkerPersonas;
 import com.swarmcoder.domain.Project;
+import com.swarmcoder.domain.ReviewerMode;
 import com.swarmcoder.git.GitService;
 import com.swarmcoder.knowledge.ContextLedger;
 import com.swarmcoder.knowledge.ExpertDesk;
@@ -440,9 +441,16 @@ public final class ProjectContext {
                     escalationForWorkers).judgedBy(answerJudge));
             cloudRoles.architect().setLookupAgent(roleAgent);
             cloudRoles.testAuthor().setLookupAgent(roleAgent);
-            // The reviewer's readings of a design, a plan and tests against the rules look facts
-            // up too; what counts as an objection is unchanged.
-            cloudRoles.reviewer().setLookupAgent(roleAgent);
+            // The reviewer reads a design, a plan and tests against the rules as ONE QUESTION
+            // each, with no tools, unless the settings say `roles.reviewerMode: lookups`
+            // (owner decision 2026-10-13, section 96): as an agent it cost 121 calls and 9.1
+            // million tokens for one small story. The harness wires it the same way.
+            ReviewerMode reviewerMode = ReviewerMode.current();
+            cloudRoles.reviewer().useMode(reviewerMode, roleAgent);
+            log.info("Project '{}': the design reviewer works as {}.", project.name(),
+                reviewerMode == ReviewerMode.LOOKUPS
+                    ? "an agent with lookups (roles.reviewerMode: lookups)"
+                    : "one question per reading, with no lookup tools (roles.reviewerMode: question)");
             LookupAgent.Limits stops = LookupAgent.Limits.configured();
             log.info("Project '{}': the architect, the planner and the test author work as agents "
                 + "- they look facts up ({}), ask the librarian and the expert, and check their "

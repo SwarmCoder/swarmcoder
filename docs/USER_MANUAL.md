@@ -80,6 +80,12 @@ swarm:
 
 - **`roles`** — which model does which job. `architect` plans, `workerFamilies` write the code.
   Anything you leave out falls back to one that is set.
+- **`roles.reviewerMode`** — how the design reviewer reads the design, the plan and the tests
+  against your project's rules. `question` (the default, also when the line is left out) asks it
+  one question each time, with no lookup tools, and gives it the rules and what the architect
+  already established: about 20,000 tokens for a small story. `lookups` makes it an agent that
+  looks things up in your project and the reference material; it can check more, and one small
+  story cost 121 calls and 9.1 million paid tokens that way. Any other value counts as `question`.
 - **`nPerTask`** — how many attempts each piece of work gets. Four. More attempts find better
   answers up to a point: with eight, six or seven of them were passing, so the last few were
   proving what the first few had already proved. Leave the whole `swarm:` block out and each piece
