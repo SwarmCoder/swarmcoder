@@ -72,12 +72,17 @@ public final class LookupMeter {
          * model (section 63). A worker reading a journey is an acceptance-test read. Appended
          * 2026-10-05.
          */
-        JOURNEY_CHECK("journey checks");
+        JOURNEY_CHECK("journey checks"),
+        /**
+         * {@code known_about}: a fact an earlier story's architect kept, read instead of the
+         * lookups that established it (section 97). Appended 2026-10-13.
+         */
+        KNOWN("facts the project already holds");
 
         /** True for what CLAUDE.md section 1 puts first: a structured query, not text or a file. */
         public boolean structured() {
             return this == TREE || this == LANGUAGE_SERVER || this == DOCUMENT
-                || this == ACCEPTANCE_TEST || this == JOURNEY_CHECK;
+                || this == ACCEPTANCE_TEST || this == JOURNEY_CHECK || this == KNOWN;
         }
 
         private final String label;

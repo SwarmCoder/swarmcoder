@@ -39,6 +39,24 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **A project learns what it builds on once: `known_about`.** The second story of a small
+  project spent 59 paid calls and 2.9 million tokens in design and wrote no draft; 44% of what
+  its architect looked up, and 67% of what it looked up in the reference material, was about
+  something the first story's architect had looked up hours before, and the project held 22
+  findings from that work which nothing showed it. Every role that works with lookups now has
+  `known_about <type, file or document>`: what the architects of the project's delivered
+  stories kept (their `keep_for_workers` findings), each with the lookup it was copied from,
+  the story and commit it was true at, and whether its source has changed since. A fact whose
+  copied lines are no longer in its source is marked and its lines withheld. The opening
+  carries the titles only, after the project map. Read from the designs the store already
+  holds; nothing new is stored. The run report counts these lookups as "facts the project
+  already holds". Section 97 of `docs/DEVELOPER_CORRECTIONS.md` has the measurement, the
+  computed effect (about 0.35 of 2.9 million tokens for that run) and what was not built.
+- **`WhatARolesCallsWereForTest`** reads one stored planning session of a COPY of a store
+  and says what its calls were for, what it looked up that the project had looked up before,
+  and what each request was made of, by replaying the session through the product's own tidy.
+  It does nothing unless told where a copy is.
+
 - **The supervisor can read a drafted requirement before agreeing it, and decline one.** During
   a supervised build a model role (the architect, while designing a story) can raise a new
   DRAFT requirement; the attention item showed only its handle and title, so the supervisor

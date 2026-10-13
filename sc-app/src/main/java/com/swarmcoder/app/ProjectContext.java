@@ -438,7 +438,11 @@ public final class ProjectContext {
                 shared.cloudGate(), shared.runtime(), shared.scheduler(),
                 endpoint -> workerPoolOf(shared.profiles(), endpoint))
                 .withExpert(() -> new ExpertDesk(librarian.curator(), projectPath, List.of(),
-                    escalationForWorkers).judgedBy(answerJudge));
+                    escalationForWorkers).judgedBy(answerJudge))
+                // A project learns what it builds on once (section 97): what the architects
+                // of its delivered stories kept is a lookup for every later role.
+                .withKnown(() -> com.swarmcoder.knowledge.KnownFacts.ofDelivered(
+                    shared.store(), project.id()));
             cloudRoles.architect().setLookupAgent(roleAgent);
             cloudRoles.testAuthor().setLookupAgent(roleAgent);
             // The reviewer reads a design, a plan and tests against the rules as ONE QUESTION

@@ -274,6 +274,34 @@ public final class LookupAgent {
         return this;
     }
 
+    /** Nullable - then a session is told nothing of what earlier stories established. */
+    private volatile java.util.function.Supplier<KnownFacts> knownFacts;
+
+    /** The most characters of a role's opening the titles of what is known may take. */
+    static final int KNOWN_INDEX_CHARS = 2_400;
+
+    /**
+     * Gives every role's session what the project already knows (section 97): the titles in
+     * its opening, after the project map, and {@code known_about} among its lookups. Asked
+     * anew for each session, so a story sees what the stories delivered before it kept.
+     */
+    public LookupAgent withKnown(java.util.function.Supplier<KnownFacts> known) {
+        this.knownFacts = known;
+        return this;
+    }
+
+    private KnownFacts known() {
+        java.util.function.Supplier<KnownFacts> supplier = knownFacts;
+        try {
+            KnownFacts facts = supplier == null ? null : supplier.get();
+            return facts == null ? KnownFacts.none() : facts;
+        } catch (RuntimeException e) {                                     // noqa
+            log.warn("what the project already knows could not be read ({}); the session is "
+                + "opened without it", e.toString());
+            return KnownFacts.none();
+        }
+    }
+
     /** One session's own desk, wired into the run's answers; null when there is no expert. */
     private com.swarmcoder.runtime.ExpertHelp expertFor(MaterialBudget room, String role) {
         java.util.function.Supplier<com.swarmcoder.runtime.ExpertHelp> factory = expertFactory;
@@ -313,6 +341,15 @@ public final class LookupAgent {
         StringBuilder guide = new StringBuilder("\n\nWHICH TOOL FOR WHAT. Look up and ask as "
             + "often as you need to: nobody counts your questions, and a wrong guess costs "
             + "the whole build. Whenever you are not sure, ask - never guess.\n"
+            + (toolNames.contains("known_about")
+                ? "- WHAT IS ALREADY KNOWN, BEFORE ANYTHING ELSE. Earlier stories of this "
+                    + "project were designed and delivered, and what their architect "
+                    + "established about this project and what it builds on is kept: the "
+                    + "titles are in your opening, and known_about <subject or source> gives "
+                    + "each fact with the lines it was copied from and says whether its source "
+                    + "has changed since. Read what is known about a thing before you look "
+                    + "that thing up; look up only what is not there, or what is marked as "
+                    + "changed.\n" : "")
             + "- THE PROJECT'S OBJECT GRAPH FIRST. What the project is made of - its types, "
             + "their members, what extends or uses what, what each module's build declares - is "
             + "held as a graph the compiler resolved, and these tools answer from it in a few "
@@ -494,6 +531,13 @@ public final class LookupAgent {
                 Math.max(0, ask.limits().maxExpertQuestions()),
                 Math.max(0, ask.limits().maxRepeats())));
         List<ToolBinding> bindings = new ArrayList<>(tools.lookupBindings());
+        // What earlier stories established, first among the lookups when there is any.
+        KnownFacts known = known();
+        tools.know(known);
+        ToolBinding knownAbout = tools.knownBinding();
+        if (knownAbout != null) {
+            bindings.add(0, knownAbout);
+        }
         // One tool of a name: a role's own tool replaces the session's (the test author of a
         // screen task says what texts_of is for there).
         List<ToolBinding> own = ask.ownTools().apply(tools);
@@ -506,7 +550,14 @@ public final class LookupAgent {
         // every role and story: see ProjectMap.
         String map = ProjectMap.enabled()
             ? ProjectMap.of(targetRoot, room.chars(ProjectMap.MAP_CHARS), curator) : "";
-        String opening = map.isEmpty() ? ask.opening() : map + "\n" + ask.opening();
+        String index = known.index(room.chars(KNOWN_INDEX_CHARS));
+        String opening = (map.isEmpty() ? "" : map + "\n") + (index.isEmpty() ? "" : index + "\n")
+            + ask.opening();
+        if (!index.isEmpty()) {
+            log.info("the {} is told what this project already knows: {} fact(s), by title, in "
+                + "{} characters of its opening; known_about returns them", ask.role(),
+                known.size(), index.length());
+        }
 
         long opened = CloudGate.estimateTokens(system) + CloudGate.estimateTokens(opening);
         try {
