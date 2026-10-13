@@ -104,7 +104,15 @@ public enum KillReason {
      * of this task can pass (section 83). Not a statement about this worker's code. Appended
      * last: the enum is stored by ordinal.
      */
-    PLAN_FAULT;
+    PLAN_FAULT,
+    /**
+     * Its repair round was stopped because no worker of the round had made progress for the
+     * stretch a round may be quiet, and it was still in a session (section 91): a turn that
+     * never came back, not turn after turn that moved nothing - that is {@code NO_PROGRESS},
+     * each worker's own stop. Whatever it had changed is verified. Appended last: the enum is
+     * stored by ordinal.
+     */
+    ROUND_QUIET;
 
     /**
      * Why this worker stopped, in the operator's words rather than the constant's name.
@@ -150,6 +158,9 @@ public enum KillReason {
                 + "budgets.maxToolTurnsPerWorker or split the task";
             case ROUND_TIME_UP -> "its repair round reached the time it is allowed and it was "
                 + "still going, so it was stopped and whatever it had changed was verified";
+            case ROUND_QUIET -> "no worker of its repair round had got anywhere for as long "
+                + "as a round may be quiet and it was still going, so it was stopped and "
+                + "whatever it had changed was verified";
             case PLAN_FAULT -> "the plan gave its task a test that needs code a later task "
                 + "writes, so no attempt on this task could pass and this one was stopped";
             case PLACE_NEEDED -> "it was a spare attempt, and its place on the model server was "

@@ -191,6 +191,23 @@ public class WorkerLoop {
 
     private volatile InferenceScheduler.Lease heldLease;
 
+    /** Told each turn of one worker, and whether the turn counted as progress (section 91). */
+    interface TurnWatch {
+        /**
+         * @param progressed whether, since the turn before, the worker changed a file or was
+         *                   shown a tool result it had not seen - what its own stall stop counts
+         */
+        void turn(boolean progressed);
+    }
+
+    /** Who is told this worker's turns; a repair round, which is stopped by what they show. */
+    WorkerLoop withTurnWatch(TurnWatch watch) {
+        this.turnWatch = watch;
+        return this;
+    }
+
+    private volatile TurnWatch turnWatch;
+
     /**
      * Told the moment this worker's model session has ended WITHOUT being stopped - before its
      * change is collected and committed, which takes a while and is no longer something a stop
@@ -408,9 +425,21 @@ public class WorkerLoop {
             /** {@link WorkerToolbox#progressMarks()} when the previous turn was checked. */
             private int marksAtLastTurn = -1;
             private int idleTurns;
+            /** For the run's measured time per turn and for whoever watches this worker. */
+            private long lastTurnAt = System.currentTimeMillis();
+            private int marksWatched;
 
             @Override
             public Optional<KillReason> check(TurnInfo info) {
+                long now = System.currentTimeMillis();
+                TurnPace.forRun(runId).record(now - lastTurnAt);
+                lastTurnAt = now;
+                int marksNow = toolbox.progressMarks();
+                TurnWatch watch = turnWatch;
+                if (watch != null) {
+                    watch.turn(marksNow != marksWatched);
+                }
+                marksWatched = marksNow;
                 if (groupSignal != null && groupSignal.isSuperseded()) {
                     return Optional.of(groupSignal.reason());
                 }

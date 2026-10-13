@@ -167,6 +167,27 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A repair round left half the model server empty and was stopped while its workers were
+  getting somewhere.** A repair round started two workers from each of at most two candidates,
+  so a round started from one candidate - after a failure at final integration, or on the
+  answer `repair` - ran two workers on a server with four places and nothing else going. And
+  every round was stopped after a fixed 30 minutes: on a server that takes three minutes a
+  turn that is ten turns, and a round was stopped with both workers still changing files. Now
+  a repair round gets as many workers as a first round of the same task (`swarm.nPerTask`,
+  or the project's or story's number, cut to what the server is currently allowed), spread
+  over its candidates, no two of one candidate alike. They take places as first-round attempts
+  do: the first waits its turn, the others start on places nothing else is waiting for. A
+  round is stopped when none of its workers has changed a file or been shown a new result for
+  5 turns' worth of time (never under 15 minutes; `-Dswarmcoder.repair.quietMinutes` sets it),
+  or at a ceiling of 30 turns' worth (never under 30 minutes;
+  `-Dswarmcoder.repair.roundTurns` changes the turns, `-Dswarmcoder.repair.roundMinutes` sets
+  the ceiling outright, as before). A turn's length is measured from the build's own workers.
+  When the ceiling stops workers that were still making progress, the question says so first -
+  "stopped by the time limit after N turns; the workers were still making progress" - and a
+  round given on the answer `repair` is then not counted against
+  `-Dswarmcoder.repair.instructedRounds`, so the same answer can be given again. The build log
+  has one line for every repair round: places free, workers planned and started, turns,
+  minutes and why it ended. Section 91 of `docs/DEVELOPER_CORRECTIONS.md`.
 - **A story the existing code already met ended stopped, with no reason and nothing to
   answer.** Its one task was built on code earlier stories had delivered. Every worker changed
   nothing and reported that the acceptance test passed; none had run it, because a worker's

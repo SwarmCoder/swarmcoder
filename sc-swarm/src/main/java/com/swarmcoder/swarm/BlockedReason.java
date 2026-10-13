@@ -211,6 +211,39 @@ final class BlockedReason {
             + "\n\n";
     }
 
+    /**
+     * What a stop question says first when the task's repair round was stopped by its time
+     * limit (section 91): after how many turns, and whether the stopped workers were still
+     * making progress. "" when the round was not stopped by the limit, or no worker was still
+     * going when it was.
+     *
+     * <p>Live supervised build, 2026-10-12/13: a round was stopped at 30 minutes after 8 and 11
+     * turns with both workers changing files. Its question read like any failed repair, the
+     * supervisor could not tell that more time was the remedy, and the same instruction with 90
+     * minutes succeeded.
+     *
+     * @param instructed whether the round was given on an instruction (section 84); it is then
+     *                   not counted against the rounds a task may be given that way
+     */
+    static String timeLimit(RepairRound.Outcome round, boolean instructed) {
+        if (round == null || round.ended() != RepairRound.Ended.TIME_LIMIT
+                || round.stoppedWorkers() == 0) {
+            return "";
+        }
+        String stopped = "The repair round was stopped by the time limit ("
+            + RepairRound.Outcome.minutes(round.limitMillis()) + " minutes) after "
+            + round.stoppedTurns() + " turns";
+        if (!round.onlyTheTimeLimit()) {
+            return stopped + "; the workers had stopped making progress.\n\n";
+        }
+        return stopped + "; the workers were still making progress. More time, not a different "
+            + "instruction, is the remedy: `repair` with the same instruction gives the round "
+            + "again"
+            + (instructed ? ", and this round is not counted against the rounds a task may be "
+                + "given on an instruction" : "")
+            + ". -D" + RepairRound.ROUND_MINUTES_PROPERTY + " sets the limit in minutes.\n\n";
+    }
+
     /** {@code 3p/1f/2e}: passed, failed and errored, wherever a candidate's counts are shown. */
     static String counts(TestResults results) {
         return results == null ? "none"

@@ -1396,6 +1396,9 @@ public class GreenfieldWorkflow {
                             integration);
                         parkRun(run, "FINAL_INTEGRATION failed on branch "
                             + integration.integrationBranch() + ":\n\n"
+                            // A repair round stopped by its time limit says so first
+                            // (section 91): more time is then the remedy.
+                            + repairTimeLimitNotes(run)
                             + (verdicts.paragraph().isEmpty() ? ""
                                 : verdicts.paragraph() + "\n\n") + integration.failure(),
                             question -> offerRepairAfterIntegration(stopping, question,
@@ -7420,6 +7423,26 @@ public class GreenfieldWorkflow {
             }
         }
         return unrepaired;
+    }
+
+    /**
+     * What the engine has to say about repair rounds of this run's tasks that were stopped by
+     * their time limit (section 91), each said once; "" when there is none.
+     */
+    private String repairTimeLimitNotes(Run run) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || !(swarmEngine instanceof SwarmEngineImpl engine)) {
+            return "";
+        }
+        StringBuilder notes = new StringBuilder();
+        for (Task task : graph.tasks()) {
+            String note = engine.takeTimeLimitNote(task);
+            if (!note.isEmpty()) {
+                notes.append("Task '").append(task.title()).append("': ").append(note);
+            }
+        }
+        return notes.toString();
     }
 
     /** Whether this run has a question open that a person or the supervisor can answer. */
