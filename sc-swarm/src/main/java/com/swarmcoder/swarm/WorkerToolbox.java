@@ -785,7 +785,8 @@ public final class WorkerToolbox {
                 + frameworkErrorHint(result.output());
             com.swarmcoder.inference.LookupMeter.Kind shellRead =
                 com.swarmcoder.inference.LookupMeter.ofShellCommand(command);
-            com.swarmcoder.inference.LookupMeter.record("worker", shellRead, answer.length());
+            com.swarmcoder.inference.LookupMeter.record("worker", shellRead, answer.length(), false,
+                com.swarmcoder.inference.LookupMeter.question("exec", command));
             if (shellRead != null) {
                 // A worker that reads the project through its shell is a defect in its tools
                 // (CLAUDE.md section 1); run 82 counted 12 such commands and nothing said
@@ -1006,7 +1007,8 @@ public final class WorkerToolbox {
                 }
                 com.swarmcoder.inference.LookupMeter.record("worker", asked.wholeFile()
                     ? com.swarmcoder.inference.LookupMeter.Kind.WHOLE_FILE
-                    : com.swarmcoder.inference.LookupMeter.Kind.FILE_PART, answer.length());
+                    : com.swarmcoder.inference.LookupMeter.Kind.FILE_PART, answer.length(), false,
+                    com.swarmcoder.inference.LookupMeter.question("read", path));
                 logLookup("read", path, answer);
             }
             return answer + countInvestigation(answer);
@@ -1313,7 +1315,8 @@ public final class WorkerToolbox {
                 room.chars(MAX_TOOL_OUTPUT_CHARS));
             recordLookup(trimmed, answer);
             com.swarmcoder.inference.LookupMeter.record("worker",
-                com.swarmcoder.inference.LookupMeter.Kind.SEARCH, answer.length());
+                com.swarmcoder.inference.LookupMeter.Kind.SEARCH, answer.length(), false,
+                com.swarmcoder.inference.LookupMeter.question("lookup_api", trimmed));
             logLookup("lookup_api", trimmed, answer); // run 85: 7 searches, 45,575 chars, unnamed
             rememberGivenSections(answer);
             lookupQueryWordsSeen.addAll(wordsOf(trimmed));
@@ -1834,7 +1837,8 @@ public final class WorkerToolbox {
                 : query.startsWith("doc_") ? com.swarmcoder.inference.LookupMeter.Kind.DOCUMENT
                 : live == null && apiLookup.answeredByLanguageServer()
                     ? com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER
-                    : com.swarmcoder.inference.LookupMeter.Kind.TREE, answer.length());
+                    : com.swarmcoder.inference.LookupMeter.Kind.TREE, answer.length(), false,
+                com.swarmcoder.inference.LookupMeter.question(query, argument));
             logLookup(query, argument, answer);
             return answer + countInvestigation(answer);
         } catch (Exception e) {
@@ -1861,7 +1865,8 @@ public final class WorkerToolbox {
             }
             String answer = truncate(found, room.chars(MAX_TOOL_OUTPUT_CHARS));
             com.swarmcoder.inference.LookupMeter.record("worker",
-                com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER, answer.length());
+                com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER, answer.length(), false,
+                com.swarmcoder.inference.LookupMeter.question(query, argument));
             logLookup(query, argument, answer);
             return answer + countInvestigation(answer);
         } catch (Exception e) {
@@ -1892,7 +1897,8 @@ public final class WorkerToolbox {
                 });
             String answer = truncate(done.answer(), room.chars(MAX_TOOL_OUTPUT_CHARS));
             com.swarmcoder.inference.LookupMeter.record("worker",
-                com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER, answer.length());
+                com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER, answer.length(), false,
+                com.swarmcoder.inference.LookupMeter.question(action, argument));
             logLookup(action, argument, answer);
             if (done.filesWritten().isEmpty()) {
                 return answer;
@@ -2062,7 +2068,8 @@ public final class WorkerToolbox {
         }
         answer = truncate(answer, room.chars(MAX_TOOL_OUTPUT_CHARS));
         com.swarmcoder.inference.LookupMeter.record("worker",
-            com.swarmcoder.inference.LookupMeter.Kind.ACCEPTANCE_TEST, answer.length());
+            com.swarmcoder.inference.LookupMeter.Kind.ACCEPTANCE_TEST, answer.length(), false,
+            com.swarmcoder.inference.LookupMeter.question("acceptance_test", asked));
         logLookup("acceptance_test", asked, answer);
         return answer;
     }

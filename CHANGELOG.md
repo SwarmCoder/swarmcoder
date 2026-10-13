@@ -39,6 +39,15 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Added
 
+- **Every build measures itself, on the local server too.** An audit of a five-story local
+  build (87 million tokens) found its own report would have shown nothing. Every model call of
+  every role is now kept one by one with its run - input, cached input, output and thinking
+  tokens and what the call was for - and calls made for no run (the wizards, the chat) are
+  kept with their project. `run_report` and `project_report` show per role the median and the
+  largest call, lookups that repeated a question already answered in the run, and how much of
+  the candidates' work was chosen; their `WARNING:` lines now fire for local servers as well.
+  The Console shows the same table on a run's new "Tokens" tab and on the Insights page.
+
 - **A project learns what it builds on once: `known_about`.** The second story of a small
   project spent 59 paid calls and 2.9 million tokens in design and wrote no draft; 44% of what
   its architect looked up, and 67% of what it looked up in the reference material, was about

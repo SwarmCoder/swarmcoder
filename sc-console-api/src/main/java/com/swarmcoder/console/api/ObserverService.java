@@ -79,6 +79,14 @@ public interface ObserverService {
 
     /** As {@link #runReport}, for the selected project: a totals sentence per story, then all. */
     String projectReport();
+
+    /**
+     * The figures of {@link #runReport} as rows for the Console's tables: per role its calls,
+     * tokens, middle and largest call, its lookups by kind with how many were repeats, and how
+     * much of the work was used. A blank {@code runId} asks for the selected project, as
+     * {@link #projectReport} does.
+     */
+    UsageTableDto usageTable(String runId);
 }
 
 

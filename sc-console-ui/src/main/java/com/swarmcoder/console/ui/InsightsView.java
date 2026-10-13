@@ -110,6 +110,9 @@ final class InsightsView extends Div {
             body.add(tables);
         });
 
+        // What every role's model calls came to, for the whole project (section 102).
+        add(new UsagePanel(""));
+
         refresh();
     }
 

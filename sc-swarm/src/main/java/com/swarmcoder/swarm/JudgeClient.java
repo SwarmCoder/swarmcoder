@@ -309,6 +309,7 @@ public class JudgeClient {
                 Map.of("role", "user", "content", brief));
             String json = client.as("judge", task == null || task.id() == null ? null
                     : task.id().toString(), String.valueOf(sol.workerIndex()))
+                .purpose("judging one candidate")
                 .chatCompletionStream(messages, JudgeVerdict.class, 0.0)
                 .collect(Collectors.joining());
             if (cloudGate != null) {

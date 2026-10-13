@@ -76,6 +76,15 @@ public class ModelUsageRecord {
     private int repeatCalls;
     private long repeatRequestChars;
     private long samePrefixChars;
+    /**
+     * Calls of which it is known how much of the answer was thinking, and the sum. Thinking is
+     * part of {@link #outputTokens}, never added to it. Added with section 102; a row stored
+     * before it reads 0 for both, which a reader shows as "not recorded".
+     */
+    private int thinkingCalls;
+    private long thinkingTokens;
+    /** Of {@link #thinkingCalls}, those whose thinking was estimated from its length. */
+    private int estimatedThinkingCalls;
 
     public ModelUsageRecord() {}
 
@@ -149,6 +158,22 @@ public class ModelUsageRecord {
         }
     }
 
+    /**
+     * Of a call already added, this many of its output tokens were thinking; negative: unknown.
+     *
+     * @param estimated the figure is the length of the thinking text / 4, because the server
+     *                  gave no count of it
+     */
+    public void addThinking(long thinking, boolean estimated) {
+        if (thinking >= 0) {
+            thinkingCalls++;
+            thinkingTokens += thinking;
+            if (estimated) {
+                estimatedThinkingCalls++;
+            }
+        }
+    }
+
     /** Adds every count of {@code other} to this row. */
     public void add(ModelUsageRecord other) {
         calls += other.calls;
@@ -169,6 +194,9 @@ public class ModelUsageRecord {
         repeatCalls += other.repeatCalls;
         repeatRequestChars += other.repeatRequestChars;
         samePrefixChars += other.samePrefixChars;
+        thinkingCalls += other.thinkingCalls;
+        thinkingTokens += other.thinkingTokens;
+        estimatedThinkingCalls += other.estimatedThinkingCalls;
     }
 
     /** A new row with the same key and the same counts. */
@@ -205,4 +233,7 @@ public class ModelUsageRecord {
     public int repeatCalls() { return repeatCalls; }
     public long repeatRequestChars() { return repeatRequestChars; }
     public long samePrefixChars() { return samePrefixChars; }
+    public int thinkingCalls() { return thinkingCalls; }
+    public long thinkingTokens() { return thinkingTokens; }
+    public int estimatedThinkingCalls() { return estimatedThinkingCalls; }
 }

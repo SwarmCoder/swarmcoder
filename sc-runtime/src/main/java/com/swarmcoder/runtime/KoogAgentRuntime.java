@@ -93,7 +93,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
 
     /**
      * How many turns of one session may call no tool and be answered with
-     * {@link #USE_YOUR_TOOLS} (section 98). Each such answer is a whole request more, and the
+     * {@link #USE_YOUR_TOOLS} (section 102). Each such answer is a whole request more, and the
      * session's allowance of two in a row never ran out for a session that called a tool in
      * between. The next turn without a call after these ends the session, as two in a row
      * always did: with what the model said as its answer.
@@ -103,7 +103,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
 
     /**
      * The conversation without a turn that called no tool and the reminder it was answered
-     * with, once the model has gone on to call one (section 98). Expects the last three
+     * with, once the model has gone on to call one (section 102). Expects the last three
      * messages to be that turn, the reminder exactly as this runtime sent it, and the answer
      * to it; anything else is returned as it is, the same list. What comes before those three
      * is not touched, so the server's reading of it stays good, and every later request is
@@ -567,7 +567,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
                         return textOf(response);
                     }
                     if (turnsWithoutACall > MAX_TURNS_WITHOUT_A_CALL) {
-                        // Each reminder is a whole request more (section 98).
+                        // Each reminder is a whole request more (section 102).
                         endedWithoutACall("turn number " + turnsWithoutACall + " of this session "
                             + "that did so; a session is reminded " + MAX_TURNS_WITHOUT_A_CALL
                             + " time(s)");
@@ -652,7 +652,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
         /**
          * Cuts what this turn's calls have replaced - an earlier run of the same build or
          * test, an earlier draft of the same file or design - to a short note, before the
-         * results are sent (section 98; see {@link Superseded}). Never stops a session.
+         * results are sent (section 102; see {@link Superseded}). Never stops a session.
          *
          * @param toSend this turn's results as they will be sent, one for each of {@code calls}
          */
@@ -812,9 +812,15 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 role = role.substring(0, dash);
             }
             SessionMeta meta = spec.meta();
+            // What the call is for is the session it is a turn of, by the session's own full
+            // name ("worker-3", "expert-closing", "expert for architect"); and the candidate
+            // it works on, so a call's tokens can be set against what came of the candidate.
             return new com.swarmcoder.inference.RunMeter.Tag(role,
                 meta == null || meta.taskId() == null ? null : meta.taskId().toString(),
-                meta == null ? null : String.valueOf(meta.workerIndex()));
+                meta == null ? null : String.valueOf(meta.workerIndex()),
+                "a turn of the session " + (spec.role() == null ? "" : spec.role()),
+                meta == null || meta.candidateId() == null ? null
+                    : meta.candidateId().toString());
         }
 
         /**
@@ -895,6 +901,8 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 UsageTap.Seen seen = tap.last();
                 metered.cached(seen.cachedPromptTokens());
                 metered.reasoning(seen.reasoningTokens());
+                // What the thinking is estimated from when the server gives no count of it.
+                metered.thought(answer == null ? 0 : reasoningTokensEstimate(answer) * 4);
                 metered.request(seen.requestChars(), seen.samePrefixChars());
                 if (answer != null && answer.getMetaInfo() != null) {
                     Integer sent = answer.getMetaInfo().getInputTokensCount();

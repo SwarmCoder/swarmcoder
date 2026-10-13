@@ -181,12 +181,34 @@ public class ArtifactStore implements AutoCloseable {
         if (usage == null || usage.runId() == null) {
             return;
         }
+        recordUsage(usage.runId(), usage);
+    }
+
+    /**
+     * As {@link #recordRunUsage}, under {@code key}: a run's id, or - for what was called for
+     * no run, whose record names none - the id of the project that was open (section 102).
+     *
+     * <p>The root is written with the map the first time: a store made before the map existed
+     * loads the field as null, the map made for it then is one the stored root does not point
+     * to yet, and written alone it would be lost at the next start.
+     */
+    public void recordUsage(UUID key, com.swarmcoder.domain.RunUsageRecord usage) {
+        if (usage == null || key == null) {
+            return;
+        }
         writerThread.submit(() -> {
-            root.runUsage().put(usage.runId(), usage);
+            root.runUsage().put(key, usage);
             storageManager.store(root.runUsage());
+            if (!usageMapIsRooted) {
+                storageManager.storeRoot();
+                usageMapIsRooted = true;
+            }
             return null;
         });
     }
+
+    /** Set once the root has been written since {@link StoreRoot#runUsage()} was first used. */
+    private boolean usageMapIsRooted;
 
     /**
      * Records that a worker's {@code exec} tool call is about to run — see
@@ -443,6 +465,7 @@ public class ArtifactStore implements AutoCloseable {
                 root.projects.remove(projectId);
                 scope.runIds.forEach(root.runs::remove);
                 scope.runIds.forEach(root.runUsage()::remove);
+                root.runUsage().remove(projectId); // what it called for no run (section 102)
                 scope.designIds.forEach(root.designs::remove);
                 scope.taskGraphIds.forEach(root.taskGraphs::remove);
                 scope.briefIds.forEach(root.briefs::remove);

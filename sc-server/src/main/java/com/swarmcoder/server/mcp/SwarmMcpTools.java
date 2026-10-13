@@ -178,9 +178,12 @@ public final class SwarmMcpTools {
             "WHAT ONE RUN COST IN MODEL TOKENS, PER ROLE. Compact text: one sentence of totals "
                 + "(paid cloud and local apart, input and output apart), then a table per role "
                 + "and class of server - calls, input tokens, input tokens per call, output "
-                + "tokens, cached input tokens, seconds in calls - and what each role looked up, "
-                + "by kind. Every figure is the model server's own count for a call. Judge a "
-                + "run by the paid rows.",
+                + "tokens, cached input tokens, seconds in calls - then per role its middle and "
+                + "largest call, what the largest was for and its thinking tokens, how much of "
+                + "the candidates' work was chosen, and what each role looked up, by kind, with "
+                + "how many lookups repeated a question already answered in the run. Every "
+                + "figure is the model server's own count for a call. Lines beginning WARNING: "
+                + "come first, for paid and for local servers alike: read them.",
             schema("""
                 {"run_id": {"type":"string","description":"The run's id, from swarm_status or list_runs."}}""",
                 "run_id"),
@@ -189,7 +192,9 @@ public final class SwarmMcpTools {
         tools.add(tool("project_report",
             "What the selected project cost in model tokens: a totals sentence per story (paid "
                 + "cloud and local apart, input and output apart), then the same table per role "
-                + "as run_report for all of its runs together. No arguments.",
+                + "as run_report for all of its runs together, what was called for no run (the "
+                + "wizards, the chat) and how many runs were delivered or ended early. No "
+                + "arguments.",
             schema(), args -> projectReport()));
 
         tools.add(tool("session_events",

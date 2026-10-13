@@ -17,6 +17,9 @@
  */
 package com.swarmcoder.runtime;
 
+import com.swarmcoder.domain.AskedQuestions;
+import com.swarmcoder.domain.CallLog;
+import com.swarmcoder.domain.CallUsageRecord;
 import com.swarmcoder.domain.LookupUsageRecord;
 import com.swarmcoder.domain.ModelUsageRecord;
 import com.swarmcoder.domain.Run;
@@ -30,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -42,6 +46,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * The application's record of what every model call cost: per run, per role, per task, per model
@@ -70,7 +75,14 @@ import java.util.function.Predicate;
  *
  * <p><b>Whose call.</b> The run, story and project are the ones the calling thread is working
  * for ({@link CloudGate#current()}); a session that knows its run says so. A call made for no
- * run is counted under {@link #outsideRuns()} and stored nowhere.
+ * run - a wizard, the chat, knowledge read at start - is kept with the project the program has
+ * open ({@link #forCallsOutsideRuns}) and stored like a run's, under that project's id
+ * ({@link #outsideRunsOf}). Until section 102 such calls were stored nowhere.
+ *
+ * <p><b>Each call, and each question.</b> Beside the sums per role a run's record keeps every
+ * call one by one ({@link CallLog}: its input, cached input, output and thinking tokens and
+ * what it was for) and the questions its lookups have answered, so that a lookup that asks
+ * what was already answered in this run - to this role or another - is counted as a repeat.
  *
  * <p><b>A server that reports no usage.</b> The input is then estimated from the size of the
  * request and the output from the size of the answer (characters / 4), and the row says how many
@@ -82,28 +94,40 @@ public final class UsageLedger implements RunMeter.Recorder {
     /** Local calls are written to the store at most this often; paid calls at once. */
     private static final long FLUSH_MILLIS = 5_000;
 
-    /** One run's rows while the process lives. */
+    /** The key of what was called for no run while no project was open. */
+    private static final UUID NO_PROJECT = new UUID(0, 0);
+
+    /** One run's rows while the process lives, or what one project called for no run. */
     private static final class Book {
+        final boolean outsideRuns;
         UUID storyId;
         UUID projectId;
         final Map<String, ModelUsageRecord> models = new LinkedHashMap<>();
         final Map<String, LookupUsageRecord> lookups = new LinkedHashMap<>();
+        CallLog calls = new CallLog();
+        AskedQuestions asked = new AskedQuestions();
+        final Set<Long> answered = new HashSet<>();
+
+        Book(boolean outsideRuns) {
+            this.outsideRuns = outsideRuns;
+        }
     }
 
     private final CloudGate gate;
     private final ArtifactStore store;
     private final Predicate<String> localEndpoint;
     private final Object lock = new Object();
+    /** By run id, and by project id for what was called for no run; read from the store on first use. */
     private final Map<UUID, Book> books = new LinkedHashMap<>();
-    private final Book outside = new Book();
     private final Set<UUID> dirty = ConcurrentHashMap.newKeySet();
     private final AtomicLong lastFlush = new AtomicLong();
     private ScheduledExecutorService flusher;
+    private volatile Supplier<UUID> openProject = () -> null;
 
     /**
      * @param gate          charged with every paid call's true input and output; may be null
-     * @param store         where each run's rows are kept, and read from at start; null keeps
-     *                      them in memory only
+     * @param store         where each run's rows are kept, and read from when a run is first
+     *                      added to or asked for; null keeps them in memory only
      * @param localEndpoint true for the base address ({@link #normalized}) of a server the
      *                      operator runs, whose tokens cost nothing; null for "every server is
      *                      paid"
@@ -112,24 +136,16 @@ public final class UsageLedger implements RunMeter.Recorder {
         this.gate = gate;
         this.store = store;
         this.localEndpoint = localEndpoint == null ? address -> false : localEndpoint;
-        if (store != null) {
-            for (RunUsageRecord record : new ArrayList<>(store.root().runUsage().values())) {
-                if (record == null || record.runId() == null) {
-                    continue;
-                }
-                Book book = new Book();
-                book.storyId = record.storyId();
-                book.projectId = record.projectId();
-                for (ModelUsageRecord row : record.models()) {
-                    book.models.put(keyOf(row.role(), row.task(), row.model(), row.endpointClass()),
-                        row.copy());
-                }
-                for (LookupUsageRecord row : record.lookups()) {
-                    book.lookups.put(row.role() + "\u0000" + row.kind(), row.copy());
-                }
-                books.put(record.runId(), book);
-            }
-        }
+    }
+
+    /**
+     * Says which project a call made for no run belongs to: the one the program has open when
+     * the call is made. Without it, and while it answers null, such calls are kept together
+     * under no project.
+     */
+    public UsageLedger forCallsOutsideRuns(Supplier<UUID> projectOpenNow) {
+        this.openProject = projectOpenNow == null ? () -> null : projectOpenNow;
+        return this;
     }
 
     /** Starts writing what local calls added every few seconds. Without it, see {@link #flush()}. */
@@ -155,17 +171,34 @@ public final class UsageLedger implements RunMeter.Recorder {
             return here;
         }
         UUID runId = parse(run);
-        return runId == null ? here : whereOf(runId);
+        return runId != null ? whereOf(runId) : outsideRuns(here);
+    }
+
+    /** Whose a call or a lookup for no run is: the project the thread names, or the open one. */
+    private CloudGate.Where outsideRuns(CloudGate.Where here) {
+        if (here != null && here.projectId() != null) {
+            return here;
+        }
+        UUID project = null;
+        try {
+            project = openProject.get();
+        } catch (RuntimeException e) {                                     // noqa
+            // Counted under no project, which is still counted.
+        }
+        return new CloudGate.Where(project, here == null ? null : here.storyId(), null);
     }
 
     @Override
     public void finished(Object begun, RunMeter.Finished finished) {
-        CloudGate.Where where = begun instanceof CloudGate.Where known ? known : null;
+        CloudGate.Where where = begun instanceof CloudGate.Where known ? known
+            : outsideRuns(null);
         RunMeter.Call call = finished.call();
         boolean paid = !isLocal(finished.endpoint());
         long input = call.promptTokens();
         long output = call.completionTokens();
+        long thinking = finished.reasoningTokens();
         boolean estimated = false;
+        boolean thinkingEstimated = false;
         if (!call.failed()) {
             if (input < 0 && call.requestChars() > 0) {
                 input = Math.max(1, call.requestChars() / 4);
@@ -175,42 +208,66 @@ public final class UsageLedger implements RunMeter.Recorder {
                 output = Math.max(1, finished.answerChars() / 4);
                 estimated = true;
             }
+            if (thinking < 0 && finished.thoughtChars() > 0) {
+                thinking = Math.max(1, finished.thoughtChars() / 4);
+                thinkingEstimated = true;
+            }
         }
-        UUID runId = where == null ? null : where.runId();
         String endpointClass = paid ? ModelUsageRecord.CLOUD : ModelUsageRecord.LOCAL;
+        String purpose = finished.purpose() == null || finished.purpose().isBlank()
+            ? call.role() : finished.purpose();
+        UUID key;
         synchronized (lock) {
             Book book = bookOf(where);
+            key = keyOf(where);
             ModelUsageRecord row = book.models.computeIfAbsent(
                 keyOf(call.role(), call.task(), call.model(), endpointClass),
                 k -> new ModelUsageRecord(call.role(), call.task(), call.model(), endpointClass));
             row.addCall(input, output, call.cachedPromptTokens(), call.millis(), call.failed(),
                 estimated);
+            row.addThinking(thinking, thinkingEstimated);
             // The request's own size beside the server's count of it, and how much of it
             // repeated the request before: only where the server's count is its own.
             row.addRequest(estimated ? -1 : call.promptTokens(), call.requestChars(),
                 call.samePrefixChars());
+            book.calls.add(new CallUsageRecord(call.role(), call.task(), call.worker(),
+                call.model(), endpointClass, purpose, finished.candidate(), call.startMillis(),
+                call.millis(), input, input < 0 ? -1 : call.cachedPromptTokens(), output,
+                thinking, call.failed(), estimated || thinkingEstimated));
         }
         if (paid && gate != null) {
             try {
-                gate.recordUsage(where, Math.max(0, input), Math.max(0, output));
+                // A call for no run is counted by the gate as it always was: outside every run.
+                gate.recordUsage(where.runId() == null ? null : where, Math.max(0, input),
+                    Math.max(0, output));
             } catch (RuntimeException e) {
                 log.warn("A paid call's tokens could not be counted against the budget: {}",
                     e.toString());
             }
         }
-        changed(runId, paid);
+        changed(key, paid);
     }
 
     @Override
     public void lookup(String role, LookupMeter.Kind kind, int chars) {
-        lookup(role, kind, chars, false);
+        lookup(role, kind, chars, false, null);
     }
 
     @Override
     public void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference) {
-        CloudGate.Where where = CloudGate.current();
+        lookup(role, kind, chars, reference, null);
+    }
+
+    @Override
+    public void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference,
+                       String question) {
+        CloudGate.Where here = CloudGate.current();
+        CloudGate.Where where = here != null && here.runId() != null ? here : outsideRuns(here);
+        UUID key;
         synchronized (lock) {
-            LookupUsageRecord row = bookOf(where).lookups.computeIfAbsent(
+            Book book = bookOf(where);
+            key = keyOf(where);
+            LookupUsageRecord row = book.lookups.computeIfAbsent(
                 role + "\u0000" + kind.name(),
                 k -> new LookupUsageRecord(role, kind.name(), kind.label(), kind.structured(),
                     0, 0));
@@ -218,21 +275,73 @@ public final class UsageLedger implements RunMeter.Recorder {
             if (reference) {
                 row.addReference(1, chars);
             }
+            if (question != null && !question.isBlank()) {
+                long hash = AskedQuestions.hashOf(question);
+                if (book.answered.add(hash)) {
+                    book.asked.add(hash);
+                } else {
+                    row.addRepeat(1, chars);
+                }
+            }
         }
-        changed(where == null ? null : where.runId(), false);
+        changed(key, false);
     }
 
-    private Book bookOf(CloudGate.Where where) {
-        if (where == null || where.runId() == null) {
-            return outside;
+    private static UUID keyOf(CloudGate.Where where) {
+        if (where != null && where.runId() != null) {
+            return where.runId();
         }
-        Book book = books.computeIfAbsent(where.runId(), id -> new Book());
-        if (book.storyId == null) {
+        return where == null || where.projectId() == null ? NO_PROJECT : where.projectId();
+    }
+
+    /** The book of a run, or of what a project called for no run; read from the store once. */
+    private Book bookOf(CloudGate.Where where) {
+        boolean outsideRuns = where == null || where.runId() == null;
+        Book book = bookAt(keyOf(where), outsideRuns);
+        if (book.storyId == null && !outsideRuns) {
             book.storyId = where.storyId();
         }
-        if (book.projectId == null) {
+        if (book.projectId == null && where != null) {
             book.projectId = where.projectId();
         }
+        return book;
+    }
+
+    private Book bookAt(UUID key, boolean outsideRuns) {
+        Book book = books.get(key);
+        if (book != null) {
+            return book;
+        }
+        book = new Book(outsideRuns);
+        RunUsageRecord record = null;
+        if (store != null) {
+            try {
+                record = store.root().runUsage().get(key);
+            } catch (RuntimeException e) {                                 // noqa
+                // Counting goes on from nothing; what was stored stays as it is until written.
+            }
+        }
+        if (record != null) {
+            book.storyId = record.storyId();
+            book.projectId = record.projectId();
+            for (ModelUsageRecord row : record.models()) {
+                book.models.put(keyOf(row.role(), row.task(), row.model(), row.endpointClass()),
+                    row.copy());
+            }
+            for (LookupUsageRecord row : record.lookups()) {
+                book.lookups.put(row.role() + "\u0000" + row.kind(), row.copy());
+            }
+            if (record.callLog() != null) {
+                book.calls = record.callLog().continued();
+            }
+            if (record.asked() != null) {
+                book.asked = record.asked().continued();
+                for (long hash : book.asked.all()) {
+                    book.answered.add(hash);
+                }
+            }
+        }
+        books.put(key, book);
         return book;
     }
 
@@ -330,11 +439,11 @@ public final class UsageLedger implements RunMeter.Recorder {
 
     // --- storing --------------------------------------------------------------------------------
 
-    private void changed(UUID runId, boolean atOnce) {
-        if (store == null || runId == null) {
+    private void changed(UUID key, boolean atOnce) {
+        if (store == null || key == null) {
             return;
         }
-        dirty.add(runId);
+        dirty.add(key);
         if (atOnce || System.currentTimeMillis() - lastFlush.get() >= FLUSH_MILLIS) {
             flush();
         }
@@ -346,12 +455,21 @@ public final class UsageLedger implements RunMeter.Recorder {
             return;
         }
         lastFlush.set(System.currentTimeMillis());
-        for (UUID runId : new ArrayList<>(dirty)) {
-            dirty.remove(runId);
+        for (UUID key : new ArrayList<>(dirty)) {
+            dirty.remove(key);
             try {
-                store.recordRunUsage(usageOf(runId));
+                RunUsageRecord copy;
+                synchronized (lock) {
+                    Book book = books.get(key);
+                    if (book == null) {
+                        continue;
+                    }
+                    copy = copyOf(key, book);
+                }
+                store.recordUsage(key, copy);
             } catch (RuntimeException e) {
-                log.warn("The model usage of run {} could not be saved: {}", runId, e.toString());
+                log.warn("The model usage kept under {} could not be saved: {}", key,
+                    e.toString());
             }
         }
     }
@@ -370,16 +488,22 @@ public final class UsageLedger implements RunMeter.Recorder {
     /** What {@code runId} has cost so far, as a copy; empty lists for a run never seen. */
     public RunUsageRecord usageOf(UUID runId) {
         synchronized (lock) {
-            Book book = books.get(runId);
-            return book == null ? new RunUsageRecord(runId, null, null, List.of(), List.of())
-                : copyOf(runId, book);
+            return copyOf(runId, bookAt(runId, false));
         }
     }
 
-    /** Calls and lookups made for no run, since the process started. Never stored. */
+    /**
+     * Calls and lookups made for no run while no project was open, since they were first
+     * counted.
+     */
     public RunUsageRecord outsideRuns() {
+        return outsideRunsOf(null);
+    }
+
+    /** Calls and lookups made for no run while {@code projectId} was the open project. */
+    public RunUsageRecord outsideRunsOf(UUID projectId) {
         synchronized (lock) {
-            return copyOf(null, outside);
+            return copyOf(null, bookAt(projectId == null ? NO_PROJECT : projectId, true));
         }
     }
 
@@ -388,6 +512,7 @@ public final class UsageLedger implements RunMeter.Recorder {
         book.models.values().forEach(row -> models.add(row.copy()));
         List<LookupUsageRecord> lookups = new ArrayList<>();
         book.lookups.values().forEach(row -> lookups.add(row.copy()));
-        return new RunUsageRecord(runId, book.storyId, book.projectId, models, lookups);
+        return new RunUsageRecord(book.outsideRuns ? null : runId, book.storyId, book.projectId,
+            models, lookups, book.calls.stored(), book.asked.stored(), book.outsideRuns);
     }
 }

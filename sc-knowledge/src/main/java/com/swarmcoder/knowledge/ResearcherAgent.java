@@ -128,7 +128,8 @@ public class ResearcherAgent {
     private String call(List<Map<String, String>> messages) throws Exception {
         long estimate = messages.stream().mapToLong(m -> CloudGate.estimateTokens(m.get("content"))).sum();
         cloudGate.charge(estimate);
-        String reply = model.as("knowledge").chatCompletionStream(messages, null, 0.3).collect(Collectors.joining());
+        String reply = model.as("knowledge").purpose("researching a topic")
+            .chatCompletionStream(messages, null, 0.3).collect(Collectors.joining());
         cloudGate.chargeOutput(CloudGate.estimateTokens(reply));
         return reply.strip();
     }

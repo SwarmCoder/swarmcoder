@@ -93,7 +93,8 @@ public class KnowledgeExtractor {
                 + "\"title\":\"...\",\"body\":\"markdown\"}]}. Return an empty list when nothing "
                 + "clears the bar — most runs teach nothing new.";
             cloudGate.charge(CloudGate.estimateTokens(system) + CloudGate.estimateTokens(transcript));
-            String response = utility.as("knowledge").chatCompletionStream(List.of(
+            String response = utility.as("knowledge").purpose("extracting knowledge")
+                .chatCompletionStream(List.of(
                     Map.of("role", "system", "content", system),
                     Map.of("role", "user", "content", transcript)),
                 LlmDocs.class, 0.2).collect(Collectors.joining());

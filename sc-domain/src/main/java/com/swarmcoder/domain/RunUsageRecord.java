@@ -29,6 +29,10 @@ import java.util.UUID;
  * instance and writes it. The story and the project are kept with it so that a story's or a
  * project's total is a sum over these records and needs no other lookup.
  *
+ * <p>Since section 102 it also holds every call one by one ({@link CallLog}) and the questions
+ * the run's lookups have answered ({@link AskedQuestions}); and one such record per project,
+ * kept under the project's id with no run id, holds what was called for no run at all.
+ *
  * <p>A mutable POJO because EclipseStore cannot persist records.
  */
 public class RunUsageRecord {
@@ -37,8 +41,27 @@ public class RunUsageRecord {
     private UUID projectId;
     private List<ModelUsageRecord> models = new ArrayList<>();
     private List<LookupUsageRecord> lookups = new ArrayList<>();
+    /** Every call one by one; null in a record stored before calls were kept that way. */
+    private CallLog calls;
+    /** The questions lookups have answered in this run; null in a record from before. */
+    private AskedQuestions asked;
+    /**
+     * True for the record of what was called for no run - a wizard, the chat, knowledge read at
+     * start: then {@link #runId} is null and the record is kept under its project's id.
+     */
+    private boolean outsideRuns;
 
     public RunUsageRecord() {}
+
+    /** As the five-argument constructor, with the calls one by one and the questions asked. */
+    public RunUsageRecord(UUID runId, UUID storyId, UUID projectId, List<ModelUsageRecord> models,
+                          List<LookupUsageRecord> lookups, CallLog calls, AskedQuestions asked,
+                          boolean outsideRuns) {
+        this(runId, storyId, projectId, models, lookups);
+        this.calls = calls;
+        this.asked = asked;
+        this.outsideRuns = outsideRuns;
+    }
 
     public RunUsageRecord(UUID runId, UUID storyId, UUID projectId, List<ModelUsageRecord> models,
                           List<LookupUsageRecord> lookups) {
@@ -59,5 +82,25 @@ public class RunUsageRecord {
 
     public List<LookupUsageRecord> lookups() {
         return lookups == null ? List.of() : lookups;
+    }
+
+    /** The calls one by one as they are stored, or null for a record from before. */
+    public CallLog callLog() {
+        return calls;
+    }
+
+    /** Every call one by one, oldest first; empty for a record from before. */
+    public List<CallUsageRecord> calls() {
+        return calls == null ? List.of() : calls.calls();
+    }
+
+    /** The questions answered so far, or null for a record from before. */
+    public AskedQuestions asked() {
+        return asked;
+    }
+
+    /** True for what was called for no run; see the field. */
+    public boolean outsideRuns() {
+        return outsideRuns;
     }
 }

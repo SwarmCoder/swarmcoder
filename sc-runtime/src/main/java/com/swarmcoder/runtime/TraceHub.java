@@ -187,8 +187,17 @@ public final class TraceHub {
         final int prefillTokens;
 
         private ActiveSession(AgentRuntime.SessionSpec spec) {
-            this.meta = spec.meta() != null ? spec.meta()
-                : new AgentRuntime.SessionMeta(UUID.randomUUID(), null, null, null, -1);
+            // A session that names no run is given the run its opening thread works for
+            // (section 102): the planning roles open theirs without the join keys, and their
+            // records named no run, so no listing by run showed them.
+            CloudGate.Where here = CloudGate.current();
+            UUID run = here == null ? null : here.runId();
+            AgentRuntime.SessionMeta given = spec.meta();
+            this.meta = given == null
+                ? new AgentRuntime.SessionMeta(UUID.randomUUID(), run, null, null, -1)
+                : given.runId() != null || run == null ? given
+                : new AgentRuntime.SessionMeta(given.sessionId(), run, given.taskId(),
+                    given.candidateId(), given.workerIndex());
             this.id = meta.sessionId() != null ? meta.sessionId() : UUID.randomUUID();
             this.role = spec.role();
             this.modelProfileId = spec.endpoint() != null ? spec.endpoint().modelId() : "";

@@ -704,7 +704,8 @@ public class DesignReviewerClient {
         cloudGate.charge(prompt);
         String response;
         try {
-            response = client.as("reviewer").chatCompletionStream(messages, Review.class, 0.2)
+            response = client.as("reviewer").purpose("a review in one reply")
+                .chatCompletionStream(messages, Review.class, 0.2)
                 .collect(Collectors.joining());
         } catch (Exception e) {
             EndpointOutage outage = EndpointOutage.from(client.baseUrl(), e);

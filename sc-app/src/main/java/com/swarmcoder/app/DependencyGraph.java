@@ -377,7 +377,16 @@ public class DependencyGraph {
         this.usageLedger = new com.swarmcoder.runtime.UsageLedger(this.cloudGate, artifactStore,
             address -> localServers.contains(address)
                 || com.swarmcoder.runtime.UsageLedger.onThisNetwork(address))
+            // A call made for no run - a wizard, the chat, knowledge read at start - is kept
+            // with the project that is open when it is made, and stored (section 102).
+            .forCallsOutsideRuns(() -> {
+                ProjectContext open = this.current;
+                return open == null || open.project() == null ? null : open.project().id();
+            })
             .flushingInTheBackground();
+        log.info("Every model call is recorded: the usage ledger is installed (calls and "
+            + "lookups per run and role, each call one by one; calls for no run are kept with "
+            + "the open project)");
         com.swarmcoder.inference.RunMeter.recordTo(this.usageLedger);
 
         // 6. Shared knowledge/blob services — process-wide, shared by every project.
@@ -1078,7 +1087,8 @@ public class DependencyGraph {
         return new ConsoleContext.VisionModel() {
             @Override
             public String describe(String prompt, String imageDataUri) throws Exception {
-                return client.as("analyst").describeImage(prompt, imageDataUri, 0.1);
+                return client.as("analyst").purpose("reading an image of a document")
+                    .describeImage(prompt, imageDataUri, 0.1);
             }
 
             @Override
@@ -1429,7 +1439,8 @@ public class DependencyGraph {
             // utility fallback) so switching projects switches the model too. The context
             // supplier grounds the analyst prompt in the project's real folders/models.
             .withChat((messages, modelOverride) -> chatClientForModel(modelOverride)
-                .as("chat").chatCompletionStream(messages, null, 0.4),
+                .as("chat").purpose("the Console's chat")
+                .chatCompletionStream(messages, null, 0.4),
                 this::chatProjectContext)
             .withChatModels(this::availableChatModels)
             // The two wizards stream through the CURRENT project's own clients, resolved per
@@ -1437,9 +1448,11 @@ public class DependencyGraph {
             // CHAT, but a requirement graph is not a conversation to experiment in — which model
             // authored it is a property of the project's config, visible in Settings.
             .withAnalyst((messages, modelOverride) -> currentProject().analystClient()
-                .as("analyst").chatCompletionStream(messages, null, 0.4))
+                .as("analyst").purpose("the requirements wizard")
+                .chatCompletionStream(messages, null, 0.4))
             .withPlanner((messages, modelOverride) -> currentProject().plannerClient()
-                .as("planner").chatCompletionStream(messages, null, 0.4))
+                .as("story planner").purpose("the planning wizard")
+                .chatCompletionStream(messages, null, 0.4))
             // Research tools: the analyst reads the project + context folders itself,
             // confined to the current project's knowledge roots.
             .withChatTools(new ConsoleContext.ChatTools() {

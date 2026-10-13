@@ -54,12 +54,26 @@ public final class RunMeter {
      * @param role   "architect", "test author", "judge", "worker", ... — free text, never an enum
      * @param task   the task the call is for (its id as text), or null
      * @param worker the worker index as text, or null
+     * @param purpose what the call is for, in a few words that are the same for every like call
+     *               ("worker-2 session", "judging a task's candidates"), or null; never taken
+     *               from what a model wrote
+     * @param candidate the candidate the call works on (its id as text), or null
      */
-    public record Tag(String role, String task, String worker) {
+    public record Tag(String role, String task, String worker, String purpose, String candidate) {
         public static final Tag UNTAGGED = new Tag("untagged", null, null);
 
         public Tag {
             role = role == null || role.isBlank() ? "untagged" : role;
+        }
+
+        /** A tag that says nothing of what the call is for or which candidate it works on. */
+        public Tag(String role, String task, String worker) {
+            this(role, task, worker, null, null);
+        }
+
+        /** This tag, saying what the call is for: a few words, the same for every like call. */
+        public Tag forPurpose(String what) {
+            return new Tag(role, task, worker, what, candidate);
         }
     }
 
@@ -158,6 +172,16 @@ public final class RunMeter {
         default void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference) {
             lookup(role, kind, chars);
         }
+
+        /**
+         * As {@link #lookup(String, LookupMeter.Kind, int, boolean)}, with the question itself:
+         * the tool and its argument as they were asked, so that the same question asked again
+         * in a run can be counted as a repeat. Null when the caller did not say.
+         */
+        default void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference,
+                            String question) {
+            lookup(role, kind, chars, reference);
+        }
     }
 
     /**
@@ -169,12 +193,23 @@ public final class RunMeter {
      *                    an output count can be estimated from when the server reported none
      * @param reasoningTokens how many of the call's output tokens the server says were
      *                    thinking, or -1 when it did not say
+     * @param purpose     what the call was for, as its {@link Tag} said, or null
+     * @param candidate   the candidate it worked on, as its {@link Tag} said, or null
+     * @param thoughtChars how many characters of thinking were read from the answer, or -1 when
+     *                    none were counted - what the thinking is estimated from when the
+     *                    server gave no count of it
      */
-    public record Finished(Call call, String endpoint, int answerChars, int reasoningTokens) {
+    public record Finished(Call call, String endpoint, int answerChars, int reasoningTokens,
+                           String purpose, String candidate, int thoughtChars) {
 
         /** A call whose server said nothing of its thinking. */
         public Finished(Call call, String endpoint, int answerChars) {
             this(call, endpoint, answerChars, -1);
+        }
+
+        /** A call that named no purpose and no candidate, and whose thinking was not read. */
+        public Finished(Call call, String endpoint, int answerChars, int reasoningTokens) {
+            this(call, endpoint, answerChars, reasoningTokens, null, null, -1);
         }
     }
 
@@ -213,6 +248,16 @@ public final class RunMeter {
             }
         }
 
+        private final java.util.concurrent.atomic.AtomicInteger thoughtChars =
+            new java.util.concurrent.atomic.AtomicInteger(-1);
+
+        /** Characters of thinking read so far, for a server that gives no count of it. */
+        public void thought(int chars) {
+            if (chars > 0 && tag != null) {
+                thoughtChars.updateAndGet(sofar -> Math.max(0, sofar) + chars);
+            }
+        }
+
         /**
          * Everything about this call has been told: hand it to the recorder. Only the first
          * call counts, so every way a call can end may call this.
@@ -225,7 +270,8 @@ public final class RunMeter {
             end();
             try {
                 recorder.finished(begun,
-                    new Finished(snapshot(), endpoint, answerChars.get(), reasoning));
+                    new Finished(snapshot(), endpoint, answerChars.get(), reasoning,
+                        tag.purpose(), tag.candidate(), thoughtChars.get()));
             } catch (RuntimeException e) {                                 // noqa
                 // Counting must never fail the call it counts.
             }
