@@ -80,6 +80,13 @@ public final class KoogAgentRuntime implements AgentRuntime {
      */
     static final int MAX_CONSECUTIVE_COMPACTIONS = 3;
 
+    /**
+     * What a user message begun by the session itself says (section 94; see
+     * {@link CountedNotSent}). It asks for nothing new: the results it follows are the answers
+     * to the model's own calls.
+     */
+    static final String GO_ON = "Those are the results of your calls. Go on with your work.";
+
     private final TraceHub traceHub;
 
     public KoogAgentRuntime() {
@@ -541,9 +548,82 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 // Before the next request, not after it: this is the only moment at which the
                 // conversation can still be made small enough to be answered.
                 compactIfNeeded(ctx);
-                tidyIfAsked(ctx);
+                boolean tidied = tidyIfAsked(ctx);
                 final List<ReceivedToolResult> toSend = withoutRepeatedContent(ctx, calls, results);
-                response = ask(ctx, () -> ctx.sendToolResults(toSend));
+                if (countedNotSent.newMessageDue(tidied, spec.options().tidyAboveTokens())) {
+                    response = askInANewMessage(ctx, toSend);
+                } else {
+                    response = ask(ctx, () -> ctx.sendToolResults(toSend));
+                }
+            }
+        }
+
+        /**
+         * What the server counts as input on this session's calls and the session did not send:
+         * see {@link CountedNotSent}.
+         */
+        private final CountedNotSent countedNotSent = new CountedNotSent();
+
+        /**
+         * Sends a turn's tool results and begins a new user message after them, in one request
+         * (section 94). A server that counts the model's earlier thinking as input on every
+         * later call of the same user message stops counting it here; measured on the paid
+         * server, see {@link CountedNotSent}. The results go into the conversation exactly as
+         * {@code sendToolResults} puts them there, as one message, and the request then adds
+         * the user message.
+         */
+        private Message.Assistant askInANewMessage(AIAgentFunctionalContext ctx,
+                                                   List<ReceivedToolResult> results) {
+            long counted = countedNotSent.excessTokens();
+            ctx.llm().<Void>writeSession(session -> {
+                Prompt current = session.getPrompt();
+                List<MessagePart.RequestPart> parts = new ArrayList<>();
+                for (ReceivedToolResult result : results) {
+                    parts.add(result.toMessagePart());
+                }
+                List<Message> messages = new ArrayList<>(current.getMessages());
+                messages.add(new Message.User(parts,
+                    ai.koog.prompt.message.RequestMetaInfo.Companion.getEmpty(), null));
+                session.setPrompt(new Prompt(messages, current.getId(), current.getParams()));
+                return null;
+            });
+            countedNotSent.beginsNewMessage();
+            String sentence = "At turn " + turns.get() + " the model server counted about "
+                + counted + " input tokens this session had not sent (what the model thought "
+                + "before its earlier calls). The next request begins a new user message, at "
+                + "which the server stops counting them.";
+            log.info("Session '{}': {}", spec.role(), sentence);
+            tracer.nudge(sentence);
+            return ask(ctx, () -> ctx.requestLLM(GO_ON));
+        }
+
+        /**
+         * Tells {@link CountedNotSent} what the call just answered was sent and counted for. The
+         * conversation the session now holds ends on that call's answer; what was sent is
+         * everything before it.
+         */
+        private void noteCountedNotSent(AIAgentFunctionalContext ctx, Message.Assistant answer) {
+            try {
+                Integer reported = answer == null || answer.getMetaInfo() == null ? null
+                    : answer.getMetaInfo().getInputTokensCount();
+                if (reported == null) {
+                    return;
+                }
+                List<Message> held = ctx.llm().writeSession(
+                    session -> session.getPrompt().getMessages());
+                int upTo = held.isEmpty() || !(held.get(held.size() - 1) instanceof Message.Assistant)
+                    ? held.size() : held.size() - 1;
+                boolean wasNoUse = countedNotSent.noUse();
+                countedNotSent.called(HistoryTrim.estimateTokens(held.subList(0, upTo)), reported);
+                if (!wasNoUse && countedNotSent.noUse()) {
+                    log.info("Session '{}': a new user message did not stop the model server "
+                        + "counting input this session had not sent (still about {} tokens); "
+                        + "no further one is begun for that in this session", spec.role(),
+                        countedNotSent.excessTokens());
+                }
+            } catch (RuntimeException e) {                                 // noqa
+                log.debug("Session '{}': counted-not-sent not judged: {}", spec.role(),
+                    e.toString());
             }
         }
 
@@ -664,6 +744,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
             if (hasReasoning(answer)) {
                 dropReasoningFromSessionHistory(ctx);
             }
+            noteCountedNotSent(ctx, answer);
             return answer;
         }
 
@@ -678,6 +759,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
             try {
                 UsageTap.Seen seen = tap.last();
                 metered.cached(seen.cachedPromptTokens());
+                metered.reasoning(seen.reasoningTokens());
                 metered.request(seen.requestChars(), seen.samePrefixChars());
                 if (answer != null && answer.getMetaInfo() != null) {
                     Integer sent = answer.getMetaInfo().getInputTokensCount();
@@ -848,11 +930,13 @@ public final class KoogAgentRuntime implements AgentRuntime {
          * ({@link SessionOptions#tidyAboveTokens}). Never stops the session and never counts as
          * a compaction: it is housekeeping well below the room, not a conversation that no
          * longer fits.
+         *
+         * @return true when something was shortened on this turn
          */
-        private void tidyIfAsked(AIAgentFunctionalContext ctx) {
+        private boolean tidyIfAsked(AIAgentFunctionalContext ctx) {
             SessionOptions options = spec.options();
             if (options.tidyAboveTokens() <= 0) {
-                return;
+                return false;
             }
             // The same mark whether or not the server caches the prompt head: input tokens are
             // counted raw (section 67).
@@ -874,6 +958,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
                     spec.role(), turns.get(),
                     result.dropped(), result.tokensBefore(), result.tokensAfter());
             }
+            return result.changed();
         }
 
         /** Ends the worker, with the numbers in the operator's own words on the way out. */

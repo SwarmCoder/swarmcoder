@@ -60,9 +60,22 @@ final class UsageTap implements KoogHttpClient.Factory {
      * @param requestChars       the request body's length, or -1 when it was not text
      * @param samePrefixChars    how much of its head the session's previous request shared; -1
      *                           on the session's first call
+     * @param reasoningTokens    how many of the answer's tokens the server says were thinking
+     *                           ({@code completion_tokens_details.reasoning_tokens}); -1 when
+     *                           it gave none
      */
-    record Seen(int cachedPromptTokens, int requestChars, int samePrefixChars) {
-        static final Seen NOTHING = new Seen(-1, -1, -1);
+    record Seen(int cachedPromptTokens, int requestChars, int samePrefixChars,
+                int reasoningTokens) {
+        static final Seen NOTHING = new Seen(-1, -1, -1, -1);
+    }
+
+    /** The server's count of an answer's thinking tokens, or -1 when {@code usage} has none. */
+    static int reasoningTokens(JsonNode usage) {
+        if (usage == null || !usage.isObject()) {
+            return -1;
+        }
+        JsonNode count = usage.path("completion_tokens_details").path("reasoning_tokens");
+        return count.isNumber() ? count.asInt() : -1;
     }
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -102,7 +115,7 @@ final class UsageTap implements KoogHttpClient.Factory {
         }
         String before = previousRequest;
         previousRequest = text;
-        last = new Seen(-1, text.length(), before == null ? -1 : samePrefix(before, text));
+        last = new Seen(-1, text.length(), before == null ? -1 : samePrefix(before, text), -1);
     }
 
     void received(Object response) {
@@ -116,7 +129,8 @@ final class UsageTap implements KoogHttpClient.Factory {
                 serverCaches = true;
             }
             Seen sent = last;
-            last = new Seen(cached, sent.requestChars(), sent.samePrefixChars());
+            last = new Seen(cached, sent.requestChars(), sent.samePrefixChars(),
+                reasoningTokens(usage));
         } catch (Exception notJson) {                                      // noqa
             // Not ours to judge: the framework's own client reports a body it cannot read.
         }
