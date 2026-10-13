@@ -41,10 +41,56 @@ package com.swarmcoder.domain;
  * @param estimated     a count here is an estimate from the size of the text (characters / 4)
  *                      because the server gave none
  */
-public record CallUsageRecord(String role, String task, String worker, String model,
-                              String endpointClass, String purpose, String candidate,
-                              long startedAt, long millis, long input, long cachedInput,
-                              long output, long thinking, boolean failed, boolean estimated) {
+public final class CallUsageRecord {
+    private final String role;
+    private final String task;
+    private final String worker;
+    private final String model;
+    private final String endpointClass;
+    private final String purpose;
+    private final String candidate;
+    private final long startedAt;
+    private final long millis;
+    private final long input;
+    private final long cachedInput;
+    private final long output;
+    private final long thinking;
+    private final boolean failed;
+    private final boolean estimated;
+
+    public CallUsageRecord(String role, String task, String worker, String model, String endpointClass, String purpose, String candidate, long startedAt, long millis, long input, long cachedInput, long output, long thinking, boolean failed, boolean estimated) {
+        this.role = role;
+        this.task = task;
+        this.worker = worker;
+        this.model = model;
+        this.endpointClass = endpointClass;
+        this.purpose = purpose;
+        this.candidate = candidate;
+        this.startedAt = startedAt;
+        this.millis = millis;
+        this.input = input;
+        this.cachedInput = cachedInput;
+        this.output = output;
+        this.thinking = thinking;
+        this.failed = failed;
+        this.estimated = estimated;
+    }
+
+    public String role() { return role; }
+    public String task() { return task; }
+    public String worker() { return worker; }
+    public String model() { return model; }
+    public String endpointClass() { return endpointClass; }
+    public String purpose() { return purpose; }
+    public String candidate() { return candidate; }
+    public long startedAt() { return startedAt; }
+    public long millis() { return millis; }
+    public long input() { return input; }
+    public long cachedInput() { return cachedInput; }
+    public long output() { return output; }
+    public long thinking() { return thinking; }
+    public boolean failed() { return failed; }
+    public boolean estimated() { return estimated; }
 
     /** True unless the call went to the operator's own server. */
     public boolean paid() {

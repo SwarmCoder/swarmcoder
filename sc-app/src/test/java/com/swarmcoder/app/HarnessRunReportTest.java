@@ -339,16 +339,17 @@ class HarnessRunReportTest {
                 com.swarmcoder.inference.LookupMeter.Kind.SHELL_READ, 7, 900)));
 
         assertThat(table)
-            .as("language-server queries and document sections are kinds of their own, the "
-                + "last columns of kinds")
-            .contains("| language-server queries | document outlines and sections | acceptance-test reads | journey checks | share of "
-                + "characters from the tree, the language server and document sections |")
+            .as("language-server queries, document sections and facts the project already "
+                + "holds are kinds of their own, the last columns of kinds")
+            .contains("| language-server queries | document outlines and sections | acceptance-test reads | journey checks | facts the project already "
+                + "holds | share of characters from the tree, the language server and document "
+                + "sections | of all these, about the reference material |")
             .contains("| planner | 5 call(s), 1000 chars | 2 call(s), 3000 chars | 0 | 0 | 0 | 0 "
-                + "| 3 call(s), 1000 chars | 0 | 0 | 0 | 40% |")
+                + "| 3 call(s), 1000 chars | 0 | 0 | 0 | 0 | 40% | 0 |")
             .as("a document read by section counts as structured, a whole file does not")
             .contains("| architect | 0 | 0 | 1 call(s), 1000 chars | 0 | 0 | 0 | 0 "
-                + "| 4 call(s), 3000 chars | 0 | 0 | 75% |")
-            .contains("| worker | 0 | 0 | 0 | 0 | 0 | 7 call(s), 900 chars | 0 | 0 | 0 | 0 | 0% |");
+                + "| 4 call(s), 3000 chars | 0 | 0 | 0 | 75% | 0 |")
+            .contains("| worker | 0 | 0 | 0 | 0 | 0 | 7 call(s), 900 chars | 0 | 0 | 0 | 0 | 0 | 0% | 0 |");
         assertThat(HarnessRunReport.lookupsByKind(List.of())).contains("not recorded");
     }
 
