@@ -142,17 +142,25 @@ class ReferenceDocsReachWorkersTest {
             .contains("public void render()");
     }
 
-    /** Fault 3: the brief carries the catalogue AND the slice this task is actually about. */
+    /**
+     * Fault 3: the brief carries the slice this task is actually about and points to the lookup
+     * that names every document (section 100 moved the list out of the brief).
+     */
     @Test
-    void theBriefNamesEveryDocumentAndCarriesTheRelevantSections() throws Exception {
+    void theBriefPointsToTheDocumentLookupAndCarriesTheRelevantSections() throws Exception {
         writeFramework();
 
         KnowledgeBrief brief = librarian().assembleBrief(repo,
             task("Add a signup form", "Lay the fields out with FormLayout and a Save Button"));
         String text = brief.renderedMarkdown();
 
-        // The catalogue: what exists, by name.
-        assertThat(text).contains("docs/UI_COMPONENTS.md").contains("docs/guides/persistence.md");
+        // The catalogue is no longer in the brief: it says how many there are and where to list them.
+        assertThat(text).doesNotContain("docs/guides/persistence.md");
+        assertThat(text).contains("3 document(s)").contains("doc_outline");
+        // The lookup returns every document by name.
+        String listing = new DocumentQueries(librarian().curator()).outlineOf("");
+        assertThat(listing).contains("UI_COMPONENTS.md").contains("persistence.md")
+            .contains("README.md");
         // The slice: the section that answers this task, in full.
         assertThat(text).contains("addFormItem(component, \"Label\")");
         // And it says, in the prefix, not to go decompiling instead.
@@ -427,14 +435,14 @@ class ReferenceDocsReachWorkersTest {
         String brief = librarian().assembleBrief(repo,
             task("Add a signup form", "FormLayout and a Save Button")).renderedMarkdown();
 
-        // The 623-token pitch is gone; what remains is the catalogue's one line, which is the
-        // README's first sentence and is what tells a worker whether to open it at all.
+        // The 623-token pitch is gone, and so is the list of documents by name (section 100):
+        // the brief only points to the lookup, which still names the README.
         assertThat(brief).doesNotContain("filler filler filler");
-        assertThat(brief)
-            .as("the README is still catalogued by name, one lookup_api call away")
-            .contains("README.md")
-            .as("with one line saying what it is")
-            .contains("README.md — DemoStack: A pure-Java web framework.");
+        assertThat(brief).doesNotContain("README.md — DemoStack: A pure-Java web framework.");
+        assertThat(brief).contains("doc_outline");
+        assertThat(new DocumentQueries(librarian().curator()).outlineOf(""))
+            .as("the README is still named by the lookup")
+            .contains("README.md");
         assertThat(brief.length()).isLessThan(16_100);
         assertThat(librarian().curator().conventions(3_000))
             .as("the channel still exists for the chat analyst")

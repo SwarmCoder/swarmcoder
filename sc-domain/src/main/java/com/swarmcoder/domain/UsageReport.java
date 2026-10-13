@@ -219,10 +219,50 @@ public final class UsageReport {
      * @param thinking       how many of {@code output} were thinking
      * @param oneByOne       how many of {@code calls} were kept one by one
      */
-    public record RoleFigures(String role, String server, int calls, int failed, long input,
-                              long cachedInput, long output, long thinking, long medianInput,
-                              long largestInput, String largestPurpose, int oneByOne,
-                              double seconds) {
+    public static final class RoleFigures {
+        private final String role;
+        private final String server;
+        private final int calls;
+        private final int failed;
+        private final long input;
+        private final long cachedInput;
+        private final long output;
+        private final long thinking;
+        private final long medianInput;
+        private final long largestInput;
+        private final String largestPurpose;
+        private final int oneByOne;
+        private final double seconds;
+
+        public RoleFigures(String role, String server, int calls, int failed, long input, long cachedInput, long output, long thinking, long medianInput, long largestInput, String largestPurpose, int oneByOne, double seconds) {
+            this.role = role;
+            this.server = server;
+            this.calls = calls;
+            this.failed = failed;
+            this.input = input;
+            this.cachedInput = cachedInput;
+            this.output = output;
+            this.thinking = thinking;
+            this.medianInput = medianInput;
+            this.largestInput = largestInput;
+            this.largestPurpose = largestPurpose;
+            this.oneByOne = oneByOne;
+            this.seconds = seconds;
+        }
+
+        public String role() { return role; }
+        public String server() { return server; }
+        public int calls() { return calls; }
+        public int failed() { return failed; }
+        public long input() { return input; }
+        public long cachedInput() { return cachedInput; }
+        public long output() { return output; }
+        public long thinking() { return thinking; }
+        public long medianInput() { return medianInput; }
+        public long largestInput() { return largestInput; }
+        public String largestPurpose() { return largestPurpose; }
+        public int oneByOne() { return oneByOne; }
+        public double seconds() { return seconds; }
     }
 
     /** One {@link RoleFigures} per role and class of server, in the order of {@link #rowsOf}. */
