@@ -104,12 +104,53 @@ public final class BrowserVerifier {
     private static final int NAVIGATION_TIMEOUT_MS = 30_000;
 
     private final BlobSink blobSink;
+    /** Set by a {@link #run} whose application never became ready; null otherwise. */
+    private StartFailure startFailure;
 
     public BrowserVerifier(BlobSink blobSink) {
         this.blobSink = blobSink == null ? BlobSink.NONE : blobSink;
     }
 
+    /**
+     * Why the application of the last {@link #run} did not start, as facts: whether its serve
+     * command had ended and how, and what it printed (section 92). Null when it started, and
+     * when the stage could not be tried at all.
+     */
+    public StartFailure startFailure() {
+        return startFailure;
+    }
+
+    /**
+     * Records an application that never answered: the serve command's exit or that it was
+     * still running, and both ends of its output, stored where {@code blob_text} reads it.
+     * Called while the service handle is still open - its log is read from the container.
+     */
+    private StartFailure didNotStart(ExecTarget.ServiceHandle service, String probeUrl,
+                                     boolean inside, int timeoutSeconds, long waitedSeconds,
+                                     StringBuilder fullLog) {
+        ExecTarget.Exited exited = service.exited().orElse(null);
+        if (exited == null && !service.isAlive()) {
+            // A handle that cannot say how its command ended still knows that it has.
+            exited = new ExecTarget.Exited(null, waitedSeconds);
+        }
+        ServeOutput output = service.outputKept(ServeOutput.FIRST_BYTES, ServeOutput.LAST_BYTES);
+        String ref = output.isEmpty() ? null
+            : blobSink.put(output.text().getBytes(StandardCharsets.UTF_8));
+        StartFailure failure = new StartFailure(probeUrl, inside, timeoutSeconds, exited,
+            waitedSeconds, output, ref);
+        appendLog(fullLog, "[browser] FAILED - the application never became ready: "
+            + failure.sentence() + ". " + (ref == null ? "" : failure.whereToRead() + ". ")
+            + "Its output:\n" + output.text());
+        this.startFailure = failure;
+        return failure;
+    }
+
+    private static long secondsSince(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000_000L;
+    }
+
     public BrowserCheckResults run(ExecTarget target, VerifySpec.BrowserSpec spec, StringBuilder fullLog) {
+        this.startFailure = null;
         if (target.browserChecksRunInside() && spec.serve() != null) {
             // A served application and built static pages alike: the pages are model-written code
             // too, so a browser looks at them inside the container, never on this PC.
@@ -181,17 +222,17 @@ public final class BrowserVerifier {
 
         String serveCommand = spec.serve().replace("{PORT}", String.valueOf(port));
         appendLog(fullLog, "[browser] $ " + serveCommand);
+        long started = System.nanoTime();
         try (ExecTarget.ServiceHandle service = target.startService(serveCommand)) {
             String probeUrl = spec.readyProbe() == null
                 ? baseUrl + "/"
                 : spec.readyProbe().replace("{PORT}", String.valueOf(port));
             if (!awaitReady(service, probeUrl, spec.effectiveReadyTimeoutSeconds(), fullLog)) {
-                String tail = tail(service.outputSoFar(), 40);
-                appendLog(fullLog, "[browser] FAILED — the application never became ready; "
-                    + "output tail:\n" + tail);
                 // A real verdict. The candidate's application was launched and did not answer.
-                return failedToStart(spec, "the application did not start: nothing answered "
-                    + probeUrl + " within " + spec.effectiveReadyTimeoutSeconds() + " seconds");
+                StartFailure failure = didNotStart(service, probeUrl, false,
+                    spec.effectiveReadyTimeoutSeconds(), secondsSince(started), fullLog);
+                return failedToStart(spec, "the application did not start: "
+                    + failure.sentence());
             }
             return checkPages(spec, baseUrl, fullLog);
         } catch (UnsupportedOperationException e) {
@@ -259,6 +300,7 @@ public final class BrowserVerifier {
             serveCommand = spec.serve().replace("{PORT}", String.valueOf(port));
             appendLog(fullLog, "[browser] (inside the container) $ " + serveCommand);
         }
+        long started = System.nanoTime();
         try (ExecTarget.ServiceHandle service = target.startService(serveCommand)) {
             String probeUrl = pages ? baseUrl + STATIC_READY_PATH
                 : spec.readyProbe() == null
@@ -266,11 +308,10 @@ public final class BrowserVerifier {
                     : spec.readyProbe().replace("{PORT}", String.valueOf(port));
             if (!awaitReadyInside(target, service, probeUrl, spec.effectiveReadyTimeoutSeconds(),
                     fullLog)) {
-                appendLog(fullLog, "[browser] FAILED - the application never became ready; "
-                    + "output tail:\n" + tail(service.outputSoFar(), 40));
-                return failedToStart(spec, "the application did not start: nothing answered "
-                    + probeUrl + " inside the container within "
-                    + spec.effectiveReadyTimeoutSeconds() + " seconds");
+                StartFailure failure = didNotStart(service, probeUrl, true,
+                    spec.effectiveReadyTimeoutSeconds(), secondsSince(started), fullLog);
+                return failedToStart(spec, "the application did not start: "
+                    + failure.sentence());
             }
             return checkPagesInside(target, spec, baseUrl, fullLog);
         } catch (UnsupportedOperationException e) {

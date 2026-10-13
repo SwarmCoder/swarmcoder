@@ -207,6 +207,21 @@ public class Task {
      * is taken up again, then clears it. Null when nothing is waiting.
      */
     private String repairInstruction;
+    /**
+     * The open question of this task's run that may be answered {@code repair} for this task
+     * when the answer names it (section 92): the build stopped because the application did not
+     * start, and the facts name several tasks, or none, so whoever answers chooses one. Null
+     * when no such question is open. The answer moves the mark to {@link #repairOfferedBy} of
+     * the task chosen and clears it on the others.
+     */
+    private UUID repairChoiceOfferedBy;
+    /**
+     * What the application printed when it was started in the merged tree and did not become
+     * ready (section 92), kept while a question about it is open so that a repair round given
+     * on an instruction can hand it to the workers after the instruction. At most the first 4
+     * KB and the last 16 KB. Null when the build did not stop on a failed start.
+     */
+    private String startOutput;
     /** Repair rounds this task was given on such an instruction, in this run. */
     private int instructedRepairRounds;
     /**
@@ -424,6 +439,16 @@ public class Task {
     public UUID repairOfferedBy() { return repairOfferedBy; }
     public UUID getRepairOfferedBy() { return repairOfferedBy; }
     public void setRepairOfferedBy(UUID repairOfferedBy) { this.repairOfferedBy = repairOfferedBy; }
+
+    public UUID repairChoiceOfferedBy() { return repairChoiceOfferedBy; }
+    public UUID getRepairChoiceOfferedBy() { return repairChoiceOfferedBy; }
+    public void setRepairChoiceOfferedBy(UUID repairChoiceOfferedBy) {
+        this.repairChoiceOfferedBy = repairChoiceOfferedBy;
+    }
+
+    public String startOutput() { return startOutput; }
+    public String getStartOutput() { return startOutput; }
+    public void setStartOutput(String startOutput) { this.startOutput = startOutput; }
 
     public String repairInstruction() { return repairInstruction; }
     public String getRepairInstruction() { return repairInstruction; }

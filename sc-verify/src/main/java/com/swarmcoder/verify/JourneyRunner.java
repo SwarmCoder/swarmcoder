@@ -43,9 +43,17 @@ public final class JourneyRunner {
      *                        {@code serve} line, no browser in the container, no container)
      * @param didNotStart     null when the application came up; otherwise what was waited for
      * @param results         one per journey, in order; empty unless the journeys were made
+     * @param startFailure    with {@code didNotStart}: whether the serve command had ended and
+     *                        how, and what it printed (section 92); null when the place the
+     *                        journey was made in kept none
      */
     public record Outcome(String couldNotRun, String didNotStart,
-                          List<JourneyFile.Result> results) {
+                          List<JourneyFile.Result> results, StartFailure startFailure) {
+
+        public Outcome(String couldNotRun, String didNotStart,
+                       List<JourneyFile.Result> results) {
+            this(couldNotRun, didNotStart, results, null);
+        }
 
         public boolean made() {
             return couldNotRun == null && didNotStart == null;
@@ -108,8 +116,9 @@ public final class JourneyRunner {
         List<JourneyFile.Result> made = new ArrayList<>();
         for (JourneyFile.Journey journey : journeys) {
             BrowserCheckResults results;
+            BrowserVerifier verifier = new BrowserVerifier(blobs);
             try (Start start = starts.open()) {
-                results = new BrowserVerifier(blobs).run(start.target(),
+                results = verifier.run(start.target(),
                     new VerifySpec.BrowserSpec(browser.serve(), browser.readyProbe(),
                         browser.readyTimeoutSeconds(), List.of(journey.toCheck(entry)),
                         browser.port()),
@@ -127,7 +136,7 @@ public final class JourneyRunner {
             String didNotStart = didNotStart(pages);
             if (didNotStart != null) {
                 // The same tree and the same command: the next start would end the same way.
-                return new Outcome(null, didNotStart, List.of());
+                return new Outcome(null, didNotStart, List.of(), verifier.startFailure());
             }
             made.add(JourneyFile.resultOf(journey, pages.isEmpty() ? null : pages.get(0)));
         }

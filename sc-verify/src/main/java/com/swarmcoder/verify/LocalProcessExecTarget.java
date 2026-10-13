@@ -241,10 +241,21 @@ public final class LocalProcessExecTarget implements ExecTarget {
                 // Service stopped — captured output stands.
             }
         });
+        long startedAt = System.nanoTime();
         return new ServiceHandle() {
             @Override
             public boolean isAlive() {
                 return process.isAlive();
+            }
+
+            @Override
+            public Optional<Exited> exited() {
+                if (process.isAlive()) {
+                    return Optional.empty();
+                }
+                // Asked when the wait for the application ends, so "after" is to that moment.
+                return Optional.of(new Exited(process.exitValue(),
+                    (System.nanoTime() - startedAt) / 1_000_000_000L));
             }
 
             @Override

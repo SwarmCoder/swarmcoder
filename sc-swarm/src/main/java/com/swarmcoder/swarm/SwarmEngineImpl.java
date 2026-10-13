@@ -249,6 +249,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             apiLookup, expertFactory == null ? () -> ExpertHelp.UNAVAILABLE : expertFactory,
             frameworkPackages == null ? List.of() : List.copyOf(frameworkPackages));
         this.verifier = new CommandPipelineVerifier(blobSink);
+        this.blobSink = blobSink == null ? BlobSink.NONE : blobSink;
         this.dispatcher.setTestsCommitOf(id -> {
             Run run = artifactStore.root().runs.get(id);
             return run == null ? null : run.acceptanceTestsCommit();
@@ -458,6 +459,13 @@ public class SwarmEngineImpl implements SwarmEngine {
      */
     public com.swarmcoder.verify.BuildBoxes buildBoxes() {
         return buildBoxes;
+    }
+
+    /** Where this engine's project keeps bulky output; what {@code blob_text} reads. */
+    private final BlobSink blobSink;
+
+    public BlobSink blobSink() {
+        return blobSink;
     }
 
     /**

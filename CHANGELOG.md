@@ -188,6 +188,23 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
 
 ### Fixed
 
+- **A build whose application does not start says why, stops at once and can be repaired.**
+  At final integration an application that exited in its first seconds was waited for until
+  the ready timeout ran out (300 seconds), and the build then stopped with "nothing answered
+  ... within 300 seconds", none of the application's own output and no answer but `retry`.
+  In a container the wait could not see the exit: the watchdog that stops a runaway service
+  slept in the service's own process group, so the group always had a running process. The
+  watchdog now runs outside the group and the wrapper records the command's exit code. The
+  stop says "the application exited with code N after S seconds" or that the serve command
+  was still running when the wait ended, shows the last lines it printed and names a
+  `blob_text` ref for the kept output (its first 4 KB and last 16 KB). The project types the
+  output names are looked up in the merged tree and matched against the files each task's
+  chosen change wrote. One task: the question offers `repair` for it, and its workers get the
+  instruction and then the output. Several tasks or none: `repair` takes a new `task`
+  argument of `answer_question` (on screen: `repair 'Task title': text`) that says which. The
+  same sentence replaces "nothing answered" in every browser check that fails to start an
+  application. See `docs/DEVELOPER_CORRECTIONS.md`, section 92.
+
 - **The Console loads nothing from the internet.** Tailwind (3.4.17) and the daisyUI stylesheet
   (5.6.14) were loaded by the browser from two public CDNs, the first with no version pinned. Both
   are now files the application serves itself, so the Console works offline and no third-party

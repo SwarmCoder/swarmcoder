@@ -115,7 +115,34 @@ public interface ExecTarget {
         /** Output captured so far (capped), for diagnosing services that die on startup. */
         String outputSoFar();
 
+        /**
+         * How the service's own command ended, when it has and nothing of it is running any
+         * more; empty while it runs, and for a handle that cannot tell (section 92). A fact
+         * read off the process, never off what it printed.
+         */
+        default Optional<Exited> exited() {
+            return Optional.empty();
+        }
+
+        /**
+         * What the service printed, both ends of it: the first {@code firstBytes} and the last
+         * {@code lastBytes}, with the middle left out when there is more (section 92). The
+         * beginning is where a start-up that is refused says why; the end is where it stopped.
+         */
+        default ServeOutput outputKept(int firstBytes, int lastBytes) {
+            return ServeOutput.keep(outputSoFar(), firstBytes, lastBytes);
+        }
+
         @Override
         void close();
     }
+
+    /**
+     * A service whose command has ended.
+     *
+     * @param exitCode     the command's exit code; null when it ended and no code was recorded
+     *                     (it was killed before it could be)
+     * @param afterSeconds how long after it was started
+     */
+    record Exited(Integer exitCode, long afterSeconds) {}
 }

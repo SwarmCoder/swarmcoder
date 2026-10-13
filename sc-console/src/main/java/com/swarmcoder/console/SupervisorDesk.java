@@ -1306,9 +1306,14 @@ public final class SupervisorDesk implements SupervisorService {
 
     @Override
     public String answerDecision(String decisionId, String answer, String text) {
+        return answerDecision(decisionId, answer, text, null);
+    }
+
+    @Override
+    public String answerDecision(String decisionId, String answer, String text, String task) {
         Decision decision = decision(decisionId);
         DecisionAnswers.Outcome outcome =
-            DecisionAnswers.answerAndResume(decisionId, answer, text, ACTOR);
+            DecisionAnswers.answerAndResume(decisionId, answer, text, task, ACTOR);
         if (!outcome.ok()) {
             return "error: " + outcome.error();
         }
@@ -1322,7 +1327,8 @@ public final class SupervisorDesk implements SupervisorService {
         }
         record(AutonomousDecisionKind.ANSWERED_RUN_QUESTION, subject,
             decision == null ? "" : clip(nn(decision.briefMarkdown()), 2_000),
-            nn(answer).strip() + (nn(text).isBlank() ? "" : ": " + text.strip()) + " — "
+            nn(answer).strip() + (nn(task).isBlank() ? "" : " (task '" + task.strip() + "')")
+                + (nn(text).isBlank() ? "" : ": " + text.strip()) + " — "
                 + outcome.note(),
             true, null, decision == null ? null : decision.id());
         return outcome.note();

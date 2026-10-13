@@ -82,7 +82,19 @@ public class FinalIntegrator {
      */
     public record Result(String integrationBranch, String failure, VerificationReport verification,
                          JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
-                         boolean journeyCorrected, JourneyDispute journeyDispute) {
+                         boolean journeyCorrected, JourneyDispute journeyDispute,
+                         StartFailed startFailed) {
+        public Result(String integrationBranch, String failure, VerificationReport verification,
+                      JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
+                      boolean journeyCorrected, JourneyDispute journeyDispute) {
+            this(integrationBranch, failure, verification, journeyFailure, ownedRefusal,
+                journeyCorrected, journeyDispute, null);
+        }
+        /** The same result, with what is known of an application that did not start. */
+        Result notStarted(StartFailed failed) {
+            return new Result(integrationBranch, failure, verification, journeyFailure,
+                ownedRefusal, journeyCorrected, journeyDispute, failed);
+        }
         public Result(String integrationBranch, String failure, VerificationReport verification,
                       JourneyFailure journeyFailure, OwnedRefusal ownedRefusal,
                       boolean journeyCorrected) {
@@ -92,7 +104,7 @@ public class FinalIntegrator {
         /** The same result, with what a person may rule on about the failed journeys. */
         Result disputing(JourneyDispute dispute) {
             return new Result(integrationBranch, failure, verification, journeyFailure,
-                ownedRefusal, journeyCorrected, dispute);
+                ownedRefusal, journeyCorrected, dispute, startFailed);
         }
         public Result(String integrationBranch, String failure) {
             this(integrationBranch, failure, null, null, null, false);
@@ -146,6 +158,27 @@ public class FinalIntegrator {
      * @param why    the facts it was, or could not be, named from
      */
     public record EarlierJourney(String path, UUID taskId, String why) {}
+
+    /**
+     * The application did not start in the merged tree, so no journey could be made (section
+     * 92), and which task of this run wrote what its output names, as far as the tree and the
+     * chosen changes say ({@link StartFailureOwner}).
+     *
+     * @param fact       whether the serve command had ended and how, in a few words
+     * @param taskId     the one task whose chosen change wrote a file that declares a type the
+     *                   output names; null when there is not exactly one
+     * @param candidates when {@code taskId} is null: the tasks that wrote such files, or, when
+     *                   none did, every task of the run that has a chosen change
+     * @param why        the facts the task was, or could not be, named from; one sentence
+     * @param output     what the application printed, both ends of it; "" when none was kept
+     */
+    public record StartFailed(String fact, UUID taskId, List<UUID> candidates, String why,
+                              String output) {
+        public StartFailed {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            output = output == null ? "" : output;
+        }
+    }
 
     /**
      * A refusal of this stage that names files one task of this run added - code nothing can
@@ -234,6 +267,17 @@ public class FinalIntegrator {
     private java.util.function.Consumer<String> runRecord = sentence -> { };
     /** Who is asked about a failed journey before a worker is; nobody by default. */
     private JourneySendBack journeySendBack;
+    /** Where the output of an application that did not start is kept; nowhere by default. */
+    private BlobSink blobs = BlobSink.NONE;
+
+    /**
+     * Keeps what an application printed when it did not start where {@code blob_text} reads it
+     * (section 92).
+     */
+    public FinalIntegrator keepingOutputIn(BlobSink sink) {
+        this.blobs = sink == null ? BlobSink.NONE : sink;
+        return this;
+    }
 
     /** The build's browser-only modules, for telling which changed file is a screen; may be null. */
     private com.swarmcoder.verify.BrowserOnlyCode.Survey browserOnly;
@@ -764,18 +808,30 @@ public class FinalIntegrator {
         JourneyRunner.Starts starts = spec.isEmpty() || !JourneyFile.canRun(spec.get()) ? null
             : boxes.cleanStarts(worktree, "A journey of final integration");
         JourneyRunner.Outcome outcome =
-            JourneyRunner.run(starts, spec.orElse(null), journeys, BlobSink.NONE, browserLog);
+            JourneyRunner.run(starts, spec.orElse(null), journeys, blobs, browserLog);
         if (outcome.couldNotRun() != null || outcome.didNotStart() != null) {
             String why = outcome.couldNotRun() != null ? outcome.couldNotRun()
                 : "the application did not start in the merged tree: " + outcome.didNotStart();
             log.warn("Run {}: {} journey(s) were not made - {}", run.id(), journeys.size(), why);
+            // What the application itself printed, and who wrote what it names (section 92).
+            // Only for a start that failed; a journey that could not be tried has neither.
+            com.swarmcoder.verify.StartFailure notStarted =
+                outcome.couldNotRun() != null ? null : outcome.startFailure();
+            StartFailed startFailed = notStarted == null ? null
+                : whoWroteWhatTheOutputNames(notStarted, graph, worktree, winners);
+            if (notStarted != null) {
+                log.warn("Run {}: the application's own output when it was started in the "
+                    + "merged tree ({}):\n{}", run.id(), notStarted.shortFact(),
+                    notStarted.output().text());
+            }
             return new Result(integrationBranch, "Every acceptance test passed on the merged "
                 + "tree, and the " + journeys.size() + " journey(s) of this project could not be "
-                + "made: " + why + ".\n\nA journey is what shows that a person can reach and use "
+                + "made: " + why + "." + StartFailureOwner.detail(notStarted)
+                + "\n\nA journey is what shows that a person can reach and use "
                 + "the screens: " + journeys.stream().map(JourneyFile.Journey::path).toList()
                 + ". One that was not made shows nothing, so the story is not delivered on it. "
                 + "Nothing was run on this PC instead. (-D" + JourneyFile.SWITCH + "=off "
-                + "delivers without journeys.)", verification);
+                + "delivers without journeys.)", verification).notStarted(startFailed);
         }
         List<JourneyFile.Result> failed = outcome.failed();
         run.setJourneysMade(journeys.size());
@@ -850,6 +906,48 @@ public class FinalIntegrator {
             : new JourneyFailure(owner.id(), JourneysOfAPlan.repairEvidence(ofOwner)))
             .disputing(new JourneyDispute(owner == null ? null : owner.id(),
                 ofOwner.stream().map(result -> result.journey().path()).toList(), earlier));
+    }
+
+    /**
+     * For an application that did not start: the project types its output names, looked up in
+     * the merged tree, and the tasks whose chosen change wrote the files that declare them
+     * (section 92, {@link StartFailureOwner}). No model; nothing is run; no word is read.
+     */
+    private StartFailed whoWroteWhatTheOutputNames(com.swarmcoder.verify.StartFailure failure,
+                                                   TaskGraph graph, Path worktree,
+                                                   Map<UUID, CandidateSolution> winners) {
+        String output = failure.output().text();
+        try {
+            com.swarmcoder.knowledge.ProjectTypes types =
+                com.swarmcoder.knowledge.ProjectTypes.of(worktree);
+            Path root = worktree.toAbsolutePath().normalize();
+            StartFailureOwner.Named named = StartFailureOwner.name(output, graph.tasks(),
+                task -> {
+                    CandidateSolution winner = winners == null ? null : winners.get(task.id());
+                    return winner == null || winner.diffUnified() == null ? List.of()
+                        : WorkerToolbox.touchedPaths(winner.diffUnified());
+                },
+                type -> {
+                    Path file = types.fileOf(type);
+                    if (file == null) {
+                        return null;
+                    }
+                    Path absolute = file.isAbsolute() ? file.normalize()
+                        : root.resolve(file).normalize();
+                    return absolute.startsWith(root)
+                        ? root.relativize(absolute).toString().replace('\\', '/')
+                        : file.toString().replace('\\', '/');
+                });
+            return new StartFailed(failure.shortFact(),
+                named.task() == null ? null : named.task().id(),
+                named.candidates().stream().map(Task::id).toList(), named.why(), output);
+        } catch (RuntimeException e) {
+            log.warn("Which task wrote what the application's output names could not be "
+                + "established: {}", e.toString());
+            return new StartFailed(failure.shortFact(), null, List.of(), "Which task of this "
+                + "build wrote what the application's output names could not be established ("
+                + e + ").", output);
+        }
     }
 
     /**

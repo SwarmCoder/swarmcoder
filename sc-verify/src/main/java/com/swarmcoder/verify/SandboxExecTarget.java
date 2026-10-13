@@ -260,12 +260,22 @@ public final class SandboxExecTarget implements ExecTarget {
      *       the happy one.</li>
      *   <li>A watchdog inside the container KILLs that same group after
      *       {@value #SERVICE_WATCHDOG_SECONDS} seconds regardless. If the orchestrator is killed
-     *       mid-check, the service still stops.</li>
+     *       mid-check, the service still stops. The watchdog runs in a session of its own, so
+     *       it is not one of the group's processes; see below.</li>
      *   <li>The container is killed when the candidate finishes, and killing a container kills
      *       every process in it. A service can never outlive its candidate — and, the part that
      *       matters for the operator's machine, it can never hold a workstation port, because a
      *       {@code network: none} container has none to hold.</li>
      * </ol>
+     *
+     * <p><b>A service that has ended is seen to have ended</b> (section 92). The watchdog used
+     * to be a child in the service's own group, so for the 30 minutes it slept "is any process
+     * of this group still running" was true whatever the service had done, and an application
+     * that exited in its first seconds was waited for until the ready timeout ran out. It is
+     * started under its own {@code setsid} now and stopped by {@code close()}. The wrapper
+     * also no longer replaces itself with the command: it runs it, and writes the command's
+     * exit code and how long it ran to a file beside the log, which {@link
+     * ServiceHandle#exited()} reads once nothing of the group is left.
      */
     @Override
     public ServiceHandle startService(String command) throws IOException {
@@ -273,13 +283,21 @@ public final class SandboxExecTarget implements ExecTarget {
         String pidFile = SERVICE_DIR + "/" + id + ".pid";
         String logFile = SERVICE_DIR + "/" + id + ".log";
         String cmdFile = SERVICE_DIR + "/" + id + ".sh";
+        String exitFile = SERVICE_DIR + "/" + id + ".exit";
+        String watchdogFile = SERVICE_DIR + "/" + id + ".wd";
         String encoded = Base64.getEncoder().encodeToString(command.getBytes(StandardCharsets.UTF_8));
 
         // The wrapper holds no candidate-authored text at all — only generated ids — so there is
         // nothing in it that could be quoted wrong. The command itself arrives as base64.
         String inner = "SCPID=$$; echo \"$SCPID\" > " + pidFile + "; "
-            + "( sleep " + SERVICE_WATCHDOG_SECONDS + "; kill -KILL \"-$SCPID\" 2>/dev/null ) & "
-            + "exec sh " + cmdFile;
+            // In a session of its own: a watchdog inside the group would keep the group
+            // "alive" for as long as it sleeps. Not a group leader when started, so setsid
+            // does not fork and $! is the watchdog's own group.
+            + "setsid sh -c \"sleep " + SERVICE_WATCHDOG_SECONDS
+            + "; kill -KILL -$SCPID 2>/dev/null\" > /dev/null 2>&1 < /dev/null & "
+            + "echo $! > " + watchdogFile + "; "
+            + "SCT0=$(date +%s); sh " + cmdFile + "; SCRC=$?; "
+            + "echo \"$SCRC $(( $(date +%s) - SCT0 ))\" > " + exitFile;
         String launcher = "mkdir -p " + SERVICE_DIR + " && "
             + "printf %s " + shellQuote(encoded) + " | base64 -d > " + cmdFile + " && "
             + "setsid sh -c " + shellQuote(inner) + " > " + logFile + " 2>&1 < /dev/null & "
@@ -296,7 +314,7 @@ public final class SandboxExecTarget implements ExecTarget {
                 + ")");
         }
         log.debug("Sandbox {} started service {} as process group {}", containerId, id, pid);
-        return new InContainerService(id, pid, pidFile, logFile, cmdFile);
+        return new InContainerService(id, pid, pidFile, logFile, cmdFile, exitFile, watchdogFile);
     }
 
     /** A background service running in the container, addressed by its process group id. */
@@ -307,10 +325,15 @@ public final class SandboxExecTarget implements ExecTarget {
         private final String pidFile;
         private final String logFile;
         private final String cmdFile;
+        private final String exitFile;
+        private final String watchdogFile;
+        private final long startedAt = System.nanoTime();
         private volatile boolean closed;
 
         private InContainerService(String id, String pid, String pidFile, String logFile,
-                                   String cmdFile) {
+                                   String cmdFile, String exitFile, String watchdogFile) {
+            this.exitFile = exitFile;
+            this.watchdogFile = watchdogFile;
             this.id = id;
             this.pid = pid;
             this.pidFile = pidFile;
@@ -344,6 +367,55 @@ public final class SandboxExecTarget implements ExecTarget {
         }
 
         @Override
+        public Optional<Exited> exited() {
+            if (closed) {
+                return Optional.empty();
+            }
+            try {
+                ExecResult result = exec(aliveFunction(pid)
+                    + "if sc_alive; then echo SC_ALIVE; else echo SC_DEAD; "
+                    + "cat " + exitFile + " 2>/dev/null; fi", 20);
+                String output = result.output() == null ? "" : result.output();
+                if (output.contains("SC_ALIVE") || !output.contains("SC_DEAD")) {
+                    return Optional.empty();
+                }
+                // "<exit code> <seconds it ran>", as the wrapper wrote it; absent when the
+                // wrapper was killed before it could write.
+                for (String line : output.substring(output.indexOf("SC_DEAD")).split("\\R")) {
+                    String[] parts = line.trim().split(" ");
+                    if (parts.length == 2 && isNumber(parts[0]) && isNumber(parts[1])) {
+                        return Optional.of(new Exited(Integer.parseInt(parts[0]),
+                            Long.parseLong(parts[1])));
+                    }
+                }
+                return Optional.of(new Exited(null,
+                    (System.nanoTime() - startedAt) / 1_000_000_000L));
+            } catch (IOException | RuntimeException e) {
+                return Optional.empty();
+            }
+        }
+
+        @Override
+        public ServeOutput outputKept(int firstBytes, int lastBytes) {
+            try {
+                String counted = firstNumber(exec("wc -c < " + logFile + " 2>/dev/null", 30)
+                    .output());
+                long total = counted == null ? 0 : Long.parseLong(counted);
+                if (total <= (long) firstBytes + lastBytes) {
+                    return new ServeOutput(exec("cat " + logFile + " 2>/dev/null", 30).output(),
+                        "", total);
+                }
+                return new ServeOutput(
+                    exec("head -c " + firstBytes + " " + logFile + " 2>/dev/null", 30).output(),
+                    exec("tail -c " + lastBytes + " " + logFile + " 2>/dev/null", 30).output(),
+                    total);
+            } catch (IOException | RuntimeException e) {
+                return new ServeOutput("[service log unavailable: " + e.getMessage() + "]", "",
+                    0);
+            }
+        }
+
+        @Override
         public void close() {
             if (closed) {
                 return;
@@ -351,11 +423,14 @@ public final class SandboxExecTarget implements ExecTarget {
             closed = true;
             String group = shellQuote("-" + pid);
             String stop = aliveFunction(pid)
+                // The watchdog first: it is outside the group and would otherwise sleep on.
+                + "SCWD=$(cat " + watchdogFile + " 2>/dev/null); "
+                + "[ -n \"$SCWD\" ] && kill -KILL \"-$SCWD\" 2>/dev/null; "
                 + "kill -TERM " + group + " 2>/dev/null; "
                 + "i=0; while [ $i -lt 20 ]; do sc_alive || break; sleep 0.5; i=$((i+1)); done; "
                 + "kill -KILL " + group + " 2>/dev/null; sleep 0.3; "
                 // The log stays: it is the only account of a service that died on startup.
-                + "rm -f " + pidFile + " " + cmdFile + "; "
+                + "rm -f " + pidFile + " " + cmdFile + " " + watchdogFile + "; "
                 + "if sc_alive; then echo SC_STILL_RUNNING; else echo SC_STOPPED; fi";
             try {
                 ExecResult result = exec(stop, 60);
@@ -405,6 +480,10 @@ public final class SandboxExecTarget implements ExecTarget {
             }
         }
         return null;
+    }
+
+    private static boolean isNumber(String text) {
+        return !text.isEmpty() && text.length() <= 9 && text.chars().allMatch(Character::isDigit);
     }
 
     private static String shellQuote(String s) {

@@ -1334,6 +1334,9 @@ public class GreenfieldWorkflow {
                     // round first, and the run is merged and verified with whatever the task's
                     // choice is afterwards - the new one, or the earlier one when none passed.
                     giveInstructedRepairRounds(run, "FINAL_INTEGRATION");
+                    // The output of a start that failed in an earlier pass (section 92) has
+                    // been handed on or was not asked for; this pass keeps its own.
+                    dropKeptStartOutput(run);
                     // A failed journey goes back to its author before any worker (section 69).
                     // The author is a model: when its endpoint is down nothing was learned, and
                     // the stage runs again when it answers - said after the integrator has
@@ -1344,6 +1347,8 @@ public class GreenfieldWorkflow {
                     FinalIntegrator.Result integration =
                         new FinalIntegrator(gitService, artifactStore, lspFactory, protectedPaths, buildBoxes)
                             .tellingTheRun(this::log)
+                            .keepingOutputIn(swarmEngine instanceof SwarmEngineImpl engine
+                                ? engine.blobSink() : com.swarmcoder.verify.BlobSink.NONE)
                             .knowingBrowserOnlyCode(browserOnlySurveyOrNone())
                             .sendingJourneysBackTo((task, failed, mergedTree, onMergedTree) -> {
                                 try {
@@ -1394,15 +1399,22 @@ public class GreenfieldWorkflow {
                         // before the detail so that it is inside what a supervisor is shown.
                         final JourneysOfAPlan.Offer verdicts = journeyVerdictsOffered(run,
                             integration);
+                        // An application that did not start (section 92): what it did, who
+                        // wrote what its output names, and what may be answered - said first,
+                        // for the same reason.
+                        final StartFailureOwner.Offer afterStart = startOfferFor(run,
+                            integration);
                         parkRun(run, "FINAL_INTEGRATION failed on branch "
                             + integration.integrationBranch() + ":\n\n"
                             // A repair round stopped by its time limit says so first
                             // (section 91): more time is then the remedy.
                             + repairTimeLimitNotes(run)
+                            + (afterStart.paragraph().isEmpty() ? ""
+                                : afterStart.paragraph() + "\n\n")
                             + (verdicts.paragraph().isEmpty() ? ""
                                 : verdicts.paragraph() + "\n\n") + integration.failure(),
                             question -> offerRepairAfterIntegration(stopping, question,
-                                integration, verdicts));
+                                integration, verdicts, afterStart));
                         persister.save(run); // stays in FINAL_INTEGRATION; resumable after the fix
                         return null;
                     }
@@ -2107,6 +2119,31 @@ public class GreenfieldWorkflow {
             task.setJourneyInstruction(null);
             task.setJourneyInstructionBy(null);
             artifactStore.saveTask(task);
+        }
+    }
+
+    /** What a stop on an application that did not start may be answered (section 92). */
+    private StartFailureOwner.Offer startOfferFor(Run run, FinalIntegrator.Result integration) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || integration.startFailed() == null) {
+            return StartFailureOwner.Offer.NONE;
+        }
+        return StartFailureOwner.offerFor(graph.tasks(), integration.startFailed());
+    }
+
+    /** Takes the kept output of an earlier failed start off this run's tasks. */
+    private void dropKeptStartOutput(Run run) {
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null) {
+            return;
+        }
+        for (Task task : new ArrayList<>(graph.tasks())) {
+            if (task.startOutput() != null) {
+                task.setStartOutput(null);
+                artifactStore.saveTask(task);
+            }
         }
     }
 
@@ -7347,10 +7384,17 @@ public class GreenfieldWorkflow {
      */
     private void offerRepairAfterIntegration(Run run, UUID question,
                                              FinalIntegrator.Result integration,
-                                             JourneysOfAPlan.Offer verdicts) {
+                                             JourneysOfAPlan.Offer verdicts,
+                                             StartFailureOwner.Offer afterStart) {
+        // The task the application's own output names when it did not start (section 92) is
+        // named the same way as the owner of a failed journey or of refused code.
         UUID named = integration.journeyFailure() != null
             ? integration.journeyFailure().taskId()
-            : integration.ownedRefusal() != null ? integration.ownedRefusal().taskId() : null;
+            : integration.ownedRefusal() != null ? integration.ownedRefusal().taskId()
+            : afterStart.repair();
+        String startOutput = integration.startFailed() == null
+                || integration.startFailed().output().isBlank() ? null
+            : integration.startFailed().output();
         TaskGraph graph = run.taskGraphId() == null ? null
             : artifactStore.root().taskGraphs.get(run.taskGraphId());
         if (graph == null) {
@@ -7363,6 +7407,17 @@ public class GreenfieldWorkflow {
             UUID screen = verdicts.screen().containsKey(task.id()) ? question : null;
             UUID journey = task.id().equals(verdicts.journeyOf()) ? question : null;
             List<String> disputed = verdicts.disputedFor(task);
+            // Several tasks, or none, named by a failed start: whoever answers chooses one.
+            UUID choice = afterStart.choices().contains(task.id()) ? question : null;
+            // Kept on each task the answer may be for, so its round can hand it on.
+            String output = task.id().equals(afterStart.repair()) || choice != null
+                ? startOutput : null;
+            if (!java.util.Objects.equals(task.repairChoiceOfferedBy(), choice)
+                    || !java.util.Objects.equals(task.startOutput(), output)) {
+                task.setRepairChoiceOfferedBy(choice);
+                task.setStartOutput(output);
+                artifactStore.saveTask(task);
+            }
             if (!java.util.Objects.equals(task.repairOfferedBy(), offer)
                     || !java.util.Objects.equals(task.screenVerdictOfferedBy(), screen)
                     || !java.util.Objects.equals(task.journeyVerdictOfferedBy(), journey)
@@ -7405,7 +7460,10 @@ public class GreenfieldWorkflow {
                 + instruction);
             boolean chosen = false;
             try {
-                chosen = engine.repairOnInstruction(task, run.id(), instruction);
+                // After a start that failed, the workers are told what the application
+                // printed, after the instruction (section 92). Copied, not re-typed.
+                chosen = engine.repairOnInstruction(task, run.id(),
+                    withStartOutput(instruction, task.startOutput()));
             } catch (EndpointOutage outage) {
                 throw outage; // nothing was learned: the stage runs again when the endpoint answers
             } catch (RuntimeException e) {
@@ -7423,6 +7481,16 @@ public class GreenfieldWorkflow {
             }
         }
         return unrepaired;
+    }
+
+    /** The instruction, then what the application printed when it did not start. */
+    static String withStartOutput(String instruction, String startOutput) {
+        if (startOutput == null || startOutput.isBlank()) {
+            return instruction;
+        }
+        return instruction.strip() + "\n\nThe application did not start in the merged tree. "
+            + "What it printed when it was started there (the beginning and the end, as "
+            + "printed):\n" + startOutput.strip();
     }
 
     /**

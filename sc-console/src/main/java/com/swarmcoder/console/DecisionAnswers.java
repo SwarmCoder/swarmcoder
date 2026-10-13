@@ -153,6 +153,18 @@ public final class DecisionAnswers {
                 + "task already has. text is REQUIRED: it is what the repair workers are told "
                 + "to change. " + roundsLeft(tasks) + " Use it when the cause is something the "
                 + "workers must change; retry repeats the same stop", true));
+        } else {
+            // A stop the facts name several tasks for, or none (section 92): the same round,
+            // for the one task the answer names.
+            List<Task> choices = repairChoices(store, decision);
+            if (!choices.isEmpty() && whyNoRepair(store, decision, choices) == null) {
+                options.add(new Option(InstructedRepair.TOKEN, "give the workers of ONE task "
+                    + "one more repair round, started from the candidate the task has. task "
+                    + "is REQUIRED: one of " + String.join(", ", choices.stream()
+                        .map(task -> "'" + task.title() + "'").toList())
+                    + ". text is REQUIRED: it is what the repair workers are told to change. "
+                    + roundsLeft(choices) + " retry repeats the same stop", true));
+            }
         }
         List<Task> retesting = retestTasks(store, decision);
         if (whyNoRetest(store, decision, retesting) == null) {
@@ -388,6 +400,42 @@ public final class DecisionAnswers {
             .filter(task -> decision.id().equals(task.repairOfferedBy())).toList();
     }
 
+    /**
+     * The tasks of the question's build that it may be answered {@code repair} for when the
+     * answer names one of them (section 92), and that still have a round left.
+     */
+    static List<Task> repairChoices(ArtifactStore store, Decision decision) {
+        if (decision == null || decision.kind() != DecisionKind.BLOCKED_TASK
+                || decision.runId() == null) {
+            return List.of();
+        }
+        Run run = store.root().runs.get(decision.runId());
+        TaskGraph graph = run == null || run.taskGraphId() == null ? null
+            : store.root().taskGraphs.get(run.taskGraphId());
+        if (graph == null || graph.tasks() == null) {
+            return List.of();
+        }
+        return graph.tasks().stream()
+            .filter(task -> decision.id().equals(task.repairChoiceOfferedBy()))
+            .filter(InstructedRepair::roundLeft).toList();
+    }
+
+    /** The one of {@code choices} that {@code named} names, by its title or its id; or null. */
+    static Task chosenAmong(List<Task> choices, String named) {
+        String wanted = named == null ? "" : named.strip();
+        if (wanted.length() > 1 && wanted.startsWith("'") && wanted.endsWith("'")) {
+            wanted = wanted.substring(1, wanted.length() - 1).strip();
+        }
+        if (wanted.isEmpty()) {
+            return null;
+        }
+        final String name = wanted;
+        List<Task> matching = choices.stream()
+            .filter(task -> name.equalsIgnoreCase(task.title() == null ? "" : task.title().strip())
+                || name.equalsIgnoreCase(String.valueOf(task.id()))).toList();
+        return matching.size() == 1 ? matching.get(0) : null;
+    }
+
     /** Why this question cannot be answered {@code repair}, or null when it can. */
     static String whyNoRepair(ArtifactStore store, Decision decision, List<Task> tasks) {
         if (decision.kind() != DecisionKind.BLOCKED_TASK) {
@@ -456,6 +504,15 @@ public final class DecisionAnswers {
      */
     public static Outcome answerAndResume(String decisionId, String token, String text,
                                           String actor) {
+        return answerAndResume(decisionId, token, text, null, actor); // no task named
+    }
+
+    /**
+     * @param taskNamed for {@code repair} on a question that offers it for one of several tasks
+     *             (section 92): the title or id of the task chosen. Ignored elsewhere
+     */
+    public static Outcome answerAndResume(String decisionId, String token, String text,
+                                          String taskNamed, String actor) {
         ConsoleContext context = ConsoleContext.get();
         if (context == null) {
             return failed("the console is not wired up yet");
@@ -481,8 +538,25 @@ public final class DecisionAnswers {
         String word = token == null ? "" : token.strip().toLowerCase(Locale.ROOT);
         List<Option> options = optionsFor(store, decision);
         List<Task> repairing = List.of();
+        List<Task> chosenFrom = List.of();
         if (decision.kind() == DecisionKind.BLOCKED_TASK && word.equals(InstructedRepair.TOKEN)) {
             repairing = repairTasks(store, decision);
+            if (repairing.isEmpty()) {
+                // Offered for one of several tasks: the answer says which (section 92).
+                chosenFrom = repairChoices(store, decision);
+                if (!chosenFrom.isEmpty()) {
+                    Task chosen = chosenAmong(chosenFrom, taskNamed);
+                    if (chosen == null) {
+                        return failed("Not recorded: this question offers repair for one of "
+                            + "several tasks, so repair needs task: one of "
+                            + String.join(", ", chosenFrom.stream()
+                                .map(one -> "'" + one.title() + "'").toList())
+                            + (taskNamed == null || taskNamed.isBlank() ? "" : " ('" + taskNamed.strip()
+                                + "' is not one of them)") + ".");
+                    }
+                    repairing = List.of(chosen);
+                }
+            }
             String whyNot = whyNoRepair(store, decision, repairing);
             if (whyNot != null) {
                 return failed("Not recorded: " + whyNot + ". The answers this question accepts "
@@ -555,9 +629,21 @@ public final class DecisionAnswers {
         if (!repairing.isEmpty()) {
             // On the task before the answer is recorded and the build handed back: the engine
             // gives the round when it takes the run up again, and clears the instruction.
-            for (Task task : repairing) {
-                task.setRepairInstruction(text.strip());
-                store.saveTask(task);
+            for (Task one : chosenFrom) {
+                // The chosen task carries the question's mark now, as a task named by the
+                // build's own facts does; the round and its evidence follow from that mark.
+                one.setRepairChoiceOfferedBy(null);
+                if (!repairing.contains(one)) {
+                    one.setStartOutput(null);
+                    store.saveTask(one);
+                }
+            }
+            for (Task one : repairing) {
+                if (!chosenFrom.isEmpty()) {
+                    one.setRepairOfferedBy(decision.id());
+                }
+                one.setRepairInstruction(text.strip());
+                store.saveTask(one);
             }
             raised = titles(repairing).substring(0, 1).toUpperCase(Locale.ROOT)
                 + titles(repairing).substring(1) + " get" + (repairing.size() == 1 ? "s" : "")
@@ -670,6 +756,26 @@ public final class DecisionAnswers {
             // The same answer the supervisor connection gives, with the rest as the instruction.
             return answerAndResume(decisionId, first, said.substring(first.length())
                 .replaceFirst("^[\\s:.,;]+", ""), "operator");
+        }
+        if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(InstructedRepair.TOKEN)
+                && !repairChoices(context.store(), decision).isEmpty()) {
+            // Offered for one of several tasks (section 92): the task's title comes first,
+            // then the instruction. The longest title the text begins with is the one meant.
+            String rest = said.substring(first.length()).replaceFirst("^[\\s:.,;]+", "");
+            String bare = rest.startsWith("'") ? rest.substring(1) : rest;
+            Task chosen = null;
+            for (Task choice : repairChoices(context.store(), decision)) {
+                String title = choice.title() == null ? "" : choice.title().strip();
+                if (!title.isEmpty() && bare.regionMatches(true, 0, title, 0, title.length())
+                        && (chosen == null || title.length() > chosen.title().strip().length())) {
+                    chosen = choice;
+                }
+            }
+            String instruction = chosen == null ? rest
+                : bare.substring(chosen.title().strip().length())
+                    .replaceFirst("^'", "").replaceFirst("^[\\s:.,;]+", "");
+            return answerAndResume(decisionId, first, instruction,
+                chosen == null ? null : chosen.title(), "operator");
         }
         if (decision.kind() == DecisionKind.BLOCKED_TASK && first.equals(InstructedRetest.TOKEN)
                 && whyNoRetest(context.store(), decision,
