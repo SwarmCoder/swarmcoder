@@ -196,7 +196,8 @@ SwarmCoder is experimental. Read each release's **Breaking** section before upgr
   answer `repair` - ran two workers on a server with four places and nothing else going. And
   every round was stopped after a fixed 30 minutes: on a server that takes three minutes a
   turn that is ten turns, and a round was stopped with both workers still changing files. Now
-  a repair round gets as many workers as a first round of the same task (`swarm.nPerTask`,
+  a repair round gets as many workers as a first round of the same task, and never fewer than
+  before (two for each of at most two candidates) (`swarm.nPerTask`,
   or the project's or story's number, cut to what the server is currently allowed), spread
   over its candidates, no two of one candidate alike. They take places as first-round attempts
   do: the first waits its turn, the others start on places nothing else is waiting for. A

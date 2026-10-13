@@ -106,6 +106,22 @@ final class RepairRound {
 
     // --- how many, and how they differ ---------------------------------------------------------
 
+    /** What a seed always got before section 91: two workers. */
+    static final int FORMER_WORKERS_PER_SEED = 2;
+
+    /**
+     * How many workers a repair round gets: what a first round of the task gets, but never fewer
+     * than the round started before section 91 - two for each of its seeds (at most two seeds).
+     * The ceiling on workers at once does not lower it: workers over the ceiling wait for a
+     * place, as those of a first round do.
+     *
+     * @param firstRound how many workers a first round of the task gets now
+     * @param seeds      how many seeds the round has
+     */
+    static int workers(int firstRound, int seeds) {
+        return Math.max(firstRound, FORMER_WORKERS_PER_SEED * Math.max(0, seeds));
+    }
+
     /**
      * How many workers each seed gets: {@code workers} dealt out one at a time in the order of
      * the seeds, a seed taking no more than it has room for.

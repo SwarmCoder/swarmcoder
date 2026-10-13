@@ -120,7 +120,8 @@ pieces, or start the server with more memory.
 
 The piece of work gets one repair round: new attempts that start from the best of the failed
 ones and are shown what failed. A repair round gets as many attempts as a first round of the
-same piece of work, so the server's places are as full during a repair as during the first
+same piece of work, and never fewer than two for each of the (at most two) failed attempts it
+starts from, so the server's places are as full during a repair as during the first
 round. The first of them waits its turn for a place; the others start on places nothing else is
 waiting for.
 

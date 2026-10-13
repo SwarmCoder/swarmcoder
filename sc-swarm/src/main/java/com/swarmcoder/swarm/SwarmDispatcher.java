@@ -589,16 +589,17 @@ public class SwarmDispatcher {
     /**
      * How many workers a repair round of this task gets: what a first round of the task gets
      * now (section 91) - the task's workers per task, cut to what its model server is currently
-     * allowed when that is fewer. Never a number of its own.
+     * allowed when that is fewer - but never fewer than a repair round started before section 91,
+     * two for each of its seeds ({@link RepairRound#workers}).
      */
-    int repairWorkers(Task task) {
+    int repairWorkers(Task task, int seeds) {
         List<ModelProfile> workers = profiles.workers();
         String family = workers.isEmpty() ? "unconfigured" : workers.get(0).id();
         AdaptiveConcurrency.Plan plan = concurrency.plan(family);
         SwarmPolicy policy = task.swarmPolicy();
         int perTask = policy == null ? com.swarmcoder.domain.SwarmSizing.BUILT_IN_WORKERS_PER_TASK
             : policy.n();
-        return waveSize(task, perTask, plan, plan);
+        return RepairRound.workers(waveSize(task, perTask, plan, plan), seeds);
     }
 
     /**
