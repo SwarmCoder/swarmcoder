@@ -9546,3 +9546,143 @@ unchanged: `TheReviewerLooksFactsUpBeforeItObjectsTest`,
 - A store written before this change, opened with the new fields of `ModelUsageRecord`: only
   fields were added, as the class allows; no old store was opened by the new code.
 - The full test suite was not run; the classes above were.
+
+## 95. A role's answers were larger than its questions: 43 whole files, a 30,000-character listing (the stored sessions of the build of section 94, 2026-10-13)
+
+**What was established.** The stored sessions of the build of section 94 were read from a copy
+of the instance's store with `WhatStoredSessionsLookedUpTest` (no model; it does nothing unless
+told where a copy is). Characters are the tool results as the model was sent them.
+
+The architect's 43 whole-file reads, 248,177 of the 477,099 characters its 172 lookups returned:
+
+| what it was after | reads | of them a second read | characters | a query that could have answered | what the session used of them later |
+|---|---|---|---|---|---|
+| an example of usage in the reference folder: sources and tests of the framework's examples and modules | 25 | 7 | 132,794 | `body_of` and `public_shape` existed, and `body_of` answered for four of these types when it was asked later. `outline_of` was asked for two of the files and answered "There is no file ... in this workspace": the language server holds the project only. So nothing listed such a file's members with their lines | 14 line ranges of 5 of the files; 15 findings kept for the workers, 273 lines, from 4 files |
+| a documentation page of the reference folder | 5 | 0 | 70,648 | `doc_section` existed. For 4 of the 5 the outline had come back in an earlier turn, and the page was read whole all the same; one page came back as 30,511 characters, cut at the most a result may be in that room | nothing was kept from a whole page; the 5 findings from documents were kept from `doc_section` |
+| a build declaration: the project's four build files | 6 | 2 | 29,537 | `build_of` had answered for all three modules seven turns earlier, in 2,291 characters | nothing by line |
+| a type's body in the project | 4 | 1 | 10,054 | `public_shape` had answered for all three types in the first turn; `body_of` returns a body | 2 line ranges, 2 findings |
+| a configuration or resource file | 3 | 0 | 5,144 | `resources_of` for one (a 888-character descriptor); none for the project's two settings files, 343 and 3,913 characters | nothing |
+
+Why the role chose a whole file is not in the store: a turn's thinking is kept as its size only
+("[thought ~N tokens]"). What the sequence shows: `read_file` with a bare path returned any
+file, with a note at its end naming the cheaper query, and the note changed nothing. Ten of the
+43 were second reads of a file a tidy had cut.
+
+The reviewer's 51 whole-file reads, 272,034 of 848,006 characters in four sessions: 19 sources
+and tests of the reference folder (85,594), 10 build files (41,630, five a second read), 11
+configuration, resource or data files of the project (28,763), 6 project sources (18,126), 2
+reference documents (38,608), 2 reads of one reference data file of 29,608 characters, 1
+project document.
+
+Other answers larger than their question: `types_in` on one framework package returned 235
+types as 30,723 characters (the architect once, the test author once); lines 40 to 80
+of a data file came back as 20,649 characters. Results asked for a second time and never cut
+by a tidy: 74,214 characters for the architect, 63,453 for the reviewer.
+
+**What changed.**
+
+- *A whole-file request is answered with the file's outline first* (`WholeFileAnswer`, in
+  `ExpertTools.readFile`). A Java file: its types and members with their lines. A document:
+  its sections, and when the session's last documentation question (`docs_for`, `doc_search`)
+  matches one of them in the reference index's own ranking, that section marked and, up to
+  3,000 characters, quoted. A build file: what `build_of` answers. An XML, properties or YAML
+  file: its parts. Any other file over 6,000 characters: its first 40 lines. The last line of
+  each says what was left out and how to get one part or all of it. The whole file is the range
+  of all its lines (`read_file <path>:1-<last line>`), which that line spells out: one more
+  call, never refused. A file of up to 1,500 characters, and a file whose outline would be more
+  than half of it, is returned as before.
+- *The reference folder has the outline the project has.* `outline_of` answers for a file
+  outside the language server's workspace from its syntax. `public_shape`, `body_of`,
+  `find_usages` and `types_in` already answered for the reference folder.
+- *A listing is paged.* `types_in` lists up to 40 types with members and files as before; more
+  than that as the packages with their counts and 60 types by name, one line each, with
+  `types_in <where>:<N>` for the next ones.
+- *A range of lines is as long as its lines.* A line of a range is cut at 1,000 characters and
+  the answer says how to get it in full; one line asked for alone is not cut.
+- *Results asked for twice are bounded in a large room.* `HistoryTrim.tidy` takes a bound: the
+  results asked for exactly twice stay whole, newest first, up to 4,000 tokens
+  (`-Dswarmcoder.roles.askedAgainTokens`); one asked for a third time always stays whole, so a
+  call is given back in full at most twice after a cut and the role's stop on the same call
+  (three times) never leaves it without the result. In a room small enough to shrink the tidy
+  figures there is no bound, as run 79 made it. Workers and the expert are not bounded. A
+  repeated call whose answer is still whole was already answered with one line (section 59).
+- *Notes name this session's tool.* The Librarian's "left out" notes said `lookup_api`, a
+  worker's tool, to a role whose tool is `docs_for`.
+- *The harness runs the reviewer as the application does* (`EndToEndLoopTest`): with the
+  roles' lookup session.
+- *The report tells reference lookups apart and warns.* `LookupMeter` and `LookupUsageRecord`
+  count, per role and kind, the lookups that were about the reference material: by the root of
+  the file, folder or document the call named, by where the tree declares the type it named,
+  and for a question in words by which roots' addresses its answer holds more of. The lookup
+  table has a column for them and each role's line ends with them. `UsageReport.warnings` adds,
+  for a paid role that looked up at least 20,000 characters: whole files above 25% of its
+  characters, reference material above 50%. An outline given for a whole-file request is
+  counted as a tree query; the range of all lines as a whole file.
+
+**The computed effect**, from the stored sessions, with the product's own outlines. It assumes
+the role does not then ask for the whole file; where it does, the outline is added instead
+(56,978 characters for the architect's 43 files). Tokens are characters / 4, counted on every
+later call until the next drop in the session's call size (the least: the result is taken to
+be cut at the first tidy after it) and on every later call of the session (the most).
+
+| change | architect, of 477,099 characters | architect, tokens | reviewer, of 848,006 | reviewer, tokens |
+|---|---|---|---|---|
+| a whole file answered with its outline | 191,199 | 0.21 to 1.74 million | 212,888 | 0.25 to 1.10 million |
+| a listing paged by name | 26,525 | 0.03 to 0.23 million | 0 | 0 |
+| long lines of a range cut | 0 | 0 | 1,507 | under 2,000 |
+| together | 217,724 (46%) | 0.24 to 1.97 million | 214,395 (25%) | 0.25 to 1.10 million |
+| the bound on results asked for twice applies to | 74,214, of which 16,000 stay | at most 0.09 to 0.27 million | 63,453 in four sessions | at most 0.09 to 0.19 million |
+
+By kind, the architect's whole files as sent and as outlines: reference sources and tests
+132,794 to 41,626; reference documents 70,648 to 5,283; build files 29,537 to 4,642; project
+sources 10,054 to 3,834; configuration 5,144 to 1,593. The test author: 32,381 of 95,139
+characters (one listing 25,871). The architect's 4.6 million tokens also hold about 1.66
+million the paid server counted for its earlier thinking (section 94), which none of this
+touches.
+
+**How the harness and the application still differ in wiring the roles** (`EndToEndLoopTest`
+against `ProjectContext`):
+
+- The architect has no one-reply research tools (code search, file read, folder listing,
+  examples) and no blob sink in the harness; the test author has no blob sink.
+- The task planner is always the architect's client in the harness; the application gives it
+  its own model when one is configured.
+- The harness makes one agent runtime for the roles' lookup sessions and another for the
+  workflow; the application shares one.
+- The harness has no usage ledger: its cloud gate is a fixed 50,000,000 tokens and is not
+  charged with the server's own figures, so the budget that stops a role in the application
+  (section 94) does not stop it in a harness run.
+- A reviewer's objection is a warning in the harness and the run carries on; the application
+  parks the run.
+- The workflow engine has no locked paths and no context ledger in the harness.
+- The rules are rendered to 12,000 characters in the harness and to the configured figure in
+  the application.
+- Every role runs on the server the harness is given unless a role server is named.
+
+**Tests.** `AnAnswerComesAtTheSizeOfTheQuestionTest` (a reference source, a document, a build
+file and an unstructured file asked for whole; the explicit whole file; a short file; the
+outline of a reference file; a large package by name and its continuation; a small one as
+before; long lines of a range; the run's record by root and kind),
+`ResultsAskedForTwiceAreBoundedTest`, `UsageReportWarningsTest` (two cases added),
+`ADocumentIsReadBySectionTest` (one case changed: the whole file is now its outline first). Run
+with them and unchanged: `ARoleLearnsTheProjectFromItsObjectGraphTest`,
+`ARoleAsksTheLanguageServerTest`, `WhatRun90sRolesCouldNotAskTheTreeTest`,
+`TheExpertLooksThingsUpItselfTest`,
+`ABuildFileAndAModulesResourcesAreAnsweredWithoutReadingThemTest`,
+`ARolesSessionTidiesItsOldLookupResultsTest`, `HistoryTrimTest`, `UsageLedgerTest`,
+`UsageReportsTest`, `HarnessRunReportTest`,
+`TheArchitectAndThePlannerLookThingsUpAndCheckTheirDraftsTest`,
+`TheArchitectHandsItsFindingsToTheWorkersTest`.
+
+**Not checked.**
+
+- Nothing was run against a model. Whether a role takes the outline and asks for a part, or
+  asks for the whole file every time, is what the model does; the next run's report shows it
+  as whole files against tree queries, and warns above 25%.
+- The harness was not run with the reviewer as an agent; the wiring compiles.
+- The effect is computed without the project's index: a build file is outlined as XML where
+  the product answers with `build_of`, and no document's matching section is quoted.
+- A store written before this change, read with the new fields of `LookupUsageRecord`: only
+  fields were added; the copy that was read holds no usage records.
+- A worker's lookups are not told apart by root, and a worker's own read tool is unchanged.
+- The full test suite was not run; the classes above were.

@@ -150,6 +150,14 @@ public final class RunMeter {
 
         /** One lookup was answered: {@code chars} characters came back to {@code role}. */
         void lookup(String role, LookupMeter.Kind kind, int chars);
+
+        /**
+         * As {@link #lookup(String, LookupMeter.Kind, int)}, saying whether the lookup was
+         * about the reference material and not the project (section 95).
+         */
+        default void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference) {
+            lookup(role, kind, chars);
+        }
     }
 
     /**

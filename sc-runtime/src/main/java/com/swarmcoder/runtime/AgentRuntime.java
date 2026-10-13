@@ -176,9 +176,20 @@ public interface AgentRuntime {
      *                        The calls themselves are still run in order, one at a time, exactly
      *                        as before; a toolbox that started one early answers it from that
      *                        when its turn comes. Null tells nobody.
+     * @param askedAgainTokens how much the results this session asked for a second time may
+     *                        hold whole through a tidy, in estimated tokens - see
+     *                        {@code HistoryTrim.tidy}. Negative is no bound, as every session
+     *                        ran before section 95.
      */
     record SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
-                          java.util.function.BiConsumer<String, String> upcoming) {
+                          java.util.function.BiConsumer<String, String> upcoming,
+                          int askedAgainTokens) {
+
+        /** With no bound on the results asked for a second time. */
+        public SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
+                              java.util.function.BiConsumer<String, String> upcoming) {
+            this(tidyAboveTokens, tidyToTokens, digestChars, upcoming, -1);
+        }
 
         public static final SessionOptions NONE = new SessionOptions(0, 0, 0, null);
 

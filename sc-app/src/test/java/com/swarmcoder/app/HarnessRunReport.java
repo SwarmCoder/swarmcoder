@@ -310,9 +310,12 @@ final class HarnessRunReport {
         }
         List<com.swarmcoder.domain.LookupUsageRecord> rows = new ArrayList<>();
         for (com.swarmcoder.inference.LookupMeter.Count count : counts) {
-            rows.add(new com.swarmcoder.domain.LookupUsageRecord(count.role(),
-                count.kind().name(), count.kind().label(), count.kind().structured(),
-                count.calls(), count.chars()));
+            com.swarmcoder.domain.LookupUsageRecord row =
+                new com.swarmcoder.domain.LookupUsageRecord(count.role(),
+                    count.kind().name(), count.kind().label(), count.kind().structured(),
+                    count.calls(), count.chars());
+            row.addReference(count.referenceCalls(), count.referenceChars());
+            rows.add(row);
         }
         return com.swarmcoder.domain.UsageReport.lookupTable(rows, kinds);
     }

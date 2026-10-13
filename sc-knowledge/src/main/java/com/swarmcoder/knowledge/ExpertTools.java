@@ -156,6 +156,13 @@ public final class ExpertTools {
      */
     static final int EXPERT_MAX_REPEATS = 2;
 
+    /**
+     * The words of this session's latest documentation question ({@code docs_for},
+     * {@code doc_search}): a document asked for whole afterwards is answered with its outline
+     * and the section those words match best (section 95).
+     */
+    private final AtomicReference<String> lastDocsQuestion = new AtomicReference<>();
+
     /** Words this session has already put to {@code lookup_docs}. */
     private final Set<String> lookupWordsSeen = ConcurrentHashMap.newKeySet();
 
@@ -519,6 +526,9 @@ public final class ExpertTools {
             // root store", "localDb", ...), 3,000 to 8,500 characters each, most of them after it had read
             // the persistence guide.
             String asked = query == null ? "" : query.strip();
+            if (!asked.isEmpty()) {
+                lastDocsQuestion.set(asked);
+            }
             Set<String> newTerms = new java.util.HashSet<>(wordsOf(asked));
             newTerms.removeAll(lookupWordsSeen);
             String answer = librarian.lookupApi(asked, Set.copyOf(givenSections), newTerms, room);
@@ -539,7 +549,10 @@ public final class ExpertTools {
             while (sections.find()) {
                 givenSections.add(sections.group(1).strip());
             }
-            return answer;
+            // The Librarian's notes on what it left out name the worker's tool for getting it;
+            // this session's is called otherwise, and a tool that does not exist reads as
+            // "there is no way to get it" (section 95).
+            return answer.replace("lookup_api", docsTool());
         });
     }
 
@@ -638,9 +651,18 @@ public final class ExpertTools {
             if (from > 0) {
                 return linesOf(address, whole, from, to);
             }
+            // A file with a structure is answered with its outline and the ways to ask for a
+            // part; all of it is the range of all its lines, which the outline's last line
+            // spells out (section 95). Never refused: the whole file is one call away.
+            String outline = WholeFileAnswer.outlineOf(curator, address, whole, "public_shape",
+                lastDocsQuestion.get());
+            if (outline != null) {
+                answeredAs.set(com.swarmcoder.inference.LookupMeter.Kind.TREE);
+                return outline;
+            }
             if (whole.length() <= maxToolChars) {
-                // Never refused and never cut for this: the file is the answer. The note says,
-                // from the file itself, which query returns the part of it (run 82).
+                // The file is the answer. The note says, from the file itself, which query
+                // returns the part of it (run 82).
                 return whole + new DocumentQueries(curator).wholeFileNote(address, whole)
                     + TreeQueries.wholeFileNote(address, whole, "public_shape");
             }
@@ -675,6 +697,14 @@ public final class ExpertTools {
         }
     }
 
+    /**
+     * How much of one line a range of lines shows. A range is asked for by its number of lines;
+     * lines 40 to 80 of a data file with very long lines came back as 20,649 characters
+     * (section 95). One line asked for alone ({@code path:N-N}) and the range of the whole file
+     * are never cut.
+     */
+    static final int RANGE_LINE_CHARS = 1_000;
+
     /** Lines {@code from} to {@code to}; with no {@code to}, the lines around {@code from}. */
     private String linesOf(String address, String whole, int from, int to) {
         String[] lines = whole.split("\n", -1);
@@ -684,10 +714,30 @@ public final class ExpertTools {
             return "`" + address + "` has " + lines.length + " lines; there is no line " + from
                 + ".";
         }
+        boolean all = first <= 1 && last >= lines.length;
+        if (all) {
+            // The explicit request for the whole file, as an outline's last line spells it.
+            answeredAs.set(com.swarmcoder.inference.LookupMeter.Kind.WHOLE_FILE);
+        }
         StringBuilder sb = new StringBuilder("Lines " + first + "-" + last + " of " + lines.length
             + " of `" + address + "`:\n");
+        int cut = 0;
+        int firstCut = 0;
         for (int i = first; i <= last; i++) {
-            sb.append(lines[i - 1]).append('\n');
+            String line = lines[i - 1];
+            if (!all && first != last && line.length() > RANGE_LINE_CHARS) {
+                sb.append(line, 0, RANGE_LINE_CHARS).append("... (+")
+                    .append(line.length() - RANGE_LINE_CHARS).append(" chars)\n");
+                firstCut = cut++ == 0 ? i : firstCut;
+            } else {
+                sb.append(line).append('\n');
+            }
+        }
+        if (cut > 0) {
+            sb.append("[").append(cut).append(" line(s) longer than ").append(RANGE_LINE_CHARS)
+                .append(" characters are cut there. One of them in full: read_file ")
+                .append(address).append(':').append(firstCut).append('-').append(firstCut)
+                .append(".]\n");
         }
         return sb.toString();
     }
@@ -936,7 +986,9 @@ public final class ExpertTools {
                         + "<root>/<relative path> — exactly the addresses the other tools print. "
                         + "Read only the part you need: <path>:LINE for the lines around a line, "
                         + "<path>:FROM-TO for a range of lines, <path>#member for one method or "
-                        + "nested type. Anything outside those roots is refused.",
+                        + "nested type. The bare path of a long file answers with its outline "
+                        + "and how to ask for a part or for all of it. Anything outside those "
+                        + "roots is refused.",
                     this, method("readFile", String.class)),
                 new ToolBinding("skeleton_for",
                     "A compiling starting point for a type: this task's own contract when one "
@@ -1004,8 +1056,10 @@ public final class ExpertTools {
             "Which types a package, a module or a folder declares, from the project's object "
                 + "graph: each with its kind, how many members it has, what it extends or "
                 + "implements, and its file and line. Give a package (com.example.server), a "
-                + "module or a folder (app-server). Use this, not list_files, to learn what a "
-                + "part of the project holds.",
+                + "module or a folder (app-server), of the project or of its reference "
+                + "material. A part with many types is answered with its packages and the "
+                + "types' names, and says how to ask for the next ones. Use this, not "
+                + "list_files, to learn what a part of the project holds.",
             this, method("typesIn", String.class)));
         all.add(new ToolBinding("build_of",
             "What a module's build file declares - its coordinates and parent, its modules, "
@@ -1071,8 +1125,10 @@ public final class ExpertTools {
                 + "type's members, doc_section one section of a document. For a file that is "
                 + "neither Java nor a document (a resource, a script), or lines no query "
                 + "returns: <path>:LINE for the lines "
-                + "around a line, <path>:FROM-TO for a range, the bare path for the whole "
-                + "file, which you may always read when the whole file is what you need. "
+                + "around a line, <path>:FROM-TO for a range. The bare path answers with a "
+                + "short file itself and with a longer file's outline - its types and "
+                + "members, sections or parts, with their lines - whose last line says how to "
+                + "get one part or the whole file; the whole file is never refused. "
                 + "Addresses are <root>/<relative path>, exactly as the other tools print "
                 + "them. Anything outside the roots is refused.",
             "list_files", "A folder of the project or of its reference material as a tree, "
@@ -1106,6 +1162,13 @@ public final class ExpertTools {
 
     /** Set by a lookup's body when the language server, not the tree, gave the answer. */
     private final ThreadLocal<Boolean> answeredByServer = ThreadLocal.withInitial(() -> false);
+
+    /**
+     * Set by a lookup's body when its answer was of another kind than its tool's name says: a
+     * whole-file request answered with an outline, a range of lines that is the whole file.
+     */
+    private final ThreadLocal<com.swarmcoder.inference.LookupMeter.Kind> answeredAs =
+        new ThreadLocal<>();
 
     private LanguageQueries language() {
         return LanguageQueries.of(curator);
@@ -1170,8 +1233,108 @@ public final class ExpertTools {
             + "shows the code that calls it.\n").toString();
     }
 
+    /**
+     * A Java file's types and members with their lines. The language server answers for a file
+     * of the project; a file of a reference folder is not in its workspace, and was answered
+     * "There is no file ... in this workspace" - after which a live build's architect read the
+     * 14,346-character file whole, twice (section 95). Such a file is outlined from its syntax,
+     * as the tree reads it: the reference folder gets the same query as the project.
+     */
     public String outlineOf(String file) {
-        return run("outline_of", file, () -> language().outlineOf(file));
+        return run("outline_of", file, () -> {
+            String asked = file == null ? "" : file.strip();
+            Matcher part = PART_OF_FILE.matcher(asked);
+            if (part.matches() && !part.group(1).isBlank()) {
+                asked = part.group(1);
+            }
+            String address = asked.isEmpty() ? null : resolveInsideRoots(asked);
+            if (address != null && (ofReference(address) || !language().installed())
+                    && !curator.isFolder(address)) {
+                String text = curator.readFile(address, WHOLE_FILE_CHARS);
+                if (!text.startsWith("error:")) {
+                    int lines = text.split("\n", -1).length;
+                    String outline = WholeFileAnswer.java(address, text, "public_shape", lines,
+                        "the whole file: read_file " + address + ":1-" + lines);
+                    if (outline != null) {
+                        answeredAs.set(com.swarmcoder.inference.LookupMeter.Kind.TREE);
+                        return outline;
+                    }
+                }
+            }
+            return language().outlineOf(file);
+        });
+    }
+
+    /** True for an address inside a reference root: any root but the project's own. */
+    private boolean ofReference(String address) {
+        if (address == null) {
+            return false;
+        }
+        String cleaned = address.replace('\\', '/');
+        int slash = cleaned.indexOf('/');
+        String label = slash < 0 ? cleaned : cleaned.substring(0, slash);
+        return !PROJECT_ROOT.equals(label)
+            && curator.roots().stream().anyMatch(root -> root.label().equals(label));
+    }
+
+    /** The label of the project's own root; every other root is reference material. */
+    static final String PROJECT_ROOT = "project";
+
+    /**
+     * Whether a lookup was about the reference material rather than the project, for the run's
+     * record (section 95: 304,692 of an architect's 487,401 characters came from the reference
+     * folder and no report said so). By what the call named: a file, folder or document inside
+     * a reference root, or a type the tree declares there. A question in words names neither,
+     * and is counted by which roots' addresses its answer holds more of.
+     */
+    private boolean aboutReference(String argument, String answer) {
+        try {
+            String named = argument == null ? "" : argument.strip();
+            if (!named.isEmpty() && named.indexOf(' ') < 0) {
+                String path = named;
+                Matcher part = PART_OF_FILE.matcher(path);
+                if (part.matches() && !part.group(1).isBlank()) {
+                    path = part.group(1);
+                }
+                int hash = path.indexOf('#');
+                String address = resolveInsideRoots(hash > 0 ? path.substring(0, hash) : path);
+                if (address != null) {
+                    return ofReference(address);
+                }
+                SemanticIndex index = curator.semanticIndex();
+                if (index != null && index.available()) {
+                    int member = named.indexOf('#');
+                    String type = knownName(index, member > 0 ? named.substring(0, member) : named);
+                    for (String full : index.resolve(type)) {
+                        SemanticIndex.Ref declared = index.declarationOf(full);
+                        if (declared != null) {
+                            return !PROJECT_ROOT.equals(declared.rootLabel());
+                        }
+                    }
+                }
+            }
+            int reference = 0;
+            int project = 0;
+            for (KnowledgeCurator.Root root : curator.roots()) {
+                int found = occurrences(answer, root.label() + "/");
+                if (PROJECT_ROOT.equals(root.label())) {
+                    project += found;
+                } else {
+                    reference += found;
+                }
+            }
+            return reference > project;
+        } catch (Throwable unknown) {                                      // noqa
+            return false;
+        }
+    }
+
+    private static int occurrences(String text, String word) {
+        int count = 0;
+        for (int at = text.indexOf(word); at >= 0; at = text.indexOf(word, at + word.length())) {
+            count++;
+        }
+        return count;
     }
 
     public String docOf(String symbol) {
@@ -1201,9 +1364,9 @@ public final class ExpertTools {
                     + "of a name, before any text search.",
                 this, method("findSymbol", String.class)),
             new ToolBinding("outline_of",
-                "The types and members one Java file of the project declares, each on one line "
-                    + "with its line number - instead of reading the file. Give the file's "
-                    + "address.",
+                "The types and members one Java file declares, each on one line with its "
+                    + "lines - instead of reading the file. A file of the project or of its "
+                    + "reference material. Give the file's address.",
                 this, method("outlineOf", String.class)),
             new ToolBinding("doc_of",
                 "One symbol's exact signature and its documentation, for a project symbol or a "
@@ -1226,6 +1389,9 @@ public final class ExpertTools {
     }
 
     public String docSearch(String words) {
+        if (words != null && !words.isBlank()) {
+            lastDocsQuestion.set(words.strip());
+        }
         return run("doc_search", words, () -> new DocumentQueries(curator).search(words));
     }
 
@@ -1707,6 +1873,7 @@ public final class ExpertTools {
         }
         String answer;
         answeredByServer.set(false);
+        answeredAs.remove();
         try {
             answer = body.get();
         } catch (Exception e) {                                            // noqa
@@ -1721,9 +1888,13 @@ public final class ExpertTools {
         String capped = answer.length() <= maxToolChars ? answer
             : answer.substring(0, maxToolChars) + "\n…\n";
         lookups.add(new Found(tool, argument, capped, foundSomething(capped)));
+        com.swarmcoder.inference.LookupMeter.Kind answeredKind = answeredAs.get();
+        answeredAs.remove();
+        com.swarmcoder.inference.LookupMeter.Kind metered = answeredKind != null ? answeredKind
+            : answeredByServer.get() ? com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER
+            : kindOf(tool, argument);
         com.swarmcoder.inference.LookupMeter.record(user == null ? "expert" : user.name(),
-            answeredByServer.get() ? com.swarmcoder.inference.LookupMeter.Kind.LANGUAGE_SERVER
-                : kindOf(tool, argument), capped.length());
+            metered, capped.length(), metered != null && aboutReference(argument, capped));
         return capped + countdown();
     }
 

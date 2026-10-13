@@ -1494,8 +1494,13 @@ class EndToEndLoopTest {
                     expertEscalation).judgedBy(answerJudge));
             roles.architect().setLookupAgent(roleAgent);
             roles.testAuthor().setLookupAgent(roleAgent);
-            System.out.println("[E2E] the architect, the planner and the test author work as "
-                + "agents with these lookups: " + roleAgent.lookupNames());
+            // The reviewer too, as ProjectContext wires it (section 95). Until this line a
+            // harness run asked the reviewer one question a reading while the application ran
+            // it as an agent with every lookup, so no harness report showed the 121 calls and
+            // 9.1 million tokens a paid build then spent on it (section 94).
+            roles.reviewer().setLookupAgent(roleAgent);
+            System.out.println("[E2E] the architect, the planner, the test author and the "
+                + "reviewer work as agents with these lookups: " + roleAgent.lookupNames());
         }
 
         WorkflowEngine engine = new WorkflowEngine(new KoogAgentRuntime(traceHub), swarm,

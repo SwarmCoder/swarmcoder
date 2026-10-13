@@ -203,12 +203,21 @@ public final class UsageLedger implements RunMeter.Recorder {
 
     @Override
     public void lookup(String role, LookupMeter.Kind kind, int chars) {
+        lookup(role, kind, chars, false);
+    }
+
+    @Override
+    public void lookup(String role, LookupMeter.Kind kind, int chars, boolean reference) {
         CloudGate.Where where = CloudGate.current();
         synchronized (lock) {
-            bookOf(where).lookups.computeIfAbsent(role + "\u0000" + kind.name(),
-                    k -> new LookupUsageRecord(role, kind.name(), kind.label(), kind.structured(),
-                        0, 0))
-                .add(1, chars);
+            LookupUsageRecord row = bookOf(where).lookups.computeIfAbsent(
+                role + "\u0000" + kind.name(),
+                k -> new LookupUsageRecord(role, kind.name(), kind.label(), kind.structured(),
+                    0, 0));
+            row.add(1, chars);
+            if (reference) {
+                row.addReference(1, chars);
+            }
         }
         changed(where == null ? null : where.runId(), false);
     }

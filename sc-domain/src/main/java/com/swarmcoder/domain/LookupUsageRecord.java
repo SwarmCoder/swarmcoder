@@ -34,6 +34,13 @@ public class LookupUsageRecord {
     private boolean structured;
     private int calls;
     private long chars;
+    /**
+     * How many of {@link #calls} were about the reference material - the source and documents
+     * of what the project builds on - and the characters those returned. Added with section 95;
+     * a record stored before it reads 0 for both.
+     */
+    private int referenceCalls;
+    private long referenceChars;
 
     public LookupUsageRecord() {}
 
@@ -52,8 +59,16 @@ public class LookupUsageRecord {
         chars += Math.max(0, moreChars);
     }
 
+    /** Of the lookups already added, this many were about the reference material. */
+    public void addReference(int moreCalls, long moreChars) {
+        referenceCalls += moreCalls;
+        referenceChars += Math.max(0, moreChars);
+    }
+
     public LookupUsageRecord copy() {
-        return new LookupUsageRecord(role, kind, label, structured, calls, chars);
+        LookupUsageRecord copy = new LookupUsageRecord(role, kind, label, structured, calls, chars);
+        copy.addReference(referenceCalls, referenceChars);
+        return copy;
     }
 
     public String role() { return role; }
@@ -62,4 +77,6 @@ public class LookupUsageRecord {
     public boolean structured() { return structured; }
     public int calls() { return calls; }
     public long chars() { return chars; }
+    public int referenceCalls() { return referenceCalls; }
+    public long referenceChars() { return referenceChars; }
 }
