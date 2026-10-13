@@ -17,6 +17,7 @@
  */
 package com.swarmcoder.app;
 
+import com.swarmcoder.domain.OutsideLookups;
 import com.swarmcoder.inference.AdaptiveConcurrency;
 import com.swarmcoder.inference.InferenceScheduler;
 import com.swarmcoder.inference.VllmClient;
@@ -54,5 +55,10 @@ public record SharedServices(
      * Fewer workers on a model server whose workers keep running out of room, each with more of
      * it. Process-wide like the scheduler, because a server's pool is shared by every project.
      */
-    AdaptiveConcurrency concurrency
+    AdaptiveConcurrency concurrency,
+    /**
+     * The owner's decision on sending anything to a host that is not a configured model endpoint
+     * or this computer ({@code outsideLookups} in the settings file); off unless allowed.
+     */
+    OutsideLookups outsideLookups
 ) {}

@@ -139,6 +139,11 @@ public final class EnvironmentChecks {
             case UNREACHABLE -> lines.add("Project '" + projectName + "': nothing answered at the "
                 + "documentation server address " + serverAddress + ". Check the address under "
                 + "'mcpServers' in your settings, or that the machine can reach it." + cost);
+            case SWITCHED_OFF -> lines.add("Project '" + projectName + "': published library "
+                + "documentation is not asked for, because outside lookups are off and nothing "
+                + "is sent to " + serverAddress + ". The agents read the project and the "
+                + "reference folders you gave it. Put `outsideLookups: true` in your settings to "
+                + "allow it.");
         }
         for (String line : lines) {
             if (line.contains("NO documentation") || line.contains("REFUSED")

@@ -8851,3 +8851,79 @@ evidence of a delivery with no change; the stopped story's reason). Run with the
 - Opening a store written before the new fields. EclipseStore maps added fields on its own
   and `ChecksAlreadyProved` has gained fields this way before; no old store was opened in a
   test.
+
+## 90. A build sent the project's name to an outside documentation service, and nobody had been told (live build, 2026-10-13)
+
+**What was observed.** In the log of a live build of a small demo project:
+
+- Results from an outside documentation service for a library that only shares the project's
+  name, with the service's own ranking fields, taken in as documentation.
+- Four times, `LockObtainFailedException: Lock held by this virtual machine` on the
+  documentation index, from `DocsIndex.indexDocs` on a `docs-prewarm-*` thread.
+- 111 calls of `library_docs` by the planning roles and the expert (architect 21, expert 62,
+  reviewer 11, test author 17). Each sent a library name and a phrase the model wrote; several
+  phrases held type names from the project.
+
+**What the code did.**
+
+- `Librarian.prewarmDocs` sent the artifact id of every dependency entry in the root build
+  file. A parent build file lists the project's own modules there, so their names went out.
+- `Librarian.lookupApi` took the first word of a worker's question as a library name.
+- `Librarian.fetchLibraryDocs` used the whole answer of `resolve-library-id` - a list of
+  candidates - as one library id, asked `query-docs` with it, and indexed what came back under
+  it. Nothing compared a candidate with the project's dependencies.
+- `prewarmDocs` started a thread per library. Each opened an `IndexWriter` on the same folder.
+- All of it was on whenever `CONTEXT7_API_KEY` was set. No setting turned it off, the manual
+  did not mention it, and the roles were not told the source was outside.
+- The same was true of the Researcher's web search and page fetch, of other MCP servers, of
+  documentation sites among a project's reference folders, of `sandbox.network: bridge`, and
+  of the headless browser, which loaded whatever a model-written page referred to.
+
+**Why it was missed.** Section 32 made the documentation server work and made its absence
+loud. Whether it should be asked at all, and about what, was never a question: the product was
+developed on projects that were public.
+
+**What changed.**
+
+1. `OutsideLookups` (sc-domain): one decision, `outsideLookups` in the settings file, off
+   unless `true`. `DependencyGraph` makes it, logs it once, and hands it to `Context7Client`,
+   `McpServers`, the Researcher's `WebAccess` and, through `SharedServices`, `ProjectContext`.
+   Off: none of them sends; `library_docs` is not offered; documentation sites are not
+   fetched; the sandbox network is `none` whatever the file says; `BrowserVerifier` stops
+   every request of a page under test that is not for this computer.
+2. `DeclaredLibraries`: the dependencies the build files declare, without the build's own
+   modules. `fetchLibraryDocs` refuses any other name before anything is sent, reads the
+   server's candidates one by one, and fetches only a candidate tied to the declared name by
+   whole name parts. `lookupApi` asks outside only when the question names a declared library.
+3. Every sending is logged before it is made, with its host and its words, never its answer.
+4. `DocsIndex.indexDocs` is synchronized; the warm-up is one thread.
+5. `Context7Client.Posture` gained `SWITCHED_OFF` at the end. It is not persisted.
+6. Answers from the documentation server begin with a line saying they are from outside and
+   unchecked, and the `library_docs` description says what is sent and what is refused.
+
+**Tests.** `OutsideLookupsSwitchTest` (sc-domain), `OutsideLookupsTest` (sc-knowledge: off,
+declared libraries only, one writer), `APageUnderTestLoadsFromThisComputerOnlyTest`
+(sc-verify), `OutsideLookupsSettingTest` (sc-app). Run with them: `DocsIndexTest`,
+`TheExpertLooksThingsUpItselfTest`, `ExternalDocumentationReachesTheIndexTest`,
+`KnowledgeSourceReportTest`, `McpApiConfigTest`.
+
+**Not checked, and not done:**
+
+- Nothing was run against the documentation service, a model, a container or a browser. The
+  candidate list is parsed by the two field labels seen in the log; a server that changes them
+  yields no candidates, which drops everything.
+- The browser request filter and the "do not download a browser" setting were not exercised in
+  a browser; the rule they apply (`mayLoad`) is tested.
+- The Console page still loads a script from `cdn.tailwindcss.com` and a stylesheet from
+  `cdn.jsdelivr.net`. The script address carries no version. Serving both from the application
+  means copying the two files into `sc-console-ui`'s resources with their licence notices and
+  changing the two lines of `index.html`; the Tailwind file is the in-browser compiler, so the
+  page keeps working as it is. Not done here: it needs the files fetched.
+- `sandbox.enabled: false` runs model code on the computer with its network. The switch does
+  not reach it.
+- Sections of outside documentation already in the reference index are served like any other
+  section; only their address (`context7/...`) says where they came from. The note is on the
+  answers of `library_docs` and of the `lookup_api` call that fetched them.
+- The tie between a candidate and a declared library is by name parts. A library whose
+  published name shares no whole part with its coordinates is not found; one that happens to
+  be made of the same parts is accepted.

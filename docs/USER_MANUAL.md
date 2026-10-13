@@ -132,6 +132,53 @@ Every layer is optional and empty always means inherit. When a build starts, the
 which of the three decided the number and what it was — you never have to work out where a number
 came from.
 
+### What leaves this computer
+
+SwarmCoder sends your project to the models you named, and to nothing else unless you say so.
+One line in the settings file decides the rest:
+
+```yaml
+outsideLookups: true    # leave it out, or write false, and nothing below marked "off" is contacted
+```
+
+It is **off** when the file says nothing. The log says which at start, in a line that begins
+"Outside lookups are off:" or "Outside lookups are ON:".
+
+| What | Goes to | When | What is sent | Unless you change it | Switched off by |
+|---|---|---|---|---|---|
+| The models (planning roles, workers, judge, expert) | the model endpoints in your settings | every model call, and a check of each endpoint at start | requirement text, designs, source code, file names, build and test output | on: this is the product | the endpoints you name; a local model server keeps it on your own machines |
+| Documentation server | the server named `context7` under `mcpServers` (the built-in address is `mcp.context7.com`) | once when a project opens (two fixed words, nothing of yours); in the background for each declared library; when a planning role or the expert calls `library_docs`; when a worker's `lookup_api` finds nothing local and its question names a declared library; the Researcher's `context7_docs` | the artifact id of a library your build files declare, and the words of the question, which a model wrote and which can hold class names from your project | **off**; it also needs the environment variable `CONTEXT7_API_KEY` | `outsideLookups` |
+| Researcher: web search | `html.duckduckgo.com` | when you run the Researcher from the Console | a search phrase a model wrote | **off** | `outsideLookups` |
+| Researcher: page fetch | any address the model names | the same | the address | **off** | `outsideLookups` |
+| Other MCP servers | every address under `mcpServers` | when the Researcher calls one of their tools | the tool's arguments, which a model wrote | **off** | `outsideLookups`, or remove the entry |
+| Documentation sites | each `https://` address listed among a project's reference folders | when the project opens | page requests only; nothing from the project | **off** | `outsideLookups`, or remove the address |
+| The safety box (worker containers) | no host: the containers have no network | builds, tests and commands of code a model wrote | nothing | no network; `sandbox.network: bridge` gives them all of it | `sandbox.network`; `bridge` is not applied while `outsideLookups` is off |
+| The headless browser of a page check | any host the page under test refers to | a page check run on this computer | whatever the page asks for; the page is code a model wrote | **this computer only**: every other request is stopped | `outsideLookups` |
+| The browser driver | the host its browser is downloaded from | the first page check on a computer with no browser installed | nothing of yours | **not downloaded** | `outsideLookups`; install the browser yourself |
+| Code a model wrote, run on this computer | any host | only with `sandbox.enabled: false` | anything it likes | off | `sandbox.enabled`. **`outsideLookups` does not cover this** |
+| The Console page, in your own browser | `cdn.tailwindcss.com` (a script) and `cdn.jsdelivr.net` (a stylesheet) | each time the page is opened | your browser's address and the page's address; nothing from the project is put in the request. The script runs inside the page | always | nothing yet; see below |
+
+Nothing else goes out. Git is used on the local repository only: no fetch, push or clone. The
+Java language server is started with build import and downloads off. There is no telemetry and
+no update check; `telemetry.otlpEndpoint` is read and nothing is sent to it. The MCP server
+SwarmCoder offers listens on this computer only. Container images are not pulled.
+
+With `outsideLookups: true`:
+
+- A library is looked up on the documentation server only when your build files declare it as a
+  dependency. The project's own name, its own modules and a word out of a question are never
+  looked up. An answer about some other library is dropped.
+- Every sending is written to the log before it is made, as "Outside lookup sent to <host>"
+  followed by the words that were sent. The answers are not logged. Search the log for that
+  phrase to see everything that went out.
+- Answers from the documentation server are marked for the agents as coming from outside and
+  not checked against your project.
+
+The Console page loads one script and one stylesheet from two public addresses. To stop that,
+both files have to be copied into SwarmCoder and the page pointed at the copies; that is not
+done yet. Until it is, open the Console in a browser that blocks those two addresses if this
+matters to you: the page then loses its styling.
+
 ---
 
 ## 3. Building and starting it

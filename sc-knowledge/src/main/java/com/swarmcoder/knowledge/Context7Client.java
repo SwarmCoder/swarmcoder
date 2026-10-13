@@ -22,7 +22,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.swarmcoder.domain.OutsideLookups;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
@@ -60,6 +63,13 @@ import org.slf4j.LoggerFactory;
  * file is edited through the Console, read back onto a screen, logged and copied around; a
  * credential in it reaches all four. The key is never logged, never echoed and never put in an
  * error message — a rejected key is reported as "rejected", nothing more.
+ *
+ * <h2>Switched off unless the owner allowed outside lookups</h2>
+ *
+ * <p>Every call carries words about the project to another host. With {@link OutsideLookups} off
+ * this client connects to nothing and answers nothing, whatever the address - a documentation
+ * server on this computer included, since such a server passes the question on. With it on, each
+ * call is written down before it is made: the tool and its arguments, never the answer.
  */
 public class Context7Client {
 
@@ -75,13 +85,16 @@ public class Context7Client {
         /** A key is set and the server refused it. */
         KEY_REJECTED,
         /** Nothing answered at the address. */
-        UNREACHABLE
+        UNREACHABLE,
+        /** Outside lookups are off in the settings; nothing is asked and nothing is sent. */
+        SWITCHED_OFF
     }
 
     private final String endpointUrl;
     private final String apiKey;             // never logged, never echoed
     private final boolean operatorConfigured;
     private final boolean hosted;            // Streamable HTTP + bearer, vs local SSE
+    private final OutsideLookups lookups;
 
     private final McpSyncClient mcpClient;   // null for the hosted path
     private final HttpClient http;           // null for the local path
@@ -112,12 +125,27 @@ public class Context7Client {
      *                           did not answer" — different problems, different fixes.
      */
     public Context7Client(String endpointUrl, String apiKey, boolean operatorConfigured) {
+        this(endpointUrl, apiKey, operatorConfigured, OutsideLookups.on(log::info));
+    }
+
+    /**
+     * @param lookups the owner's decision on outside lookups. The application always passes it;
+     *                the shorter constructors are for callers that name a server deliberately
+     *                (tests against an address nothing listens on) and stand for "allowed".
+     */
+    public Context7Client(String endpointUrl, String apiKey, boolean operatorConfigured,
+                          OutsideLookups lookups) {
+        this.lookups = lookups == null ? OutsideLookups.off() : lookups;
         this.endpointUrl = endpointUrl;
         this.apiKey = apiKey == null || apiKey.isBlank() ? null : apiKey.strip();
         this.operatorConfigured = operatorConfigured;
         this.hosted = endpointUrl != null && endpointUrl.toLowerCase(java.util.Locale.ROOT)
             .startsWith("https://");
-        if (hosted) {
+        if (!this.lookups.enabled()) {
+            // Switched off: no client of either kind is built, so nothing here can connect.
+            this.mcpClient = null;
+            this.http = null;
+        } else if (hosted) {
             this.mcpClient = null;
             this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         } else {
@@ -144,6 +172,24 @@ public class Context7Client {
     }
 
     /**
+     * Whether a question could be sent at all: outside lookups are allowed, and a hosted server
+     * has a key. Asked before starting work whose only purpose is to ask. Connects to nothing.
+     */
+    public boolean canAsk() {
+        return !isSwitchedOff() && !(hosted && apiKey == null) && !unreachable && !keyRejected;
+    }
+
+    /** True when outside lookups are off: this client will never send anything. */
+    public boolean isSwitchedOff() {
+        return !lookups.enabled();
+    }
+
+    /** The owner's decision this client was built with. */
+    public OutsideLookups outsideLookups() {
+        return lookups;
+    }
+
+    /**
      * What to tell the operator, established by actually asking the server once.
      *
      * <p>A real call is needed, not just a connection. Measured against the live service: a
@@ -153,6 +199,9 @@ public class Context7Client {
      * the kind of confident-and-wrong startup line this whole change exists to remove.
      */
     public Posture posture() {
+        if (isSwitchedOff()) {
+            return Posture.SWITCHED_OFF;
+        }
         if (hosted && apiKey == null) {
             return Posture.NO_KEY;
         }
@@ -184,7 +233,7 @@ public class Context7Client {
 
     /** Idempotent, best-effort. Returns false (and marks unreachable) if the server is down. */
     public boolean connect() {
-        if (unreachable || keyRejected) {
+        if (isSwitchedOff() || unreachable || keyRejected) {
             return false;
         }
         if (connected.get()) {
@@ -254,7 +303,54 @@ public class Context7Client {
         return args;
     }
 
+    /**
+     * The candidates in the server's answer to {@code resolve-library-id}: one per entry, its
+     * title and its id, in the server's order. Read by the two field labels of the server's own
+     * answer format; an entry without an id is not a candidate.
+     */
+    public static List<DeclaredLibraries.Candidate> candidatesOf(String listing) {
+        List<DeclaredLibraries.Candidate> candidates = new ArrayList<>();
+        if (listing == null) {
+            return candidates;
+        }
+        String title = "";
+        for (String raw : listing.split("\\R")) {
+            String line = raw.strip();
+            if (line.startsWith("-")) {
+                line = line.substring(1).strip();
+            }
+            if (line.startsWith(TITLE_LABEL)) {
+                title = line.substring(TITLE_LABEL.length()).strip();
+            } else if (line.startsWith(ID_LABEL)) {
+                String id = line.substring(ID_LABEL.length()).strip();
+                if (!id.isEmpty()) {
+                    candidates.add(new DeclaredLibraries.Candidate(title, id));
+                }
+                title = "";
+            }
+        }
+        return candidates;
+    }
+
+    private static final String TITLE_LABEL = "Title:";
+    private static final String ID_LABEL = "Context7-compatible library ID:";
+
     private Optional<String> callTool(String tool, Map<String, Object> arguments) {
+        if (isSwitchedOff()) {
+            return Optional.empty();
+        }
+        if ((hosted && apiKey == null) || unreachable || keyRejected) {
+            connect();   // says why, once; sends nothing
+            return Optional.empty();
+        }
+        // Written down before it is sent, and whether or not the server then answers: the audit
+        // is of what left this computer. The arguments are the tool's own; the key is not one.
+        lookups.sent("documentation server", endpointUrl, tool + " " + arguments);
+        return transport(tool, arguments);
+    }
+
+    /** One tool call on the wire. Protected so a test can stand in for the server. */
+    protected Optional<String> transport(String tool, Map<String, Object> arguments) {
         if (!connect()) {
             return Optional.empty();
         }

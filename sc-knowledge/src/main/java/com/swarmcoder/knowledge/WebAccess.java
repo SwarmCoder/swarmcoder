@@ -17,6 +17,8 @@
  */
 package com.swarmcoder.knowledge;
 
+import com.swarmcoder.domain.OutsideLookups;
+
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -47,8 +49,41 @@ public interface WebAccess {
         return new Standard();
     }
 
+    /** What a tool answers when the owner has not allowed outside lookups. */
+    String SWITCHED_OFF = "error: outside lookups are switched off for this installation, so "
+        + "nothing was sent. Use search_code and read_file on the project and its reference "
+        + "material instead.";
+
+    /**
+     * The web as the owner allowed it: nothing at all when outside lookups are off, and every
+     * search and every fetch written down before it is made when they are on.
+     */
+    static WebAccess governedBy(OutsideLookups lookups, WebAccess web) {
+        OutsideLookups decided = lookups == null ? OutsideLookups.off() : lookups;
+        return new WebAccess() {
+            @Override
+            public String search(String query) {
+                if (!decided.enabled()) {
+                    return SWITCHED_OFF;
+                }
+                decided.sent("web search", Standard.SEARCH_HOST, String.valueOf(query));
+                return web.search(query);
+            }
+
+            @Override
+            public String fetch(String url) {
+                if (!decided.enabled()) {
+                    return SWITCHED_OFF;
+                }
+                decided.sent("web page", url, String.valueOf(url));
+                return web.fetch(url);
+            }
+        };
+    }
+
     final class Standard implements WebAccess {
 
+        static final String SEARCH_HOST = "html.duckduckgo.com";
         private static final int MAX_PAGE_CHARS = 12_000;
         private static final int MAX_RESULTS = 8;
         private static final Pattern RESULT = Pattern.compile(
@@ -64,7 +99,7 @@ public interface WebAccess {
         @Override
         public String search(String query) {
             try {
-                String body = get("https://html.duckduckgo.com/html/?q="
+                String body = get("https://" + SEARCH_HOST + "/html/?q="
                     + URLEncoder.encode(query, StandardCharsets.UTF_8));
                 Matcher links = RESULT.matcher(body);
                 Matcher snippets = SNIPPET.matcher(body);

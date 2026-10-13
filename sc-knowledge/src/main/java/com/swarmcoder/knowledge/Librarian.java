@@ -191,6 +191,8 @@ public class Librarian {
 
     private final Context7Client context7Client;
     private final DocsIndex docsIndex;
+    /** The project whose build files say which libraries may be looked up outside; nullable. */
+    private final Path projectRoot;
     private final KnowledgeCurator curator;
     /** Every Java file under the roots by name — how a question that names a type reaches it. */
     private final SourceIndex sources;
@@ -272,6 +274,7 @@ public class Librarian {
                      List<String> contextUrls) {
         this.context7Client = context7Client;
         this.docsIndex = docsIndex;
+        this.projectRoot = projectRoot;
         this.knowledgeDocs = knowledgeDocs;
         List<KnowledgeCurator.Root> roots = new ArrayList<>();
         if (projectRoot != null) {
@@ -383,8 +386,56 @@ public class Librarian {
      * the tool list could have said for free.
      */
     public boolean documentationServerConfigured() {
-        return context7Client != null && context7Client.hasApiKey();
+        return context7Client != null && !context7Client.isSwitchedOff()
+            && context7Client.hasApiKey();
     }
+
+    /** True when the owner has not allowed outside lookups, or there is no server to ask. */
+    public boolean outsideLookupsOff() {
+        return context7Client == null || context7Client.isSwitchedOff();
+    }
+
+    /**
+     * The libraries this project's build files declare - the only ones that may be looked up
+     * outside. Read from the build files at each call, because a worker may have just added one.
+     */
+    public DeclaredLibraries declaredLibraries() {
+        return DeclaredLibraries.of(projectRoot);
+    }
+
+    /**
+     * Why a library will not be looked up outside, in words for the role that asked - or empty
+     * when it may be. Decided from the settings and the build files alone, before anything is
+     * sent.
+     */
+    public Optional<String> outsideLookupRefusal(String libraryName) {
+        if (outsideLookupsOff()) {
+            return Optional.of("Outside lookups are switched off for this installation, so no "
+                + "documentation server was asked and nothing was sent. Use the project's own "
+                + "reference material.");
+        }
+        DeclaredLibraries declared = declaredLibraries();
+        if (declared.named(libraryName).isPresent()) {
+            return Optional.empty();
+        }
+        StringBuilder names = new StringBuilder();
+        for (DeclaredLibraries.Library library : declared.all()) {
+            if (names.length() > 1_500) {
+                names.append(", ...");
+                break;
+            }
+            names.append(names.isEmpty() ? "" : ", ").append(library.coordinate());
+        }
+        return Optional.of("'" + libraryName + "' is not a dependency this project's build files "
+            + "declare, so nothing was sent to the documentation server. Only a declared library "
+            + "can be looked up, by its artifact id or group:artifact. Declared: "
+            + (names.isEmpty() ? "(none)" : names) + ".");
+    }
+
+    /** What every answer that came from the documentation server begins with. */
+    public static final String OUTSIDE_SOURCE_NOTE = "From an outside documentation service, not "
+        + "from this project: it describes the library as published, was not checked against "
+        + "the version this project uses, and is not the project's own code.\n";
 
     /**
      * Builds the task's brief: exact library versions, curated conventions, the framework
@@ -1146,16 +1197,26 @@ public class Librarian {
      * with the MCP server down this is a cheap no-op per library.
      */
     private void prewarmDocs(List<LibraryDoc> libraries) {
-        for (LibraryDoc library : libraries) {
-            String name = library.coordinate() == null ? null
-                : library.coordinate().substring(library.coordinate().indexOf(':') + 1);
-            if (name == null || name.isBlank() || !prewarmed.add(name)) {
-                continue;
-            }
-            Thread fetcher = new Thread(() -> fetchLibraryDocs(name), "docs-prewarm-" + name);
-            fetcher.setDaemon(true);
-            fetcher.start();
+        // Nothing to warm, and no thread started, when outside lookups are off or the hosted
+        // server has no key to answer with.
+        if (outsideLookupsOff() || !context7Client.canAsk()) {
+            return;
         }
+        List<String> names = new ArrayList<>();
+        for (LibraryDoc library : libraries) {
+            String name = library.coordinate();
+            if (name != null && !name.isBlank() && prewarmed.add(name)) {
+                names.add(name);
+            }
+        }
+        if (names.isEmpty()) {
+            return;
+        }
+        // ONE thread for the whole list, one library after the other. A thread per library put
+        // several writers on the documentation index at the same moment, and all but one lost.
+        Thread fetcher = new Thread(() -> names.forEach(this::fetchLibraryDocs), "docs-prewarm");
+        fetcher.setDaemon(true);
+        fetcher.start();
     }
 
     /** External docs path — Context7-backed, pre-warming the local index (spec §13). */
@@ -1165,21 +1226,46 @@ public class Librarian {
 
     /** @param query what is actually being asked — the server ranks and scopes its answer by it */
     public Optional<String> fetchLibraryDocs(String libraryName, String query) {
-        Optional<String> libId = context7Client.resolveLibrary(libraryName, query);
-        if (libId.isPresent()) {
-            Optional<String> content = context7Client.fetchDocs(libId.get(), query);
-            content.ifPresent(c -> {
-                if (docsIndex != null) {
-                    docsIndex.indexDocs(libId.get(), c);
-                }
-                // And into the ONE index, split into sections and tagged with the library, so it
-                // competes with the reference folders' pages instead of being a fallback that is
-                // only consulted once they have failed.
-                curator.indexLibraryDocs(libId.get(), libraryVersion(libId.get()), c);
-            });
-            return content;
+        if (outsideLookupsOff()) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        // A library is asked about only when the build files declare it. Not the project's own
+        // name, not one of its own modules, not a word out of a question (DeclaredLibraries).
+        Optional<DeclaredLibraries.Library> declared = declaredLibraries().named(libraryName);
+        if (declared.isEmpty()) {
+            log.info("No outside lookup for '{}': the project's build files declare no such "
+                + "library, so nothing was sent.", libraryName);
+            return Optional.empty();
+        }
+        DeclaredLibraries.Library library = declared.get();
+        String asked = query == null || query.isBlank() || query.equals(libraryName)
+            ? library.artifactId() : query;
+        Optional<String> listing = context7Client.resolveLibrary(library.artifactId(), asked);
+        if (listing.isEmpty()) {
+            return Optional.empty();
+        }
+        // The server answers with every library it finds a likeness to. Only one that can be
+        // tied to the declared name is used; the rest are some other library sharing a word.
+        List<DeclaredLibraries.Candidate> offered = Context7Client.candidatesOf(listing.get());
+        List<DeclaredLibraries.Candidate> tied = DeclaredLibraries.tiedTo(library, offered);
+        if (tied.isEmpty()) {
+            log.info("The documentation server offered {} librar{} for {} and none can be tied "
+                + "to that name; all were dropped and nothing was indexed.", offered.size(),
+                offered.size() == 1 ? "y" : "ies", library.coordinate());
+            return Optional.empty();
+        }
+        String libId = tied.get(0).id();
+        Optional<String> content = context7Client.fetchDocs(libId, asked);
+        content.ifPresent(c -> {
+            if (docsIndex != null) {
+                docsIndex.indexDocs(libId, c);
+            }
+            // And into the ONE index, split into sections and tagged with the library, so it
+            // competes with the reference folders' pages instead of being a fallback that is
+            // only consulted once they have failed.
+            curator.indexLibraryDocs(libId, libraryVersion(libId), c);
+        });
+        return content;
     }
 
     /**
@@ -1315,18 +1401,23 @@ public class Librarian {
             // own (author decision 2026-08-28: one question, one tool). It is LAST on purpose:
             // Context7 serves the published release, the reference folder is the operator's live
             // checkout, and confidently-applied stale documentation is its own failure mode.
-            String library = query.split("[\\s.]+")[0];
-            Optional<String> fetched = fetchLibraryDocs(library, query);
+            //
+            // Which library is not guessed from the question's first word any more: it is the
+            // declared dependency the question names outright, or there is no outside lookup.
+            Optional<DeclaredLibraries.Library> declaredHere = outsideLookupsOff()
+                ? Optional.empty() : declaredLibraries().namedIn(query);
+            Optional<String> fetched = declaredHere.isEmpty() ? Optional.empty()
+                : fetchLibraryDocs(declaredHere.get().coordinate(), query);
             if (fetched.isPresent() && !fetched.get().isBlank()) {
                 // It is in the one index now, so ask the one index: the answer comes back as the
                 // SECTION that matches, attributed to the library it came from, rather than as the
                 // whole reply of whichever fetch happened to be stored first.
                 String indexed = curator.relevantDocs(query, 2, docChars);
                 if (!indexed.isBlank()) {
-                    return truncate("Documentation for \"" + query + "\":\n" + indexed,
-                        lookupChars);
+                    return truncate(OUTSIDE_SOURCE_NOTE + "Documentation for \"" + query
+                        + "\":\n" + indexed, lookupChars);
                 }
-                return truncate(fetched.get(), lookupChars);
+                return truncate(OUTSIDE_SOURCE_NOTE + fetched.get(), lookupChars);
             }
         } catch (Exception e) {
             log.warn("lookup_api('{}') failed: {}", query, e.getMessage());
@@ -1653,7 +1744,7 @@ public class Librarian {
      * when they genuinely do not, it says so plainly and bounds what to do instead.
      */
     private String notFound(String query, MaterialBudget reader) {
-        String mcpNote = documentationServerReachable() ? ""
+        String mcpNote = outsideLookupsOff() || documentationServerReachable() ? ""
             : " (The documentation server is not running, so published library docs could not be "
               + "consulted — do not wait for it and do not retry.)";
         String map = curator.documentationMap(reader.chars(MISS_MAP_CHARS));

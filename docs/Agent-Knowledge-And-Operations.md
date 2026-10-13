@@ -1541,3 +1541,67 @@ These are how this repository is worked on, not rules the product enforces:
   known, recorded in the brownfield ledger, and **not yet fixed** in the product.
 - **A harness run must never reach a paid endpoint.** The address check in
   `EndToEndLoopTest.refuseAnythingButAFreeLocalEndpoint()` enforces it technically; keep it that way.
+
+## 7.7 What leaves this computer
+
+One setting, `outsideLookups` in `config.yaml`, governs every sending to a host that is neither
+a configured model endpoint nor this computer. It is off unless the file says `true`. The
+decision is a `com.swarmcoder.domain.OutsideLookups`, made once in `DependencyGraph` and handed
+to each component that can send; `OutsideLookups.process()` carries it to `BrowserVerifier`,
+which builds its own browser. The start line is logged by `DependencyGraph`.
+
+| What | Goes to | When | What is sent | Unless you change it | Switched off by |
+|---|---|---|---|---|---|
+| The models (planning roles, workers, judge, expert) | the model endpoints in your settings | every model call, and a check of each endpoint at start | requirement text, designs, source code, file names, build and test output | on: this is the product | the endpoints you name; a local model server keeps it on your own machines |
+| Documentation server | the server named `context7` under `mcpServers` (the built-in address is `mcp.context7.com`) | once when a project opens (two fixed words, nothing of yours); in the background for each declared library; when a planning role or the expert calls `library_docs`; when a worker's `lookup_api` finds nothing local and its question names a declared library; the Researcher's `context7_docs` | the artifact id of a library your build files declare, and the words of the question, which a model wrote and which can hold class names from your project | **off**; it also needs the environment variable `CONTEXT7_API_KEY` | `outsideLookups` |
+| Researcher: web search | `html.duckduckgo.com` | when you run the Researcher from the Console | a search phrase a model wrote | **off** | `outsideLookups` |
+| Researcher: page fetch | any address the model names | the same | the address | **off** | `outsideLookups` |
+| Other MCP servers | every address under `mcpServers` | when the Researcher calls one of their tools | the tool's arguments, which a model wrote | **off** | `outsideLookups`, or remove the entry |
+| Documentation sites | each `https://` address listed among a project's reference folders | when the project opens | page requests only; nothing from the project | **off** | `outsideLookups`, or remove the address |
+| The safety box (worker containers) | no host: the containers have no network | builds, tests and commands of code a model wrote | nothing | no network; `sandbox.network: bridge` gives them all of it | `sandbox.network`; `bridge` is not applied while `outsideLookups` is off |
+| The headless browser of a page check | any host the page under test refers to | a page check run on this computer | whatever the page asks for; the page is code a model wrote | **this computer only**: every other request is stopped | `outsideLookups` |
+| The browser driver | the host its browser is downloaded from | the first page check on a computer with no browser installed | nothing of yours | **not downloaded** | `outsideLookups`; install the browser yourself |
+| Code a model wrote, run on this computer | any host | only with `sandbox.enabled: false` | anything it likes | off | `sandbox.enabled`. **`outsideLookups` does not cover this** |
+| The Console page, in your own browser | `cdn.tailwindcss.com` (a script) and `cdn.jsdelivr.net` (a stylesheet) | each time the page is opened | your browser's address and the page's address; nothing from the project is put in the request. The script runs inside the page | always | nothing yet; see below |
+
+Nothing else goes out. Git is used on the local repository only: no fetch, push or clone. The
+Java language server is started with build import and downloads off. There is no telemetry and
+no update check; `telemetry.otlpEndpoint` is read and nothing is sent to it. The MCP server
+SwarmCoder offers listens on this computer only. Container images are not pulled.
+
+How each row is held to the switch:
+
+- **Documentation server.** `Context7Client` built with the switch off creates no client of
+  either transport, `connect()` is false, `posture()` is `SWITCHED_OFF` and every tool call
+  returns empty. `Librarian.documentationServerConfigured()` is then false, so `library_docs` is
+  not in any role's tool list.
+- **Which library, when on.** `DeclaredLibraries.of(projectRoot)` reads the root build file and
+  each module's with `ManifestParser`, and leaves out the build's own modules. `Librarian
+  .fetchLibraryDocs` refuses any name that is not a declared artifact id or `group:artifact`.
+  The server's list of candidates is read by `Context7Client.candidatesOf`; only a candidate
+  whose title or id is made of whole parts of the declared name (`DeclaredLibraries.tied`) is
+  fetched, and the rest are dropped. A worker's `lookup_api` reaches the server only when its
+  question names a declared library as one of its words.
+- **Audit.** `OutsideLookups.sent(channel, address, words)` is called before each sending and
+  logs "Outside lookup sent to <host> (<channel>): <words>". Answers are never passed to it.
+- **Researcher.** `WebAccess.governedBy` answers "switched off" without calling the real web;
+  `McpServers` built with the switch off keeps no server.
+- **Documentation sites.** `ProjectContext` passes the curator no site addresses.
+- **Safety box.** `DependencyGraph` builds `DockerSandboxManager` with `NetworkPolicy.NONE`
+  whatever `sandbox.network` says, and logs that `bridge` was not applied.
+- **Page checks.** `BrowserVerifier` routes every request of the browser context through
+  `mayLoad`, which stops any network address that is not this computer, and tells the browser
+  driver not to download a browser.
+
+Not governed by the switch: `sandbox.enabled: false` (model code on this computer, with its
+network), and the two files the Console page loads from public addresses in the operator's own
+browser (`index.html` in `sc-console-ui`).
+
+**The documentation index has one writer at a time.** `DocsIndex.indexDocs` is synchronized and
+the background warm-up is one thread for all libraries. Before, a thread per library each
+opened a Lucene writer on `rag/docs`; every writer but the first failed with
+`LockObtainFailedException` and that library was missing from `rag/docs`. The same text still
+reached the reference index under `rag/refs`, which has its own lock.
+
+Material fetched before the switch existed stays in `rag/docs` and `rag/refs` under addresses
+beginning `context7/`. Both folders are derived (7.2); delete them to be rid of it.

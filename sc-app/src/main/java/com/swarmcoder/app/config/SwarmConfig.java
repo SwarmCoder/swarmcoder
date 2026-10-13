@@ -37,8 +37,30 @@ public record SwarmConfig(
     @JsonProperty("telemetry") TelemetryConfig telemetry,
     @JsonProperty("mcpServers") List<McpServerConfig> mcpServers,
     @JsonProperty("mcpApi") McpApiConfig mcpApi,
-    @JsonProperty("tools") ToolsConfig tools
+    @JsonProperty("tools") ToolsConfig tools,
+    @JsonProperty("outsideLookups") Boolean outsideLookups
 ) {
+    /** The shape before the {@code outsideLookups:} switch existed. */
+    public SwarmConfig(String repoPath, List<String> contextPaths, List<String> protectedPaths,
+                       Integer consolePort, SparkConfig spark, CloudConfig cloud, RolesConfig roles,
+                       SwarmEngineConfig swarm, BudgetsConfig budgets, GuidelinesConfig guidelines,
+                       SandboxConfig sandbox, OvernightConfig overnight, TelemetryConfig telemetry,
+                       List<McpServerConfig> mcpServers, McpApiConfig mcpApi, ToolsConfig tools) {
+        this(repoPath, contextPaths, protectedPaths, consolePort, spark, cloud, roles, swarm,
+            budgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools, null);
+    }
+
+    /**
+     * Whether the application may send anything to a host that is neither a model endpoint named
+     * in this file nor this computer: the documentation server, the Researcher's web search and
+     * page fetch, other MCP servers, documentation sites, a network for the safety box, and what
+     * a page under test may load. Off unless the file says {@code outsideLookups: true} - a
+     * project may be private, and the words of a lookup are words about it.
+     */
+    public boolean outsideLookupsAllowed() {
+        return Boolean.TRUE.equals(outsideLookups);
+    }
+
     /** The shape before the {@code tools:} block existed. */
     public SwarmConfig(String repoPath, List<String> contextPaths, List<String> protectedPaths,
                        Integer consolePort, SparkConfig spark, CloudConfig cloud, RolesConfig roles,
@@ -99,12 +121,12 @@ public record SwarmConfig(
         return mcpServers != null && !mcpServers.isEmpty();
     }
     public SwarmConfig withCloud(CloudConfig newCloud) {
-        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, newCloud, roles, swarm, budgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools);
+        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, newCloud, roles, swarm, budgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools, outsideLookups);
     }
     public SwarmConfig withRoles(RolesConfig newRoles) {
-        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, cloud, newRoles, swarm, budgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools);
+        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, cloud, newRoles, swarm, budgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools, outsideLookups);
     }
     public SwarmConfig withBudgets(BudgetsConfig newBudgets) {
-        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, cloud, roles, swarm, newBudgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools);
+        return new SwarmConfig(repoPath, contextPaths, protectedPaths, consolePort, spark, cloud, roles, swarm, newBudgets, guidelines, sandbox, overnight, telemetry, mcpServers, mcpApi, tools, outsideLookups);
     }
 }

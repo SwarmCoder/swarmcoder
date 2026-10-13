@@ -174,9 +174,23 @@ public final class ProjectContext {
             .filter(p -> !isDocumentationSite(p))
             .map(Paths::get)
             .collect(Collectors.toList());
-        List<String> contextUrls = configured.stream()
+        List<String> listedUrls = configured.stream()
             .filter(ProjectContext::isDocumentationSite)
             .collect(Collectors.toList());
+        // A documentation site is another host. It is fetched only when the owner allowed
+        // outside lookups, and each site fetched is written down like any other sending.
+        com.swarmcoder.domain.OutsideLookups outside = shared.outsideLookups() == null
+            ? com.swarmcoder.domain.OutsideLookups.off() : shared.outsideLookups();
+        List<String> contextUrls = outside.enabled() ? listedUrls : List.<String>of();
+        if (!outside.enabled() && !listedUrls.isEmpty()) {
+            log.info("Project '{}': outside lookups are off, so the {} documentation site(s) "
+                + "among its reference folders are not fetched: {}", project.name(),
+                listedUrls.size(), listedUrls);
+        }
+        for (String site : contextUrls) {
+            outside.sent("documentation site", site, "its pages are fetched from " + site
+                + "; nothing from the project is sent");
+        }
         if (!contextRoots.isEmpty()) {
             log.info("Project '{}' context folders (read-only): {}", project.name(), contextRoots);
         }
@@ -459,7 +473,8 @@ public final class ProjectContext {
         // workers stay offline per spec §18).
         this.researcher = new ResearcherAgent(roles.utility(),
             shared.cloudGate(), shared.store(), project.id(), librarian.curator(), librarian,
-            WebAccess.standard(), shared.mcpServers(), projectPath);
+            WebAccess.governedBy(outside, WebAccess.standard()), shared.mcpServers(),
+            projectPath);
     }
 
     /** The Console chat coder for this project ({@code roles.chat} → utility fallback). */

@@ -17,6 +17,7 @@
  */
 package com.swarmcoder.knowledge;
 
+import com.swarmcoder.domain.OutsideLookups;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
@@ -79,7 +80,22 @@ public final class McpServers {
         }
     }
 
+    private final OutsideLookups lookups;
+
     public McpServers(List<Server> servers) {
+        this(servers, OutsideLookups.on(log::info));
+    }
+
+    /**
+     * @param lookups the owner's decision on outside lookups. Off: no server is kept, whatever
+     *                the list says, so none can be connected to or called. On: every call is
+     *                written down, with its arguments, before it is made.
+     */
+    public McpServers(List<Server> servers, OutsideLookups lookups) {
+        this.lookups = lookups == null ? OutsideLookups.off() : lookups;
+        if (!this.lookups.enabled()) {
+            return;
+        }
         for (Server server : servers == null ? List.<Server>of() : servers) {
             if (server != null && server.name() != null && server.url() != null) {
                 connections.put(server.name(), new Connection(server));
@@ -130,6 +146,8 @@ public final class McpServers {
         if (!connection.connect()) {
             return "error: MCP server '" + connection.server.name() + "' is unreachable";
         }
+        lookups.sent("MCP server '" + connection.server.name() + "'", connection.server.url(),
+            serverAndTool.substring(dot + 1) + " " + parseArgs(arguments));
         try {
             McpSchema.CallToolResult result = connection.client.callTool(
                 new McpSchema.CallToolRequest(serverAndTool.substring(dot + 1), parseArgs(arguments)));
