@@ -155,6 +155,14 @@ public interface SupervisorService {
      */
     String answerDecision(String decisionId, String answer, String text);
 
+    /**
+     * The same, for a question that offers {@code repair} for one of several tasks: {@code task}
+     * is the title or id of the one chosen. Ignored where the question names the task itself.
+     */
+    default String answerDecision(String decisionId, String answer, String text, String task) {
+        return answerDecision(decisionId, answer, text);
+    }
+
     // --- the record ------------------------------------------------------------------------------
 
     /** Everything the supervisor has decided for the current project, oldest first. */

@@ -9096,3 +9096,148 @@ two alike, and a second round of the same seed takes the next four numbers). Run
   own turns are measured.
 - Opening a store written before `ROUND_QUIET` was appended was not done in a test; the
   constant is last.
+
+## 92. The application did not start, the build waited five minutes and stopped with no reason (live supervised build, 2026-10-13)
+
+**What was observed.** At final integration every acceptance test passed on the merged tree.
+Then: "the 1 journey(s) of this project could not be made: the application did not start in
+the merged tree: nothing answered http://127.0.0.1:8080/ inside the container within 300
+seconds". The question offered `retry` and carried nothing the application had said. Started
+by hand, the same tree showed the cause in its first lines: its dependency-injection container
+refused to boot over a public field of a class one task of the build had written, and the
+process exited within seconds. The acceptance tests had passed because they build that class
+directly and never start the application.
+
+**Causes** (lines as on `master` before this change).
+
+1. *The output was thrown away.* `BrowserVerifier.runInside` wrote the last 40 lines of the
+   serve command's output to a log (`BrowserVerifier.java:269`) and returned only "nothing
+   answered ... within N seconds" (`:271`). `FinalIntegrator.makeJourneys` gave the runner a
+   new `StringBuilder` as that log and never read it, and no place to store anything
+   (`FinalIntegrator.java:767`, `BlobSink.NONE`); the reason it stopped on was that one
+   sentence (`:770`). `JourneyRunner.Outcome` could carry nothing else
+   (`JourneyRunner.java:47`).
+2. *An application that had exited was waited for.* The wait does ask whether the service is
+   still running on every turn (`BrowserVerifier.java:332`). In a container the answer was
+   always yes: `SandboxExecTarget.startService` started its 30-minute watchdog as a child in
+   the service's own process group (`SandboxExecTarget.java:281`), and "alive" is "any
+   process of that group that is not a zombie" (`:322`-`:328`). The sleeping watchdog was
+   such a process. The same line replaced the wrapper with the command (`exec sh`, `:282`),
+   so no exit code was recorded anywhere.
+3. *Nothing but `retry`.* `GreenfieldWorkflow.offerRepairAfterIntegration` names a task only
+   for a failed journey or for refused code (`GreenfieldWorkflow.java:7351`). A start that
+   failed came back with neither.
+
+**What changed.**
+
+- *The service handle knows how its command ended.* `ExecTarget.ServiceHandle.exited()`
+  gives the exit code and after how many seconds, once nothing of the service is running;
+  `outputKept(first, last)` gives both ends of what it printed (`ServeOutput`: the first 4 KB
+  and the last 16 KB, the middle counted and left out). In a container the watchdog now runs
+  under its own `setsid`, outside the group, and `close()` stops it; the wrapper runs the
+  command instead of becoming it and writes "exit code, seconds" to a file beside the log.
+  A command that puts itself in the background is still "running" while any process of the
+  group is. The local target reads its `Process`.
+- *The wait ends when the command has.* It did in the code already; with the watchdog out of
+  the group it does in a container too. `BrowserVerifier` then records a `StartFailure`: the
+  probe, the timeout, the exit or "still running", the kept output and, when there is a blob
+  store, where it was stored. The sentence is "the application exited with code N after S
+  seconds, before anything answered ..." or "nothing answered ... within N seconds, and the
+  serve command was still running when the wait ended". It is the message of every browser
+  stage that fails to start an application, not only of a journey.
+- *The reason goes with the stop.* `JourneyRunner.Outcome.startFailure` carries it;
+  `FinalIntegrator` stores the output through the engine's blob sink (`keepingOutputIn`),
+  logs it whole, and adds to the failure: `blob_text ref=...` and the last whole lines that
+  fit in 1,500 characters (`StartFailureOwner.detail`). The failure is the story's waiting
+  reason and the end of the question. The question's second paragraph - inside the 700
+  characters `next_attention` shows and the 400 of a story's last-build line - says what the
+  application did, which task is named and what may be answered.
+- *The task is named from the tree* (`StartFailureOwner`). The kept output is cut into dotted
+  names. Each is looked up, longest prefix first, in the merged tree's index of declared
+  types (`ProjectTypes.fileOf`), so a stack frame and a member both give their type. The
+  files that declare those types are matched against the files each task's chosen change
+  wrote (`WorkerToolbox.touchedPaths` of the winner's diff). No word of the output is read.
+  - One task: the question is marked `repairOfferedBy` for it, as for a failed journey, and
+    `repair` is section 84's answer with its count and cap.
+  - Several tasks, or none (then every task with a chosen change): each is marked
+    `Task.repairChoiceOfferedBy`, the question lists `repair` with "task is REQUIRED: one of
+    ...", and `answer_question` takes a new optional `task` (a title or id). The answer moves
+    the mark to `repairOfferedBy` of the task chosen and clears the others; from there it is
+    the same round. On screen the task's title follows the word: `repair 'Title': text`.
+  - Nobody with a round left: the paragraph says only sending the story back remains.
+- *The workers get the output.* `Task.startOutput` holds the kept output on each task the
+  answer may be for. `giveInstructedRepairRounds` hands the workers the instruction followed
+  by it (`withStartOutput`), copied, not re-typed; the round's evidence is the question, as
+  before. The field is cleared when the stage runs again.
+
+**The cheaper catch that was not built.** Starting the application once per wave on the
+wave's merged tree would catch a task that breaks start-up when it is merged. Not built, for
+two reasons found in the code. It is not sound as a stop: a tree between waves must compile,
+but nothing in a plan says it must start - a wave may add a type a later wave wires up, and a
+dependency-injection container refuses exactly that. And it is not small: the wave merge
+(`WaveIntegrator`) compiles in a container without the browser image and has no place that
+builds what `browser.serve` runs; the start needs a copy of the tree in a container of its own
+(section 77). Its cost would be one container, one copy of the tree, whatever build the serve
+command does and up to the ready timeout per wave. What it could soundly give is narrower: at
+a failed final start, "the last wave after which it still started" would cut the candidates
+to one wave's tasks.
+
+**Stored differently.** Fields were added to `Task`, no constant to any enum:
+`repairChoiceOfferedBy` and `startOutput` (both null on a task stored before).
+`FinalIntegrator.Result.startFailed` and `JourneyRunner.Outcome.startFailure` are held in
+memory only. `SupervisorService.answerDecision` gained a four-argument form with a default.
+
+**The run that was already stopped.** Its open question carries no mark, so it lists `retry`
+alone and `repair` is refused for it. When the application starts it takes unfinished runs up
+again (`RunResumer`, as section 88 says of its own stopped run); answering the old question
+`retry` does the same. The stage runs again: the tree is merged and verified, the application
+is started, it exits, and the run stops within seconds of that with a new question that
+carries the exit code, the output and the mark. That question takes `repair`. The old question
+is not withdrawn by this change and may stay open beside it.
+
+**Tests.** New: `AnApplicationThatDoesNotStartSaysWhyTest` (sc-verify: an ended command is not
+waited for and is not probed, its exit and both ends of its output are kept and stored; a
+running one is said to be running; and in a real container with the watchdog asleep an exit
+code of 7 is seen in seconds with both output streams),
+`TheTaskThatBrokeTheStartIsNamedTest` (sc-workflow: which names of an output are project
+types, against a scripted tree and against `ProjectTypes` on real files; one task, several,
+none; the offer and the cap; the paragraph inside 700 characters; the tail in the question;
+the workers' instruction), `AFailedStartCanBeAnsweredRepairForOneTaskTest` (sc-console: the
+option, `task` required and checked, what the answer writes on the chosen task and clears on
+the others, the log entry, the same on screen, the cap). Run with them:
+`EveryJourneyStartsOnWhatTheTreeGivesTest`, `AppThatDoesNotStartFailsTest`,
+`AFailedJourneyGoesBackToItsAuthorTest`, `AStoppedBuildCanBeAnsweredRepairTest`,
+`SupervisorDeskTest`, `SupervisorMcpToolsTest`.
+
+**Not checked:**
+
+- Nothing here was run against a model or a live build, and the build of 2026-10-13 was not
+  made again.
+- That the watchdog was why the wait ran to its end is read from the shell wrapper. The new
+  container test passes with the change; it was not run against the old wrapper.
+- No test drives `FinalIntegrator.makeJourneys` to a failed start, `whoWroteWhatTheOutputNames`
+  on a real merged tree, the marks written at the park or `giveInstructedRepairRounds` with
+  the output: they need a container inside the workflow or the real engine, as sections 84
+  and 88 say of the same paths. The runner, the naming, the offer, the answer and the text
+  the workers get are tested as parts.
+- A repaired candidate is verified as any candidate is, and that verification does not start
+  the application. Whether the repair worked is seen only when the stage starts it again.
+- A contract whose `browser` block lists pages of its own starts the application once more,
+  in the verification before the journeys. A start that fails there stops the build with the
+  new sentence in the verification's failure; the task is not named and `repair` is not
+  offered from that place.
+- Only Java types are looked up (`ProjectTypes` reads `.java` files). An output that names a
+  script, a template or a configuration file names no task; then every task with a chosen
+  change is a candidate.
+- A type named in passing - a frame of a class that is not at fault - counts like any other,
+  which is why several named tasks are a choice and not a guess.
+- The output goes to each repair worker in its opening: up to 20 KB, about 5,000 tokens,
+  once per worker of the round. Not measured.
+- `Exited.afterSeconds` is whole seconds by the container's clock; the local target measures
+  to the moment it is asked.
+- The watchdog's own stop in `close()`, and a service left when the process dies between
+  start and close (it is killed with its container), have no test.
+- The Console's question card was not opened to see the new paragraph or to answer with a
+  task's title.
+- Opening a store written before the new fields. EclipseStore maps added fields on its own
+  and `Task` has gained fields this way before; no old store was opened in a test.

@@ -312,7 +312,12 @@ final class SupervisorMcpTools {
                 + "says whether the build was restarted. Where the question lists the answer "
                 + "repair, that answer gives the named task's workers one more repair round "
                 + "with text as their instruction, before the stage runs again; it is counted "
-                + "per task and capped. Where it lists the answer retest, that answer sends "
+                + "per task and capped. Where the build stopped because the application did "
+                + "not start, the question says whether it exited (and its exit code) or was "
+                + "still running, shows the last lines it printed and names a blob_text ref "
+                + "for the whole output; repair is then for the task that wrote what the "
+                + "output names, or, where the question lists several tasks, for the one you "
+                + "name in task. Where it lists the answer retest, that answer sends "
                 + "the named task's acceptance test back to its author with text as the "
                 + "instruction: the correction is checked like a first-written test, the task "
                 + "is verified again from the candidates it has and built again only if none "
@@ -329,10 +334,12 @@ final class SupervisorMcpTools {
             SwarmMcpTools.schema("""
                 {"decision_id": {"type":"string"},
                  "answer": {"type":"string","description":"One of the answer tokens the question lists."},
+                 "task": {"type":"string","description":"Only for repair on a question that lists several tasks to choose from: the title of the one task to repair, as the question lists it."},
                  "text": {"type":"string","description":"Free text, where the answer takes it. Required for repair: what the repair workers must change. Required for retest: what is wrong with the acceptance test and what its author must change. Required for screen: what the screen must do. Required for journey: how the journey must be corrected."}}""",
                 "decision_id", "answer"),
             args -> done(supervisor.answerDecision(SwarmMcpTools.str(args, "decision_id"),
-                SwarmMcpTools.str(args, "answer"), SwarmMcpTools.str(args, "text")), "Recorded.")));
+                SwarmMcpTools.str(args, "answer"), SwarmMcpTools.str(args, "text"),
+                SwarmMcpTools.str(args, "task")), "Recorded.")));
         return tools;
     }
 
