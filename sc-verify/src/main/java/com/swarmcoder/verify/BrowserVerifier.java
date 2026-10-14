@@ -300,18 +300,28 @@ public final class BrowserVerifier {
             serveCommand = spec.serve().replace("{PORT}", String.valueOf(port));
             appendLog(fullLog, "[browser] (inside the container) $ " + serveCommand);
         }
+        // A block written without knowing the application (section 108): the ports already
+        // open before it starts, so the one it opens itself can be told apart.
+        java.util.Set<Integer> openBefore = !pages && spec.findPort() ? listening(target) : null;
         long started = System.nanoTime();
         try (ExecTarget.ServiceHandle service = target.startService(serveCommand)) {
             String probeUrl = pages ? baseUrl + STATIC_READY_PATH
                 : spec.readyProbe() == null
                     ? baseUrl + "/"
                     : spec.readyProbe().replace("{PORT}", String.valueOf(port));
-            if (!awaitReadyInside(target, service, probeUrl, spec.effectiveReadyTimeoutSeconds(),
-                    fullLog)) {
+            int answered = awaitReadyInside(target, service, probeUrl, port,
+                spec.effectiveReadyTimeoutSeconds(), fullLog, openBefore);
+            if (answered <= 0) {
                 StartFailure failure = didNotStart(service, probeUrl, true,
                     spec.effectiveReadyTimeoutSeconds(), secondsSince(started), fullLog);
                 return failedToStart(spec, "the application did not start: "
                     + failure.sentence());
+            }
+            if (answered != port) {
+                appendLog(fullLog, "[browser] (inside the container) the application did not "
+                    + "take port " + port + "; it opened port " + answered + " itself, and the "
+                    + "browser is pointed there");
+                baseUrl = "http://127.0.0.1:" + answered;
             }
             return checkPagesInside(target, spec, baseUrl, fullLog);
         } catch (UnsupportedOperationException e) {
@@ -365,28 +375,98 @@ public final class BrowserVerifier {
         return "F=$(mktemp) && printf %s '" + encoded + "' | base64 -d > \"$F\" && exec node \"$F\"";
     }
 
-    private static boolean awaitReadyInside(ExecTarget target, ExecTarget.ServiceHandle service,
-                                            String probeUrl, int timeoutSeconds,
-                                            StringBuilder fullLog) throws IOException {
+    /**
+     * The port the application answered its probe on, or 0 when it never did.
+     *
+     * @param openBefore with a block that may find its port (section 108): the ports that were
+     *                   open in the container before the application started. When nothing
+     *                   answers on {@code port}, a port opened since is probed the same way.
+     *                   Null: only {@code port} is probed
+     */
+    private static int awaitReadyInside(ExecTarget target, ExecTarget.ServiceHandle service,
+                                        String probeUrl, int port, int timeoutSeconds,
+                                        StringBuilder fullLog, java.util.Set<Integer> openBefore)
+            throws IOException {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         while (Instant.now().isBefore(deadline)) {
             if (!service.isAlive()) {
                 appendLog(fullLog, "[browser] serve command exited before becoming ready");
-                return false;
+                return 0;
             }
-            ExecResult probe = target.exec("curl -fsS -o /dev/null --max-time 2 "
-                + shellQuote(probeUrl) + " && echo SC_READY", 30);
-            if (probe.output().contains("SC_READY")) {
-                return true;
+            if (answersInside(target, probeUrl)) {
+                return port;
+            }
+            if (openBefore != null) {
+                java.util.Set<Integer> now = listening(target);
+                for (int opened : now == null ? java.util.Set.<Integer>of() : now) {
+                    if (opened != port && !openBefore.contains(opened)
+                            && answersInside(target, onPort(probeUrl, opened))) {
+                        return opened;
+                    }
+                }
             }
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return false;
+                return 0;
             }
         }
-        return false;
+        return 0;
+    }
+
+    private static boolean answersInside(ExecTarget target, String url) throws IOException {
+        ExecResult probe = target.exec("curl -fsS -o /dev/null --max-time 2 "
+            + shellQuote(url) + " && echo SC_READY", 30);
+        return probe.output() != null && probe.output().contains("SC_READY");
+    }
+
+    /** {@code url} with its port replaced; the URL as it is when it cannot be read. */
+    static String onPort(String url, int port) {
+        try {
+            URI uri = URI.create(url);
+            return new URI(uri.getScheme(), uri.getUserInfo(), uri.getHost(), port,
+                uri.getPath(), uri.getQuery(), uri.getFragment()).toString();
+        } catch (IllegalArgumentException | java.net.URISyntaxException e) {
+            return url;
+        }
+    }
+
+    /**
+     * The TCP ports something listens on in the container, read from the kernel's own table
+     * ({@code /proc/net/tcp}, {@code tcp6}): no tool the image might lack. Null when it
+     * cannot be read - then no port is told apart from what was open before, and the
+     * application is only looked for where it was told to be.
+     */
+    static java.util.Set<Integer> listening(ExecTarget target) {
+        try {
+            ExecResult table = target.exec("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null", 30);
+            String text = table.output();
+            return text == null || !text.contains("local_address") ? null : listeningIn(text);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The listening ports of a {@code /proc/net/tcp} table: state {@code 0A}, in order. */
+    static java.util.Set<Integer> listeningIn(String table) {
+        java.util.Set<Integer> ports = new java.util.TreeSet<>();
+        if (table == null) {
+            return ports;
+        }
+        for (String line : table.split("\n")) {
+            String[] fields = line.trim().split("\\s+");
+            if (fields.length < 4 || !"0A".equals(fields[3])) {
+                continue;
+            }
+            int colon = fields[1].lastIndexOf(':');
+            try {
+                ports.add(Integer.parseInt(fields[1].substring(colon + 1), 16));
+            } catch (RuntimeException notAnEntry) {
+                // a header or a line of something else
+            }
+        }
+        return ports;
     }
 
     private BrowserCheckResults checkPagesInside(ExecTarget target, VerifySpec.BrowserSpec spec,

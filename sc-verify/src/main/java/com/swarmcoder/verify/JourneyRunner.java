@@ -121,7 +121,7 @@ public final class JourneyRunner {
                 results = verifier.run(start.target(),
                     new VerifySpec.BrowserSpec(browser.serve(), browser.readyProbe(),
                         browser.readyTimeoutSeconds(), List.of(journey.toCheck(entry)),
-                        browser.port()),
+                        browser.port(), browser.findPort()),
                     said);
             } catch (RuntimeException e) {
                 // No clean place, no journey: one made on what an earlier one left proves nothing.

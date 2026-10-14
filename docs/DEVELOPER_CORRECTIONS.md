@@ -11260,3 +11260,127 @@ ran a stage with claimed checks and no contract; their fixtures now have one.
 - `run_diagnosis` does not show the contract line; it reads the run through its own
   transfer objects.
 - A run with no project folder at all is not gated, as before.
+
+## 108. A generated contract could not start the application, so a story with a screen stopped (what section 107 left open, 2026-10-14)
+
+**What was missing.** A contract SwarmCoder generates (section 107) has no `browser:` block.
+A project made over an empty folder therefore stopped at its first story with a screen: the
+journeys of a story are decided at TEST_AUTHORING (`JourneysOfAPlan.decide`), and a contract
+with no `browser.serve` line gives "this project's verification contract cannot start the
+application". A known-good hand-written contract for a three-module Maven project (shared,
+client compiled to JavaScript, server) started the server with
+`mvn -o -q -B -DskipTests package && cd <server> && java -cp "target/classes:target/libs/*"
+<main class>`, `port: 8080`, a `readyProbe` on `{PORT}`, 300 seconds and `checks: []`.
+
+**How the browser block is used (established first).**
+
+- `serve` is a shell command; `{PORT}` in it and in `readyProbe` is replaced by the port the
+  stage chose. Inside a container (final integration, story delivery, every journey, the red
+  check of the journeys) that is `port:` when the contract names one, else 18080
+  (`BrowserVerifier.runInside`). The application is told nothing else: what the command does
+  with `{PORT}` is the only way it learns the port.
+- `readyProbe` is polled with curl inside the container until it answers 2xx or
+  `readyTimeoutSeconds` pass.
+- The contract is read for this at TEST_AUTHORING (whether a journey is asked, and the stop
+  when none can be made), when journey owners are settled, at the red check of the journeys
+  on the start tree, in every verification's browser stage, and at final integration
+  (`makeJourneys`). All of them read the project's own folder.
+- The server of the reference stack reads no port of its own: its start call takes the port
+  from `main`, and the stack's project template hardcodes 8080. Its examples read
+  `--port <n>` and then a system property of their own. No one name reaches every
+  application, and a template-made server cannot be told its port at all.
+
+**When the block is provided.** At TEST_AUTHORING, at the moment the journeys would stop the
+run for want of it, and only for a contract SwarmCoder generated
+(`GeneratedContract.wantsABrowserBlock`). The code it starts is there by then: a story only
+has a screen once a module that runs in a browser exists, which an earlier story built. A
+project whose stories have no screen never gets a block, so a command-line project is not
+given a browser stage it cannot pass. A contract a person wrote, and a block that is there,
+are never changed. The block is appended to the generated file, so every later reader (red
+check, verification, final integration) uses the same one.
+
+**Which class starts the application** (`ServeFromTheCode`, sc-verify; the classes come from
+the object graph, `ReachableCode.Graph.mainTypes`, sc-knowledge):
+
+1. Every production type that declares `main(String[])`, by the same test the graph uses for
+   an entry point. A main in a module that runs only in a browser is dropped: it is what the
+   compiler to JavaScript starts from.
+2. The class the contract names with `entryPoint: <class>`, when a person added that line.
+3. One left: that one.
+4. Several: those in the module that depends, directly or not, on the most other modules of
+   the project (`BuildLayout` module graph); then, if still several, the one a build file
+   names in full (the graph now records which files a build file names).
+5. Still several, or none: the run stops at TEST_AUTHORING with a question that names the
+   candidates and says to add `entryPoint: <one of them>` or to write the block by hand.
+   Nothing is guessed and nothing is written.
+
+**How it is started** (Maven), from the repository root, offline:
+
+- `mvn -o -q -B -Dmaven.test.skip=true -pl <module> -am package`, then
+  `cd <module> && export PORT={PORT} && exec java -Dport={PORT} -cp "target/classes:<deps>"
+  <class>`.
+- `-Dmaven.test.skip=true`, not `-DskipTests`: the acceptance tests on the tree may name types
+  that do not exist yet (the red check), and a test-compile error would read as "the
+  application did not start". The tests have their own stages.
+- `<deps>` is the module's own copied-dependency folder when its pom runs `copy-dependencies`
+  of the dependency plugin in a phase up to `package` (its `outputDirectory`, with
+  `${project.build.directory}` read as `target`; the plugin's default `target/dependency`
+  when none is given). That needs nothing beyond what the project's build already uses.
+- Otherwise the same Maven call also runs
+  `org.apache.maven.plugins:maven-dependency-plugin:<version>:build-classpath
+  -Dmdep.includeScope=runtime` into `<module>/target/swarmcoder-runtime-classpath.txt`, and
+  `<deps>` is the content of that file. In one reactor call after `package`, sibling modules
+  resolve to their freshly built jars.
+
+**What the offline classpath relies on.** Candidates and journeys build with no network,
+against the operator's own local Maven repository mounted read-only
+(`/opt/m2-ro/repository`, with the cache volume in front; `MavenRepoCache`). That repository
+holds what builds on this machine have resolved and nothing more. The dependency plugin is not
+bound to Maven's default lifecycle, so it cannot be relied on to be there. The command
+therefore names it with full coordinates and a version whose jar the repository holds
+(`DeclarableArtifacts.defaultLocalRepository`, the same directory the sandbox mounts), so no
+plugin prefix or version has to be resolved offline. With no such jar and no copied
+dependencies the run stops with a question saying so. A version whose jar is there but whose
+own dependencies were never downloaded fails at the build; that is not checked.
+
+**How the port is passed.** Three ways at once, none of which needs the product to know the
+application:
+
+- `{PORT}` as the environment variable `PORT` (the common convention of hosted platforms)
+  and as the system property `port`, so an application that reads either binds where the
+  stage looks.
+- `findPort: true` in the block (new field of `VerifySpec.BrowserSpec`, default false).
+  Inside the container the stage reads the listening ports from `/proc/net/tcp` and `tcp6`
+  before it starts the application; when nothing answers on `{PORT}`, it probes each port
+  opened since and uses the one that answers, and says so in the stage's log. That is what
+  makes a server with a hardcoded port work, the reference template's included. Two journeys
+  never share a container, so a fixed port cannot collide there.
+- Only the in-container stage finds the port. On this PC nothing is started for it.
+
+**Also.** `ToolchainDetector`'s own proposals (the Console's build-contract dialog, the
+on-ramp) now carry `-o -B -q` for Maven and `--offline -q` for Gradle, as `GeneratedContract`
+writes them.
+
+**Tests.** `AGeneratedContractStartsTheApplicationFromItsCodeTest` (sc-workflow: a
+three-module project with one main class gets a block that names it, its module, its copied
+dependencies and the port mechanism; two main classes are resolved by module dependencies,
+and by a build file naming one; an ambiguous case stops with a question naming both and is
+settled by `entryPoint`; a hand-written block is kept byte for byte) and
+`TheRuntimeClasspathIsHadOfflineTest` (sc-verify: the dependency plugin at the highest
+version with a jar; a question with neither; listening ports read from the kernel's table).
+
+**Not done, not checked.**
+
+- No generated command has built or started a real project, in a container or anywhere. That
+  Maven writes `-Dmdep.outputFile` where it is given (an absolute path under the module) and
+  that the reactor resolves siblings to their jars are taken from Maven's documented
+  behaviour, not measured.
+- Gradle: not done. A Gradle project's runtime classpath cannot be named without running
+  Gradle with a task or init script of SwarmCoder's own. A generated Gradle contract still
+  stops a story with a screen, as before.
+- `copy-dependencies` is read from the module's own pom only, not from a parent pom it
+  inherits the execution from; such a project falls back to the dependency plugin.
+- The block is added at TEST_AUTHORING only. A run taken up at final integration with
+  journeys on its tree and a generated contract without a block still fails there.
+- `checks: []`: the block names no page to look at; journeys start at `/`. An application
+  whose `/` does not answer 2xx is reported as not started.

@@ -3005,13 +3005,36 @@ public class GreenfieldWorkflow {
         // contract starts an application every story is asked for a journey.
         com.swarmcoder.knowledge.ReachableCode.Graph treeGraph =
             browserOnly.any() ? startTreeGraph() : null;
-        JourneysOfAPlan.Decision journeysDue = JourneysOfAPlan.decide(graph.tasks(),
-            task -> !criteriaFor(task, scope).isEmpty(), browserOnly,
-            repoPath == null ? null : VerifySpecLoader.load(repoPath).orElse(null),
+        java.util.function.Function<String, List<String>> usedByBrowserCode =
             treeGraph == null || !treeGraph.determined() ? null
                 : path -> treeGraph.usersThroughItsTypes(path,
                     user -> com.swarmcoder.verify.ScreenChange.inBrowserOnlyModule(user,
-                        browserOnly)));
+                        browserOnly));
+        JourneysOfAPlan.Decision decided = JourneysOfAPlan.decide(graph.tasks(),
+            task -> !criteriaFor(task, scope).isEmpty(), browserOnly,
+            repoPath == null ? null : VerifySpecLoader.load(repoPath).orElse(null),
+            usedByBrowserCode);
+        if (decided.stop() != null && repoPath != null
+                && com.swarmcoder.verify.GeneratedContract.wantsABrowserBlock(repoPath)) {
+            // A contract SwarmCoder generated has no browser block until a story needs one,
+            // and by then the code it starts is there (section 108).
+            ContractFromTheStart.Served served = ContractFromTheStart.browserFromTheCode(
+                repoPath, treeGraph, repoLayout(), browserOnly);
+            if (served.question() != null) {
+                log("TEST_AUTHORING: this story changes a screen and the generated contract "
+                    + "cannot start the application; how to start it could not be settled "
+                    + "from the code, so the run stops before any test is written.");
+                return served.question();
+            }
+            if (served.written()) {
+                log("TEST_AUTHORING: the generated contract had no browser block; one was "
+                    + "worked out from the code and added: " + served.said());
+                decided = JourneysOfAPlan.decide(graph.tasks(),
+                    task -> !criteriaFor(task, scope).isEmpty(), browserOnly,
+                    VerifySpecLoader.load(repoPath).orElse(null), usedByBrowserCode);
+            }
+        }
+        JourneysOfAPlan.Decision journeysDue = decided;
         if (journeysDue.stop() != null) {
             log("TEST_AUTHORING: this story changes a screen and the project's contract cannot "
                 + "start the application, so no journey could be made; stopping before any test "
