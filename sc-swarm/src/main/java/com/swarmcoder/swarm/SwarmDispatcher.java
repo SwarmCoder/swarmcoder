@@ -427,7 +427,8 @@ public class SwarmDispatcher {
                             plan.concurrency());
                         KillReason stopped = result.candidate().killReason();
                         if (stopped == KillReason.SUPERSEDED || stopped == KillReason.PLACE_NEEDED
-                                || stopped == KillReason.PLAN_FAULT) {
+                                || stopped == KillReason.PLAN_FAULT
+                                || stopped == KillReason.BUILD_ENDED) {
                             com.swarmcoder.inference.RunMeter.span("candidate cancelled|"
                                 + stopped.name() + "|" + task.id() + "|" + idx,
                                 System.currentTimeMillis());

@@ -107,6 +107,11 @@ public class BacklogServiceImpl implements BacklogService {
             }
             story.setState(StoryState.CANCELLED);
             store.saveStory(story);
+            // A dropped story's builds are over, the one building now included (section 110):
+            // each unfinished one is ended, its swarm is stopped at once, and its open questions
+            // are closed. Dropping used to end no build, so one went on building and was
+            // picked up again at the next start.
+            SupersededRuns.supersede(store, story, null, story.key() + " was dropped.");
             // A tombstone, not a deletion: the story and everything it produced stay on the record.
             store.recordChange(projectId, "human", ChangeEntityType.STORY, story.id(),
                 ChangeKind.TOMBSTONED, "dropped " + story.key());
