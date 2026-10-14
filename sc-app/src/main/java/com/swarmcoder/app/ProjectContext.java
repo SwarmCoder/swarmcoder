@@ -218,7 +218,8 @@ public final class ProjectContext {
         com.swarmcoder.lsp.LspService projectServer = projectPath == null
             ? com.swarmcoder.lsp.LspService.UNAVAILABLE
             : com.swarmcoder.lsp.LspServiceFactory.installed(
-                com.swarmcoder.knowledge.ProjectClasspath::jarsOf, false).create(projectPath);
+                com.swarmcoder.knowledge.ProjectClasspath.orTheReferencesOf(librarian.curator()),
+                false).create(projectPath);
         librarian.curator().languageServer(projectServer, projectPath);
         boolean languageServerInstalled = projectServer.isInstalled();
         if (languageServerInstalled) {
@@ -237,7 +238,8 @@ public final class ProjectContext {
         // asks for a file's problems, and stopped with the worker. Same containment: no build.
         com.swarmcoder.lsp.LspServiceFactory checkoutServers =
             com.swarmcoder.lsp.LspServiceFactory.forCheckouts(
-                com.swarmcoder.knowledge.ProjectClasspath::jarsOf, true);
+                com.swarmcoder.knowledge.ProjectClasspath.orTheReferencesOf(librarian.curator()),
+                true);
         log.info("Project '{}': workers are handed {}.", project.name(), workerRoom.describe());
         // Say ONCE, loudly, when this project's knowledge sources are not what the operator
         // thinks they are. Failing quietly per lookup is right — one dead call must not kill a

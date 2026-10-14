@@ -928,8 +928,10 @@ public final class SemanticIndex {
             int cut = type.fqn().lastIndexOf('.');
             String pkg = cut < 0 ? "" : type.fqn().substring(0, cut);
             boolean inPackage = pkg.equals(asked) || pkg.startsWith(asked + ".");
-            boolean inFolder = ("/" + type.rootLabel() + "/" + type.file())
-                .contains("/" + asked + "/");
+            String file = "/" + type.rootLabel() + "/" + type.file().replace((char) 92, '/');
+            // A folder, or the file itself (section 113: a worker's types_in of a reference
+            // file answered "No types").
+            boolean inFolder = file.contains("/" + asked + "/") || file.endsWith("/" + asked);
             if (inPackage || inFolder) {
                 found.add(type);
             }

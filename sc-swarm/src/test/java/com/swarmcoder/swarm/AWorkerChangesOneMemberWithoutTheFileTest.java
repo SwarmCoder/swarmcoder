@@ -115,7 +115,7 @@ class AWorkerChangesOneMemberWithoutTheFileTest {
             String replaced = toolbox.replaceMember("App#run",
                 "public String run() {\n    return \"new\";\n}");
             String added = toolbox.addMember("App", "public int extra() {\n    return 7;\n}");
-            String now = toolbox.oneBodyOf("App#run");
+            String now = toolbox.bodyOf("App#run");
 
             assertThat(replaced).startsWith("replaced run in " + APP);
             assertThat(added).startsWith("added extra to App in " + APP);
@@ -125,7 +125,7 @@ class AWorkerChangesOneMemberWithoutTheFileTest {
                 .contains("public int step99()").doesNotContain("\"old\"");
             assertThat(now).as("the checkout as it is now, not the tree of the task's start")
                 .contains("return \"new\";").doesNotContain("the tree's");
-            assertThat(toolbox.oneBodyOf("FrameworkType#open"))
+            assertThat(toolbox.bodyOf("FrameworkType#open"))
                 .as("what the checkout does not hold is the tree's").startsWith("the tree's body_of");
             assertThat(toolbox.docSection("docs/a.md#1")).startsWith("the tree's doc_section");
             assertThat(LookupMeter.counts())

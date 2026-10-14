@@ -7703,7 +7703,12 @@ public class GreenfieldWorkflow {
     /** The "libraries you may ADD" list for every worker's brief, or null when nothing is known. */
     private OfflineLibraryBrief offlineLibraries(BuildFacts build) {
         if (build == null || build.catalog() == null || build.catalog().isEmpty()) {
-            return null;
+            // No build file names a library yet (section 113): the brief says how to ask the
+            // offline repository, rather than nothing while the rules say "only what it lists".
+            boolean nothingDeclared = build == null || build.declared().isEmpty();
+            return nothingDeclared
+                && java.nio.file.Files.isDirectory(DeclarableArtifacts.defaultLocalRepository())
+                ? OfflineLibraryBrief.noBuildYet() : null;
         }
         return new OfflineLibraryBrief(build.catalog(), build.declared(), projectRules());
     }

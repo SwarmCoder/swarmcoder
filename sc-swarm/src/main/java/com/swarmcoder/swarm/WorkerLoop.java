@@ -661,10 +661,34 @@ public class WorkerLoop {
             }
         }
         if (documents.isEmpty()) {
-            return "";
+            return documentCount(brief);
         }
         return "Your knowledge brief lists real documentation for this project, including "
             + String.join(", ", documents) + ".";
+    }
+
+    /** The count line under the brief's documents heading. */
+    private static final java.util.regex.Pattern DOCUMENT_COUNT =
+        java.util.regex.Pattern.compile("(?m)^(\\d+) document\\(s\\)\\.");
+
+    /**
+     * Since section 100 a brief gives the reference documents' count and how to list them, not
+     * their names, so the catalogue lines read above are not there: every worker's steering
+     * notice said "There is no reference documentation for this project" beside an opening of
+     * 33 documents (section 113). The hint is now read from that count.
+     */
+    private static String documentCount(String brief) {
+        int heading = brief.indexOf(com.swarmcoder.knowledge.Librarian.DOCUMENTS_HEADING);
+        if (heading < 0) {
+            return "";
+        }
+        java.util.regex.Matcher count = DOCUMENT_COUNT.matcher(brief);
+        if (!count.find(heading) || "0".equals(count.group(1))) {
+            return "";
+        }
+        return "This project has " + count.group(1) + " reference document(s): doc_search "
+            + "<words> names the sections about a subject, doc_section <document>#<section> "
+            + "reads one, and doc_outline with an empty string lists every document.";
     }
 
     private String captureDiff(Path workspace) {

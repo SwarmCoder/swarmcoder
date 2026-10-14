@@ -11764,3 +11764,98 @@ holds is refused; one nobody holds is taken), `ACandidateThatChangedSourceAnothe
   its write set: that file is now put back at the merge, and the wave's compile check decides.
 - `FileOfATaskNotYetRun`'s message still says "source file" for a refused build file.
 - Nothing was run against a model or in a container. The live run was not resumed.
+
+## 113. Workers searched the offline repository with find, and "No type" was said of library classes nobody had looked for (call-by-call audit of the workers of one local build, 2026-10-14)
+
+**The build.** An empty project built on a reference library checked out as a reference folder.
+Candidates build offline against a read-only local Maven repository mounted in the container.
+Every call of every worker was read. Five findings, all in the lookups, the language server's
+libraries and the steering notice.
+
+**1. Which libraries and versions exist was learned with `find`.** 65 `exec` reads
+(`find ~/.m2`, `/opt/m2-cache`, `find /`), 57 whole reads of the reference library's build
+files and 46 of the project's own. The rules say "ONLY an artifact your knowledge brief lists as
+available", and a project with no build file had nothing listed.
+
+- *`offline_artifacts`* (`OfflineRepository`), a worker lookup, answers from the folders of the
+  repository the containers mount (`DeclarableArtifacts.defaultLocalRepository`, the one section
+  108 reads). A groupId: the group's artifacts, each with the versions held, and the groups
+  under it. `groupId:artifactId`: that artifact's versions; with a third part, whether that
+  version is held. An artifactId alone: every group that has one of that id; no exact id: the
+  ids that contain it. Empty: the top-level groups and how to ask. A version folder with no jar
+  is marked "pom only". Nothing is resolved, downloaded or run; no machine path is printed.
+- *The brief.* A project whose build names no library (`BuildFacts.NONE` or nothing declared)
+  gets `OfflineLibraryBrief.NO_BUILD_YET`: a heading, one sentence that none is listed, and how
+  to ask `offline_artifacts`. No inventory is pasted. A project with a build is unchanged.
+- *Pointers.* A whole read of a build file ends with one line naming `build_of <module>#<part>`
+  (section 105) and `offline_artifacts` (`WorkerToolbox.buildFileNote`); the shell-read note
+  names both.
+
+**2. `shape_of` "No type" 19 times, `find_symbol` nothing about 25 times, for library classes.**
+The project had no build file, so the language server was given no jar, and the tree has no jar
+types. Decided:
+
+- *The jars the project is meant to use.* `ProjectClasspath.orTheReferencesOf`: a checkout's own
+  jars; when its build files name none, the jars the reference roots' build files name. Used for
+  the project's server and for every worker checkout's server (`ProjectContext`,
+  `WorkerLookups.withTheInstalledServer`). A project built on a reference library uses that
+  library's dependencies, and nothing else is known before its own build exists.
+- *Re-import.* `JdtLanguageServer` stamps the workspace's build files (`pom.xml`,
+  `build.gradle`, `build.gradle.kts`) at start. When the stamp changes it resolves the jars
+  again and, when they differ, starts the server again on them. Nothing is imported or run.
+- *The run's tree.* The project's server reads the project folder, which does not get the run's
+  merges. When the project's answer finds no type and the worker's checkout holds a root build
+  file the project does not (the run's build, merged by an earlier task), the toolbox asks the
+  checkout's own server (`inCheckout` actions `shape_of`, `find_symbol`), whose jars come from
+  that build file. Its answer says so.
+- *A "no" says where it looked.* `WorkerLookups` ends a `shape_of` or `find_symbol` that found
+  nothing with: the tree of the project and the reference folders (source only), how many jars
+  the language server reads and where they come from (`ProjectClasspath.whereTheJarsComeFrom`),
+  and `offline_artifacts`. Such an answer is not kept in the shared store (`SharedAnswers
+  .unsettled`, now public): the jars change when a build file appears.
+
+**3. `body_of` failed 3 times in the binding:** "No argument provided for a required parameter:
+parameter #1 member of fun ...oneBodyOf". The description never said `member`, and the error
+named a method the worker had never seen.
+
+- `OmittedArguments`: a tool whose method has one `String` parameter, sent exactly one argument
+  under another name, is run with that argument. Several arguments, or a tool of several
+  parameters: unchanged. Nothing is decided by a name's words.
+- The method is `bodyOf` (the toolbox's private helper of that name is `resultBody`), and the
+  description says "member is Type#method, ...".
+
+**4. `types_in /reference/<root>/<path>` answered "No types".** `TreeQueries.typesIn` takes a
+worker's `/reference/` address as the other lookups do, and `SemanticIndex.typesIn` takes a
+file as the place its types are in.
+
+**5. The steering notice said "There is no reference documentation for this project"** to every
+worker whose opening listed 33 documents. `WorkerLoop.referenceHint` read catalogue lines
+(`- <root>/<path>.md`) that a brief has not had since section 100. It now also reads the count
+line under `Librarian.DOCUMENTS_HEADING` and names `doc_search`, `doc_section` and
+`doc_outline`. The notice at 8 calls now says the counts the one at 16 said (reading pauses at 16,
+the attempt stops at 24) and names the task's files, each marked when it does not exist yet. It
+refuses and caps nothing that was not refused or capped before.
+
+**Tests.** One per finding: `TheOfflineRepositoryIsALookupTest` (sc-knowledge, 1),
+`ALibraryTypeIsLookedUpInTheJarsItComesFromTest` (sc-app, 2),
+`AToolOfOneArgumentTakesItUnderAnyNameTest` (sc-runtime, 3),
+`AWorkersReferenceFolderIsAPlaceTypesInTakesTest` (sc-knowledge, 4),
+`TheFirstSteeringNoticeSaysWhatItKnowsTest` (sc-swarm, 5). Run with them and unchanged:
+`DeclarableArtifactsTest`, `ALookupNamesWhatItMeansTest`, `LibrarianTest`,
+`AnArgumentAToolLetsACallerLeaveOutIsEmptyTest`, `InvestigationSpiralTest`, `WorkerToolboxTest`,
+`AWorkerChangesOneMemberWithoutTheFileTest`, `WorkerLookupsTest`, `JdtLanguageServerTest`.
+
+**Not done, not checked.**
+
+- The language server's restart on new jars was not run against a real JDT LS; no live test
+  covers it. A restart costs a cold start (seconds to tens of seconds).
+- A worker checkout's server is started for a library lookup only when the project's answer
+  found nothing and the checkout has its own root build file; a module's build file alone does
+  not count.
+- `ProjectClasspath` (via `DeclarableArtifacts`) reads managed artifacts only; a dependency
+  declared with an explicit version and no dependency management is not on any classpath.
+- The tree's own index (`LstReader.classpathFor`) still parses with the project's jars only.
+- `offline_artifacts` is a worker tool; the planning roles do not have it.
+- The workers' opening still says "ONLY an artifact your knowledge brief lists as available";
+  it is another worker's to change.
+- Nothing was run against a model or in a container. The full suite was not run.

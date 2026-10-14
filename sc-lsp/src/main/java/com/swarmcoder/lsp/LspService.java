@@ -124,6 +124,14 @@ public interface LspService extends AutoCloseable {
         return List.of();
     }
 
+    /**
+     * How many library jars the server reads now, for an answer that found nothing and says
+     * where it looked (section 113); -1 when it has not started or reads none it can count.
+     */
+    default int libraryJars() {
+        return -1;
+    }
+
     /** One symbol's signature and javadoc. */
     default LspResult hover(String symbol) {
         return LspResult.unavailable(whyUnavailable());
