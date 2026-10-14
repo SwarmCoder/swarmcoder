@@ -208,7 +208,17 @@ public final class ReachableCode {
     /** One production file as the graph holds it. */
     private record Node(String file, List<String> types, Set<String> typeAnnotations,
                         Set<String> fileAnnotations, Set<String> supertypes, boolean hasMain,
-                        Set<String> uses) {
+                        Set<String> uses, List<String> mainTypes) {
+    }
+
+    /**
+     * A type of the tree's production code that declares {@code main(String[])} (section 108).
+     *
+     * @param file              the file declaring it, repo-relative
+     * @param type              its full name
+     * @param namedInABuildFile true when a build file names it in full
+     */
+    public record Main(String file, String type, boolean namedInABuildFile) {
     }
 
     /**
@@ -222,6 +232,8 @@ public final class ReachableCode {
         /** A file to the production files that use a type it declares. */
         private final Map<String, Set<String>> usedBy = new LinkedHashMap<>();
         private final Set<String> namedOutsideJava = new LinkedHashSet<>();
+        /** The part of {@link #namedOutsideJava} a build file names. */
+        private final Set<String> namedInBuildFiles = new LinkedHashSet<>();
         /** A type of the tree to the production file declaring it. */
         private final Map<String, String> fileOfType = new LinkedHashMap<>();
         /** Library supertypes and annotations a container finds a class by, full names. */
@@ -307,6 +319,25 @@ public final class ReachableCode {
         /** The entry-point files, with the same reading. */
         public Set<String> entryPointFiles() {
             return determined() ? Set.copyOf(walk(file -> false).anchors) : Set.of();
+        }
+
+        /**
+         * Every type of the production code that declares {@code main(String[])}, by file and
+         * name, in the order of their files: the entry points an application can be started
+         * from (section 108). Empty when the graph is not {@link #determined()}.
+         */
+        public List<Main> mainTypes() {
+            if (!determined()) {
+                return List.of();
+            }
+            List<Main> found = new ArrayList<>();
+            for (Node node : nodes.values()) {
+                for (String type : node.mainTypes()) {
+                    found.add(new Main(node.file(), type,
+                        namedInBuildFiles.contains(node.file())));
+                }
+            }
+            return List.copyOf(found);
         }
 
         /**
@@ -652,6 +683,7 @@ public final class ReachableCode {
             Set<String> typeAnnotations = new LinkedHashSet<>();
             Set<String> supertypes = new LinkedHashSet<>();
             boolean hasMain = false;
+            List<String> mainTypes = new ArrayList<>();
             // Outermost first: a nested type's name is its outer type's name and more.
             List<SemanticFacts.TypeFact> declared = new ArrayList<>(entry.getValue());
             declared.sort(java.util.Comparator
@@ -664,11 +696,15 @@ public final class ReachableCode {
                 type.assignableTo().stream().filter(ReachableCode::notTheLanguages)
                     .filter(parent -> !entry.getKey().equals(fileOfType.get(parent)))
                     .forEach(supertypes::add);
-                hasMain |= type.shape().contains("void main(java.lang.String[])");
+                if (type.shape().contains("void main(java.lang.String[])")) {
+                    hasMain = true;
+                    mainTypes.add(type.fqn());
+                }
             }
             graph.nodes.put(entry.getKey(), new Node(entry.getKey(), List.copyOf(types),
                 typeAnnotations, annotationsInFile.getOrDefault(entry.getKey(), Set.of()),
-                supertypes, hasMain, usesOfFile.getOrDefault(entry.getKey(), Set.of())));
+                supertypes, hasMain, usesOfFile.getOrDefault(entry.getKey(), Set.of()),
+                List.copyOf(mainTypes)));
         }
         graph.fileOfType.putAll(fileOfType);
         // What a container finds on the classpath: the platform's own contracts, unless the
@@ -685,7 +721,7 @@ public final class ReachableCode {
             log.debug("could not read what the libraries of {} ask a container for: {}", tree,
                 e.toString());
         }
-        readNamesOutsideJava(tree, fileOfType, graph.namedOutsideJava);
+        readNamesOutsideJava(tree, fileOfType, graph.namedOutsideJava, graph.namedInBuildFiles);
         log.info("reachable-code graph of {}: {} production file(s), {} named in build or "
             + "resource files, parsed in {} ms", tree, graph.nodes.size(),
             graph.namedOutsideJava.size(), facts.buildMillis);
@@ -698,7 +734,7 @@ public final class ReachableCode {
      * service-loader file's own name.
      */
     private static void readNamesOutsideJava(Path tree, Map<String, String> fileOfType,
-                                             Set<String> into) {
+                                             Set<String> into, Set<String> byBuildFiles) {
         Map<String, String> byDottedName = new LinkedHashMap<>();
         fileOfType.forEach((type, file) -> byDottedName.put(type.replace('$', '.'), file));
         List<Path> naming = new ArrayList<>();
@@ -727,6 +763,9 @@ public final class ReachableCode {
                     String declaredIn = byDottedName.get(name);
                     if (declaredIn != null) {
                         into.add(declaredIn);
+                        if (BUILD_FILES.contains(file.getFileName().toString())) {
+                            byBuildFiles.add(declaredIn);
+                        }
                         break;
                     }
                     int dot = name.lastIndexOf('.');

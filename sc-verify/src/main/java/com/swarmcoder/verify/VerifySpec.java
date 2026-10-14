@@ -74,15 +74,29 @@ public record VerifySpec(
      * second application cannot bind. That is recorded as
      * {@link com.swarmcoder.domain.BrowserStageOutcome#COULD_NOT_TRY} rather than as a failure (see
      * {@link BrowserVerifier}), so a collision never kills a candidate.
+     *
+     * <p><b>{@code findPort} is for a block SwarmCoder wrote without knowing the application</b>
+     * (section 108). The application is told the port in every way that needs no knowledge of
+     * it ({@code {PORT}} in the serve command, which the generated one passes as the
+     * environment variable {@code PORT} and the system property {@code port}). An application
+     * that binds a port of its own instead is still found: inside the container, when nothing
+     * answers on {@code {PORT}}, the one port the started application opened is probed and
+     * used. Only the in-container stage does this; on this PC nothing is started for it.
      */
     public record BrowserSpec(String serve, String readyProbe, int readyTimeoutSeconds,
-                              List<PageCheckSpec> checks, int port) {
+                              List<PageCheckSpec> checks, int port, boolean findPort) {
         public static final int DEFAULT_READY_TIMEOUT_SECONDS = 60;
 
         /** The shape from before a fixed port was expressible; keeps existing callers compiling. */
         public BrowserSpec(String serve, String readyProbe, int readyTimeoutSeconds,
                            List<PageCheckSpec> checks) {
-            this(serve, readyProbe, readyTimeoutSeconds, checks, 0);
+            this(serve, readyProbe, readyTimeoutSeconds, checks, 0, false);
+        }
+
+        /** The shape from before the port could be found (section 108). */
+        public BrowserSpec(String serve, String readyProbe, int readyTimeoutSeconds,
+                           List<PageCheckSpec> checks, int port) {
+            this(serve, readyProbe, readyTimeoutSeconds, checks, port, false);
         }
 
         public int effectiveReadyTimeoutSeconds() {

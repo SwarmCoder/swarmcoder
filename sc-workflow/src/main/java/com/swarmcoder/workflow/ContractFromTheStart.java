@@ -20,11 +20,16 @@ package com.swarmcoder.workflow;
 import com.swarmcoder.domain.Task;
 import com.swarmcoder.domain.TaskEdge;
 import com.swarmcoder.domain.TaskGraph;
+import com.swarmcoder.knowledge.DeclarableArtifacts;
+import com.swarmcoder.knowledge.ReachableCode;
 import com.swarmcoder.store.ArtifactStore;
 import com.swarmcoder.verify.AcceptanceTestLocation;
+import com.swarmcoder.verify.BrowserOnlyCode;
 import com.swarmcoder.verify.BuildLayout;
 import com.swarmcoder.verify.ContractInUse;
 import com.swarmcoder.verify.GeneratedContract;
+import com.swarmcoder.verify.ServeFromTheCode;
+import com.swarmcoder.verify.VerifySpecLoader;
 
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -104,6 +109,65 @@ final class ContractFromTheStart {
             }
         }
         return new Gate(contract, contract.refusal(checks, tests, "the work of this run"));
+    }
+
+    /**
+     * What came of giving a generated contract its browser block (section 108).
+     *
+     * @param written  true when the block is now in the contract
+     * @param said     for the run's log: how the application is started, or why it is not
+     * @param question null unless the run must stop: what a person has to settle
+     */
+    record Served(boolean written, String said, String question) {}
+
+    /**
+     * Gives a contract SwarmCoder generated the browser block a story with a screen needs,
+     * worked out from the code: the entry point from the object graph, its classpath from the
+     * build (see {@link ServeFromTheCode}). Called when the journeys of a story are decided and
+     * the contract cannot start the application. A contract a person wrote is never changed.
+     *
+     * @param graph the object graph of the project's own checkout; null when it could not be
+     *              built
+     */
+    static Served browserFromTheCode(Path repoPath, ReachableCode.Graph graph,
+                                     BuildLayout.Layout layout, BrowserOnlyCode.Survey survey) {
+        if (!GeneratedContract.wantsABrowserBlock(repoPath)) {
+            return new Served(false, "the contract was written by a person or already has a "
+                + "browser block; it is not changed", null);
+        }
+        String toolchain = GeneratedContract.contractToolchain(repoPath);
+        if (!"maven".equals(toolchain)) {
+            return new Served(false, "the generated contract is for " + toolchain + ", whose "
+                + "runtime classpath SwarmCoder cannot name without running the build", null);
+        }
+        if (graph == null || !graph.determined()) {
+            return new Served(false, "", "The contract SwarmCoder generated for this project "
+                + "has no `browser:` block, and the class that starts the application could not "
+                + "be read from the code: " + (graph == null ? "its object graph could not be "
+                    + "built" : graph.note()) + ". Write the `browser:` block of "
+                + VerifySpecLoader.SPEC_PATH + " by hand.");
+        }
+        List<ServeFromTheCode.EntryPoint> mains = graph.mainTypes().stream()
+            .map(main -> new ServeFromTheCode.EntryPoint(main.file(), main.type(),
+                main.namedInABuildFile()))
+            .toList();
+        ServeFromTheCode.Outcome outcome = ServeFromTheCode.serve(repoPath, mains, layout,
+            survey, GeneratedContract.entryPointNamed(repoPath),
+            DeclarableArtifacts.defaultLocalRepository());
+        if (outcome.question() != null) {
+            return new Served(false, "", "The contract SwarmCoder generated for this project "
+                + "has no `browser:` block, and how to start the application could not be "
+                + "settled from the code. " + outcome.question());
+        }
+        if (!GeneratedContract.addBrowser(repoPath, outcome)) {
+            return new Served(false, "", "The contract SwarmCoder generated for this project "
+                + "has no `browser:` block, and the one worked out from the code ("
+                + outcome.how() + ") could not be written to "
+                + VerifySpecLoader.SPEC_PATH + ". Write it by hand: "
+                + "serve: " + outcome.browser().serve());
+        }
+        return new Served(true, outcome.how() + ". Started with: "
+            + outcome.browser().serve(), null);
     }
 
     /**

@@ -213,14 +213,18 @@ public final class ToolchainDetector {
         evidence.addAll(web.evidence());
         warnings.addAll(web.warnings());
 
+        // Offline, batch, quiet: the commands GeneratedContract writes (section 108). Candidates
+        // build in containers with no network, and a build that tries to reach one fails in a
+        // way that reads like a mistake in the code.
         VerifySpec spec = new VerifySpec(
             "maven",
-            List.of(mvn + " -B -q test-compile"),
+            List.of(mvn + " -o -B -q test-compile"),
             // Surefire wants a PATH pattern; the dotted package form matches nothing and the stage
             // then silently runs zero tests (§15.2). failIfNoSpecifiedTests=false keeps the stage
             // clean before the test author has written anything.
-            List.of(mvn + " -B test -Dtest=swarm/accept/** -Dsurefire.failIfNoSpecifiedTests=false"),
-            List.of(mvn + " -B test"),
+            List.of(mvn + " -o -B -q test -Dtest=swarm/accept/** "
+                + "-Dsurefire.failIfNoSpecifiedTests=false"),
+            List.of(mvn + " -o -B -q test"),
             List.of(),
             List.of(),
             new VerifySpec.TestReportsSpec(reportDirs, reportDirs),
@@ -289,10 +293,10 @@ public final class ToolchainDetector {
 
         VerifySpec spec = new VerifySpec(
             "gradle",
-            List.of(gradle + " testClasses"),
+            List.of(gradle + " --offline -q testClasses"),
             // The Gradle selector IS dotted; only Surefire wants slashes (§15.2).
-            List.of(gradle + " test --tests 'swarm.accept.*'"),
-            List.of(gradle + " test"),
+            List.of(gradle + " --offline -q test --tests 'swarm.accept.*'"),
+            List.of(gradle + " --offline -q test"),
             List.of(),
             List.of(),
             new VerifySpec.TestReportsSpec(reportDirs, reportDirs),
