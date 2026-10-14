@@ -96,6 +96,13 @@ public final class DraftTools {
     private final String noun;
     private final int maxChecks;
     private volatile Function<String, Checked> check;
+    /**
+     * Nullable: objections to a draft that depend on what the session has kept so far
+     * (section 106: a design whose build file is still to be written keeps the build
+     * declaration). Run with the draft and the findings kept until then.
+     */
+    private volatile java.util.function.BiFunction<String, List<DesignFinding>, List<String>>
+        keptCheck;
 
     private int checks;
     /** The last draft the checks could read. */
@@ -131,6 +138,22 @@ public final class DraftTools {
         this.noun = noun;
         this.maxChecks = maxChecks;
         this.check = check;
+        if (session != null) {
+            // A turn whose lookups all brought nothing new is followed by this check, while
+            // there is one left; and what is kept here is answerable through known_about
+            // from the moment it is kept (section 106).
+            session.draftCheck("check_" + noun, noun, () -> checks < maxChecks);
+            if ("design".equals(noun)) {
+                session.keptBy(this::findings);
+            }
+        }
+    }
+
+    /** Also runs {@code keptCheck} on every draft; null runs nothing more. Returns this. */
+    DraftTools checkingKept(
+            java.util.function.BiFunction<String, List<DesignFinding>, List<String>> keptCheck) {
+        this.keptCheck = keptCheck;
+        return this;
     }
 
     /** {@code check_design}. The parameter name is the tool's schema - do not rename it. */
@@ -156,7 +179,7 @@ public final class DraftTools {
                     + "in the draft you last checked, or give it your final JSON object.";
             }
             checks++;
-            Checked result = check.apply(draft);
+            Checked result = withKept(check.apply(draft), draft);
             String remaining = checks < maxChecks ? ""
                 : "\n\n(That was your last check: call report_done now.)";
             // What sent a draft back is on the log, objection by objection (live run 98: two
@@ -206,6 +229,21 @@ public final class DraftTools {
                 + "Fix every one - look up whatever an objection shows you guessed - and "
                 + "call " + tool + " again." + remaining;
         });
+    }
+
+    /** {@code result} with what the check of the kept findings objects to, when there is one. */
+    private Checked withKept(Checked result, String draft) {
+        java.util.function.BiFunction<String, List<DesignFinding>, List<String>> more = keptCheck;
+        if (more == null || result == null || !result.readable()) {
+            return result;
+        }
+        List<String> added = more.apply(draft, findings());
+        if (added == null || added.isEmpty()) {
+            return result;
+        }
+        List<String> all = new ArrayList<>(result.objections());
+        all.addAll(added);
+        return new Checked(true, all, result.notes());
     }
 
     /**
@@ -392,6 +430,14 @@ public final class DraftTools {
      * still holds it.
      */
     void nextRound(Function<String, Checked> check) {
+        nextRound(check, keptCheck);
+    }
+
+    /** The same, with the check of the kept findings of the new call. */
+    void nextRound(Function<String, Checked> check,
+                   java.util.function.BiFunction<String, List<DesignFinding>, List<String>>
+                       keptCheck) {
+        this.keptCheck = keptCheck;
         this.check = check;
         checks = 0;
         lastReadable = null;

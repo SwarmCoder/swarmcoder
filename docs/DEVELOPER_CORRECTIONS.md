@@ -10780,3 +10780,141 @@ library type nobody asks for is not. Run with it and unchanged:
   that adds such a class with no annotation named in its task can still be sent back there.
 - The repeated-stop sentence has no test; it is one comparison.
 - Nothing was run against a model. The full test suite was not run; the classes above were.
+
+## 106. An architect that kept looking up after it had everything, and a planner that read it all again (call-by-call audit of one local build, 2026-10-14)
+
+**What was observed.** One local build of an empty project on a reference library, read call
+by call. Architect 96 calls and 5.68 million tokens, planner 34 and 1.43 million.
+
+- *A.* By call 37 every type and member the final design names had appeared in an answer.
+  Calls 38 to 83 were 46 more calls that only looked up: 3.65 million tokens, 64% of the
+  architect's cost. 52 calls repeated one the session had made, 15 of them refused as
+  repeats. The notice "half your turns are gone" at call 61 was followed by 22 more.
+- *B.* The planner read the same example application again: 39 lookups another session had
+  made (83,827 characters, 458,000 tokens resent), 25 whole files, no `body_of`. The
+  architect had kept 12 facts. The design named them one line each; nothing returned their
+  lines.
+- *C.* The design added modules to a project with no build file. None of the 12 facts came
+  from a build lookup, so the planner and each worker read the example build files again,
+  about 280,000 tokens.
+- *D.* `known_about` (sections 97, 100, 101) was offered to nobody: it is bound only when the
+  project holds something, and this project had delivered nothing. What the architect kept in
+  the run was in its design and in no lookup.
+
+**How turns and tools are offered, established first.** `KoogAgentRuntime` runs one loop for
+every session: a request, the turn's calls run one after another, their results sent, the
+next request. Every request offers the session's whole tool list and leaves the choice open;
+a role is steered only by text on a tool result (the turn countdown, section 59's "unchanged"
+line). The framework can ask for one request with a named tool: its write session has
+`requestLLMForceOneTool`, which sets the request's `tool_choice` and leaves the tool list as
+it is. The tool list is at the head of what the server reads, so changing it for one turn
+would cost a first reading of the whole conversation, twice (CLAUDE.md section 0: 16 seconds
+for 16,000 tokens); a tool choice changes nothing the server has read.
+
+**A. The mechanism chosen: one request with the draft check as its named tool.**
+
+- `AgentRuntime.TurnOrder` (new, on `SessionOptions.order`). After a turn's calls have run
+  the session's owner is told what they were and which answers the conversation already
+  held whole, and may name the tool the next turn is to call, with a notice.
+  `KoogAgentRuntime.orderedNext` and `askOrdered` put the notice at the end of the turn's
+  last result and send the next request through `requestLLMForceOneTool`. The request after
+  it is asked as always.
+- *Held whole* is section 59's comparison without its length floor
+  (`HistoryTrim.heldWhole`): the same tool and arguments were called before and that answer
+  is still whole in the conversation and equal to this one.
+- *The rule* (`ExpertTools.afterTurn`, wired by `LookupAgent.run`). The toolbox records each
+  call of the turn as it runs it: its tool, whether it is the role's own, whether it was
+  refused as a repeat (the existing stop of `maxRepeats`). The next turn is the role's draft
+  check when the turn made lookups only and every one was refused as a repeat or held whole.
+  A turn with one new answer, or with a tool of the role's own in it, orders nothing. So
+  does a role with no draft check (the test author, the reviewer) or with no check left.
+  `DraftTools` names its check to the toolbox (`ExpertTools.draftCheck`): `check_design` for
+  the architect, `check_plan` for the planner.
+- *Nothing is refused and nothing is capped.* Every lookup is in the ordered request's tool
+  list, a lookup is answered whenever it is called, and the rule orders again only after
+  another turn that brought nothing. No count of lookups or turns was changed.
+- *A server that does not take a named tool.* It answers that one request with an error.
+  The turn is asked again at once as every turn is, and no session names a tool on that
+  server and model again while the application runs; the notice alone then says what is due.
+  A failure that is an outage, a stop or a kill is not taken for this.
+- `-Dswarmcoder.roles.checkAfterRepeats=false` orders nothing;
+  `-Dswarmcoder.session.namedToolChoice=false` sends the notice only.
+
+**D. `known_about` answers from the moment a fact is kept.**
+
+- `KnownFacts.keptInRun(runId)`: one list per run, in memory, the same object for every
+  session of the run (as `RunAnswerCache.forRun`). `DraftTools` tells the toolbox where the
+  architect's findings are (`ExpertTools.keptBy`); after each of the role's own tools the
+  toolbox adds what is new. `keep_for_workers` itself is untouched.
+- `known_about` reads the session's facts and the run's list at each call
+  (`ExpertTools.knownNow`), and a session of a run is offered it on a project that holds
+  nothing.
+- `KnownFacts.ofDesignOf(store, runId)` (`LookupAgent.withKnownOfRun`, wired in
+  `ProjectContext`): the findings of the run's stored design, delivered or not, for the same
+  run after a restart.
+- Such a fact has no story and no commit. It is told with "found by: the architect ... no
+  delivered build has proved it" (`KnownFacts.Fact.ofASession` now holds for the architect
+  too), and its lines are held against their source as a delivered story's are. Another run
+  is not given it; a delivered story's findings reach later runs as before.
+
+**B. What the planner is handed.**
+
+- *The architect's facts of the same run, the way every role gets what the project knows*
+  (section 97): the titles after the project map (each subject, how many facts, what they
+  were copied from), `known_about` for the text and the lines, and as before the design's
+  FACT lines. Nothing is pasted. The build declaration is among them once C has made the
+  architect keep it.
+- *The tool guide* (`LookupAgent.toolGuide`, every role): a line before the whole-file line
+  that `body_of` returns one method or one type and `build_of` a build declaration, and that
+  a file read whole stays in the conversation. The planner's own instructions
+  (`ArchitectClient.PLAN_HOW`) say that the FACT lines are read with `known_about` and not
+  looked up again.
+
+**C. `check_design` objects to a design with no build fact** (`BuildFactsAreKept`, new;
+`DraftChecks.designAgainstKept`; `DraftTools.checkingKept`).
+
+- *The design adds a build file* when it delivers at least one type the project does not
+  have and the project's build compiles no module (`BuildLayout`).
+- *A fact comes from a build lookup* when its recorded source is `build_of` or
+  `dependency_declaring`, or names a build file. The sentence is not read.
+- Then the check objects and says to keep the declaration the new module must follow. The
+  findings counted are the session's and, for a revision, the revised design's.
+- Not asked for when the reference material has no build file at the top of a folder, and
+  only of a draft: after hand-in nothing more can be kept.
+
+**Tests.** `ATurnOfRepeatsOrdersTheNextTurnTest` (sc-runtime, real runtime, scripted
+server): the ordered request names the tool, its tool list is the one before, the notice is
+on the last result, the next request is open, the repeated lookup was run; a server that
+answers a named tool with an error. `ATurnOfRepeatsIsFollowedByTheDraftCheckTest`
+(sc-knowledge, no model): which turns order the check and which do not; a kept finding is
+answered by `known_about` at once, for the session and for the run's next, by title without
+its lines. `APlanningRoleThatLearnsNothingNewChecksItsDraftTest` (sc-workflow, real runtime,
+lookups and draft tools, scripted model): all four findings on one build of an empty project,
+and `BuildFactsAreKept` case by case. Run with them and unchanged: `HistoryTrimTest`,
+`ARepeatedLookupWhoseAnswerIsStillHeldIsSentAsOneLineTest`,
+`ThinkingTheServerCountsAgainIsLetGoTest`, `AProjectEstablishesAnAnswerOnceTest`,
+`ARoleLearnsTheProjectFromItsObjectGraphTest`, `ARolesSessionTidiesItsOldLookupResultsTest`,
+`WhatAProjectEstablishedOutlastsARestartTest`,
+`ARejectedHandInContinuesTheSameConversationTest`,
+`TheArchitectHandsItsFindingsToTheWorkersTest`,
+`APlanDraftIsPutRightWhereItsFactsDecideTest`, `ProjectContextExpertWiringTest`.
+`AProjectLearnsWhatItBuildsOnOnceTest` was changed with D: a project that holds nothing is
+still told no titles, and is now offered `known_about`.
+
+**Not done, not checked.**
+
+- Nothing was run against a model. Whether the local server takes a named tool choice with
+  this model, and what an ordered draft costs in output tokens, are for the next run's
+  report. A role that is ordered to check and then repeats lookups again is ordered again:
+  each time costs one draft, not a lookup-only call.
+- C sees only a project that builds nothing. In a project that already builds, a design
+  names its types by package and not by module, so a module it adds cannot be read from its
+  structure; nothing is objected to there.
+- The run's kept facts are in memory until its design is stored; a restart before that
+  loses them for `known_about`, as it loses the session.
+- A worker's `known_about` reads the project's store, not the run's list. A worker is given
+  the architect's findings with its task, as before.
+- `GreenfieldWorkflow`'s wiring of C (which reference folder has a build file) and
+  `KnownFacts.ofDesignOf` have no test of their own.
+- The run report does not show how many turns were ordered; the log does.
+- The full test suite was not run; the classes above were.

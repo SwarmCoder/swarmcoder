@@ -68,6 +68,13 @@ final class ScriptedAgentLlm implements AutoCloseable {
     private final HttpServer server;
     /** Every session request, as the conversation text it carried, in order. */
     final List<String> sessionRequests = new CopyOnWriteArrayList<>();
+    /**
+     * For every session request, in order: the one tool its {@code tool_choice} names, or ""
+     * for a request that leaves the choice of tool open.
+     */
+    final List<String> sessionToolChoices = new CopyOnWriteArrayList<>();
+    /** For every session request, in order: the names of the tools it offers. */
+    final List<List<String>> sessionTools = new CopyOnWriteArrayList<>();
     /** Every one-reply request, as the conversation text it carried, in order. */
     final List<String> oneReplyRequests = new CopyOnWriteArrayList<>();
 
@@ -91,6 +98,13 @@ final class ScriptedAgentLlm implements AutoCloseable {
                 if (isSession) {
                     int number;
                     synchronized (sessionRequests) {
+                        sessionToolChoices.add(request.path("tool_choice").path("function")
+                            .path("name").asText(""));
+                        List<String> offered = new java.util.ArrayList<>();
+                        for (JsonNode tool : request.path("tools")) {
+                            offered.add(tool.path("function").path("name").asText(""));
+                        }
+                        sessionTools.add(offered);
                         sessionRequests.add(conversation.toString());
                         number = sessionRequests.size();
                     }

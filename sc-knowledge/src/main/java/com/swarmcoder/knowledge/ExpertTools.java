@@ -259,6 +259,159 @@ public final class ExpertTools {
     /** The session is on this turn - called by the expert's turn guard before the turn's tools run. */
     void onTurn(int turnIndex) {
         turn.set(turnIndex);
+        synchronized (ranThisTurn) {
+            ranThisTurn.clear();
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // A turn of repeats is followed by a draft check (section 106).
+
+    /** One call of the turn being run, as this toolbox ran it. */
+    private static final class Ran {
+        final String tool;
+        final boolean own;
+        /** True when the call was not made because this session had made it too often. */
+        volatile boolean refusedAsRepeat;
+
+        Ran(String tool, boolean own) {
+            this.tool = tool;
+            this.own = own;
+        }
+    }
+
+    /** The calls of the turn being run, in the order they were run. */
+    private final List<Ran> ranThisTurn = new ArrayList<>();
+
+    /** A role's draft check: its tool, what it checks, and whether a check is still to be had. */
+    private record DraftCheck(String tool, String noun, java.util.function.BooleanSupplier open) {}
+
+    private volatile DraftCheck draftCheck;
+
+    /**
+     * {@code -Dswarmcoder.roles.checkAfterRepeats=false} orders no turn: every turn is asked
+     * as it was before section 106.
+     */
+    static final boolean CHECK_AFTER_REPEATS = !"false".equalsIgnoreCase(
+        System.getProperty("swarmcoder.roles.checkAfterRepeats"));
+
+    /**
+     * Says which of the role's own tools checks its draft, for {@link #afterTurn}.
+     *
+     * @param tool the tool's name as it is bound
+     * @param noun what it checks: "design", "plan"
+     * @param open false once the role has no check left; no turn is ordered then
+     */
+    public void draftCheck(String tool, String noun, java.util.function.BooleanSupplier open) {
+        this.draftCheck = tool == null || tool.isBlank() ? null
+            : new DraftCheck(tool, noun == null ? "draft" : noun, open == null ? () -> true : open);
+    }
+
+    /**
+     * What the next turn is to call, after the turn just run (section 106; the session's
+     * {@code AgentRuntime.TurnOrder}).
+     *
+     * <p>The audited architect had every type and member of its final design in an answer by
+     * call 37 and made 46 more lookup-only calls, 3.65 million tokens, 52 of them the very
+     * same call again. When a turn made lookups only, and each of them was either refused as
+     * a repeat or answered with text the conversation still holds whole, the turn brought the
+     * role nothing; the next turn is then its draft check, whose objections say what is still
+     * missing. Decided from what the calls were and what came back, never from a word of
+     * either. No lookup is refused by it, and after the check every lookup is open again.
+     *
+     * @param turn the turn's calls as the runtime saw them, with which answers were held whole
+     */
+    Optional<com.swarmcoder.runtime.AgentRuntime.TurnOrder.Ordered> afterTurn(
+            List<com.swarmcoder.runtime.AgentRuntime.TurnOrder.Made> turn) {
+        List<Ran> ran;
+        synchronized (ranThisTurn) {
+            ran = List.copyOf(ranThisTurn);
+            ranThisTurn.clear();
+        }
+        DraftCheck check = draftCheck;
+        if (!CHECK_AFTER_REPEATS || check == null || turn == null || turn.isEmpty()
+                || ran.size() != turn.size()) {
+            return Optional.empty();
+        }
+        int refused = 0;
+        int held = 0;
+        for (int i = 0; i < ran.size(); i++) {
+            Ran one = ran.get(i);
+            if (one.own || !one.tool.equals(turn.get(i).tool())) {
+                return Optional.empty();
+            }
+            if (one.refusedAsRepeat) {
+                refused++;
+            } else if (turn.get(i).heldWhole()) {
+                held++;
+            } else {
+                return Optional.empty();
+            }
+        }
+        if (!check.open().getAsBoolean()) {
+            return Optional.empty();
+        }
+        log.info("the {} made {} lookup(s) in turn {} and none brought anything new ({} not "
+            + "made again as a repeat, {} answered with what the conversation still holds "
+            + "whole); its next turn is {}", user == null ? "expert" : user.name(), ran.size(),
+            this.turn.get(), refused, held, check.tool());
+        return Optional.of(new com.swarmcoder.runtime.AgentRuntime.TurnOrder.Ordered(check.tool(),
+            "None of the " + ran.size() + " lookup(s) of this turn brought anything new: "
+                + refused + " you had made too often to be made again, " + held + " answered "
+                + "exactly what is still in this conversation. So your next turn is "
+                + check.tool() + ", and only that: give it your " + check.noun() + " as it "
+                + "stands now, complete, as one string. Its objections say what is still "
+                + "missing or guessed. After it every lookup is open to you again."));
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // What the roles of this run have kept (section 106).
+
+    /** Nullable: the facts the roles of this session's run have kept so far, live. */
+    private volatile KnownFacts.Kept keptInRun;
+    /** Nullable: what this session's role has kept with a tool of its own, asked after each. */
+    private volatile java.util.function.Supplier<List<com.swarmcoder.domain.DesignFinding>>
+        keptBySession;
+
+    /** Gives this session what its run's roles keep, as they keep it; null is nothing. */
+    void keptInRun(KnownFacts.Kept kept) {
+        this.keptInRun = kept;
+    }
+
+    /**
+     * Says where the findings a role keeps with a tool of its own are held (the architect's
+     * {@code keep_for_workers}). Asked after each of the role's own tools has run, so a finding
+     * is answerable through {@code known_about} from the moment it is kept - by this session
+     * and by every later session of the run.
+     */
+    public void keptBy(
+            java.util.function.Supplier<List<com.swarmcoder.domain.DesignFinding>> kept) {
+        this.keptBySession = kept;
+    }
+
+    private void publishKept() {
+        KnownFacts.Kept run = keptInRun;
+        java.util.function.Supplier<List<com.swarmcoder.domain.DesignFinding>> mine =
+            keptBySession;
+        if (run == null || mine == null) {
+            return;
+        }
+        try {
+            for (com.swarmcoder.domain.DesignFinding finding : mine.get()) {
+                run.add(new KnownFacts.Fact(finding.about(), finding.source(), finding.note(),
+                    finding.snippet(), null, null,
+                    user == null ? KnownFacts.ARCHITECT : user.name()));
+            }
+        } catch (RuntimeException e) {                                     // noqa
+            log.debug("what this session kept was not added to its run's facts: {}",
+                e.toString());
+        }
+    }
+
+    /** Everything {@code known_about} answers from, now. */
+    private KnownFacts knownNow() {
+        KnownFacts.Kept run = keptInRun;
+        return run == null ? known : known.and(run.facts());
     }
 
     /**
@@ -1426,18 +1579,24 @@ public final class ExpertTools {
      * with the tools it always had.
      */
     ToolBinding knownBinding() {
-        if (known.isEmpty()) {
+        // A session of a run is offered it from its first turn, also on a project that holds
+        // nothing yet: what the roles of the run keep is answered from the moment it is kept
+        // (section 106; the audited build's project had delivered nothing, so nobody was
+        // offered the lookup and the planner read again what the architect had kept).
+        if (known.isEmpty() && keptInRun == null) {
             return null;
         }
         try {
             return new ToolBinding("known_about",
-                "BEFORE YOU LOOK SOMETHING UP AGAIN: what the architect of an earlier, delivered "
-                    + "story of this project established and kept - how this project and what "
-                    + "it builds on do a thing, with the lines it was copied from, the story "
-                    + "and commit it was true at, and whether that source has changed since. "
-                    + "Give a type, or a file or document a fact was copied from, as your "
-                    + "opening lists them; an empty string lists every title. A fact whose "
-                    + "source changed is marked and its lines withheld.",
+                "BEFORE YOU LOOK SOMETHING UP AGAIN: what the roles of this build have kept so "
+                    + "far, and what the architects of this project's delivered stories "
+                    + "established - how this project and what it builds on do a thing, with "
+                    + "the lines it was copied from, who found it or the story and commit it "
+                    + "was true at, and whether that source has changed since. Give a type, "
+                    + "or a file or document a fact was copied from, as your opening and the "
+                    + "design's FACT lines name them; an empty string lists every title, also "
+                    + "of what was kept after your opening was written. A fact whose source "
+                    + "changed is marked and its lines withheld.",
                 this, method("knownAbout", String.class));
         } catch (NoSuchMethodException e) {
             throw new IllegalStateException(e);
@@ -1446,7 +1605,7 @@ public final class ExpertTools {
 
     /** {@code known_about}. The parameter name is the tool's schema - do not rename it. */
     public String knownAbout(String what) {
-        return run("known_about", what, () -> known.about(what, this::sourceOf));
+        return run("known_about", what, () -> knownNow().about(what, this::sourceOf));
     }
 
     // -------------------------------------------------------------------------------------------
@@ -2029,6 +2188,10 @@ public final class ExpertTools {
         if (kind == Kind.OWN) {
             ownTools.add(tool);
         }
+        Ran ran = new Ran(tool, kind == Kind.OWN);
+        synchronized (ranThisTurn) {
+            ranThisTurn.add(ran);
+        }
         if (cloudGate != null && cloudGate.exhausted()) {
             return "The budget for this run is spent, so no more can be looked up. Answer with "
                 + "what you already have and call report_done.";
@@ -2049,6 +2212,7 @@ public final class ExpertTools {
         if (user != null && kind != Kind.OWN && user.maxRepeats() > 0) {
             int times = timesAsked.merge(tool + "\u0000" + argument, 1, Integer::sum);
             if (times > user.maxRepeats()) {
+                ran.refusedAsRepeat = true;
                 log.warn("SAFETY STOP: the {} made the same call {} times - {}('{}') - so it was "
                     + "not made again", user.name(), times, tool, forTheLog(argument));
                 return "error: you have made exactly this call " + (times - 1) + " times already "
@@ -2113,6 +2277,9 @@ public final class ExpertTools {
         String capped = answer.length() <= maxToolChars ? answer
             : answer.substring(0, maxToolChars) + "\n…\n";
         lookups.add(new Found(tool, argument, capped, foundSomething(capped)));
+        if (kind == Kind.OWN) {
+            publishKept();
+        }
         com.swarmcoder.inference.LookupMeter.Kind answeredKind = answeredAs.get();
         answeredAs.remove();
         com.swarmcoder.inference.LookupMeter.Kind metered = answeredKind != null ? answeredKind

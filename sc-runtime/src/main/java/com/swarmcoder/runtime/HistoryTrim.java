@@ -780,6 +780,28 @@ public final class HistoryTrim {
         if (output == null || output.length() < UNCHANGED_MIN_CHARS || messages == null) {
             return null;
         }
+        int ago = turnsSinceHeld(messages, tool, args, output);
+        if (ago < 0) {
+            return null;
+        }
+        String note = output.substring(withoutNote(output).length());
+        return UNCHANGED_MARK + ", from your call " + ago + (ago == 1 ? " turn" : " turns")
+            + " ago." + note;
+    }
+
+    /**
+     * True when this very call was made before and the answer it got then is still whole in
+     * the conversation and equal to {@code output}, whatever its length (section 106): the
+     * call brought the session nothing it does not hold.
+     */
+    static boolean heldWhole(List<Message> messages, String tool, String args, String output) {
+        return output != null && messages != null && tool != null
+            && turnsSinceHeld(messages, tool, args, output) >= 0;
+    }
+
+    /** How many turns ago the same call got the same answer, still whole; -1 when it did not. */
+    private static int turnsSinceHeld(List<Message> messages, String tool, String args,
+                                      String output) {
         String wanted = args == null ? "" : args;
         Map<String, Integer> callTurn = new HashMap<>();
         int assistants = 0;
@@ -807,13 +829,7 @@ public final class HistoryTrim {
                 }
             }
         }
-        if (turnsAgo < 0) {
-            return null;
-        }
-        int ago = Math.max(1, assistants - turnsAgo);
-        String note = output.substring(body.length());
-        return UNCHANGED_MARK + ", from your call " + ago + (ago == 1 ? " turn" : " turns")
-            + " ago." + note;
+        return turnsAgo < 0 ? -1 : Math.max(1, assistants - turnsAgo);
     }
 
     /** @param digestChars how much of each emptied output's head its stub keeps; 0 keeps none */

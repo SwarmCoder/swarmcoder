@@ -290,6 +290,20 @@ public final class LookupAgent {
         return this;
     }
 
+    /** Nullable - then a run's own design is not read for what its architect kept. */
+    private volatile Function<java.util.UUID, KnownFacts> knownOfRun;
+
+    /**
+     * Gives every session of a run what that run's architect kept, as the store holds it in
+     * the run's design, delivered or not (section 106): for the planner, the test author and
+     * a later session of the architect, and for the same run after a restart. What is kept
+     * while the application runs reaches them without the store ({@link KnownFacts#keptInRun}).
+     */
+    public LookupAgent withKnownOfRun(Function<java.util.UUID, KnownFacts> ofRun) {
+        this.knownOfRun = ofRun;
+        return this;
+    }
+
     private KnownFacts known() {
         java.util.function.Supplier<KnownFacts> supplier = knownFacts;
         try {
@@ -297,7 +311,12 @@ public final class LookupAgent {
             KnownFacts delivered = facts == null ? KnownFacts.none() : facts;
             // And what a role of an earlier session concluded and kept (section 100).
             SharedAnswers shared = curator == null ? null : curator.answers();
-            return shared == null ? delivered : delivered.and(shared.findings());
+            KnownFacts project = shared == null ? delivered : delivered.and(shared.findings());
+            // And what this run's architect kept, from the run's design (section 106).
+            java.util.UUID run = RUN.get();
+            Function<java.util.UUID, KnownFacts> ofRun = knownOfRun;
+            KnownFacts design = run == null || ofRun == null ? null : ofRun.apply(run);
+            return design == null ? project : project.and(design.facts());
         } catch (RuntimeException e) {                                     // noqa
             log.warn("what the project already knows could not be read ({}); the session is "
                 + "opened without it", e.toString());
@@ -345,14 +364,16 @@ public final class LookupAgent {
             + "often as you need to: nobody counts your questions, and a wrong guess costs "
             + "the whole build. Whenever you are not sure, ask - never guess.\n"
             + (toolNames.contains("known_about")
-                ? "- WHAT IS ALREADY KNOWN, BEFORE ANYTHING ELSE. Earlier stories of this "
-                    + "project were designed and delivered, and what their architect "
-                    + "established about this project and what it builds on is kept: the "
-                    + "titles are in your opening, and known_about <subject or source> gives "
+                ? "- WHAT IS ALREADY KNOWN, BEFORE ANYTHING ELSE. What the roles of this build "
+                    + "have kept so far, and what the architects of this project's delivered "
+                    + "stories established about this project and what it builds on, is kept "
+                    + "as facts: the titles are in your opening when there are any, a design "
+                    + "names its own as FACT lines, and known_about <subject or source> gives "
                     + "each fact with the lines it was copied from and says whether its source "
-                    + "has changed since. Read what is known about a thing before you look "
-                    + "that thing up; look up only what is not there, or what is marked as "
-                    + "changed.\n" : "")
+                    + "has changed since (an empty string lists every title, also of what was "
+                    + "kept after your opening was written). Read what is known about a thing "
+                    + "before you look that thing up; look up only what is not there, or what "
+                    + "is marked as changed.\n" : "")
             + "- THE PROJECT'S OBJECT GRAPH FIRST. What the project is made of - its types, "
             + "their members, what extends or uses what, what each module's build declares - is "
             + "held as a graph the compiler resolved, and these tools answer from it in a few "
@@ -366,6 +387,10 @@ public final class LookupAgent {
             + "(empty: every document with its sections; a document: its headings with sizes), "
             + "doc_section <document>#<number or heading> for ONE section, doc_search for the "
             + "sections on a subject.\n"
+            + "- ONE METHOD OR ONE TYPE BEFORE A FILE. For code, body_of <Type>#<method> "
+            + "returns one method and body_of <Type> one type, whichever file it is in, and "
+            + "build_of <module> what a build file declares. A file read whole stays in this "
+            + "conversation at its full length for every call that follows.\n"
             + "- A WHOLE FILE IS THE LAST RESORT: read_file, for a resource or a script, or "
             + "for lines no query returns (<path>:LINE, <path>:FROM-TO). A long file asked "
             + "for by its bare path is answered with its outline; the last line of that answer "
@@ -534,9 +559,14 @@ public final class LookupAgent {
                 Math.max(0, ask.limits().maxExpertQuestions()),
                 Math.max(0, ask.limits().maxRepeats())));
         List<ToolBinding> bindings = new ArrayList<>(tools.lookupBindings());
-        // What earlier stories established, first among the lookups when there is any.
-        KnownFacts known = known();
+        // What earlier stories established and what this run's roles have kept so far (section
+        // 106): first among the lookups, and answered from the moment something is kept.
+        java.util.UUID ofRun = RUN.get();
+        KnownFacts.Kept keptInRun = ofRun == null ? new KnownFacts.Kept()
+            : KnownFacts.keptInRun(ofRun);
+        KnownFacts known = known().and(keptInRun.facts());
         tools.know(known);
+        tools.keptInRun(keptInRun);
         ToolBinding knownAbout = tools.knownBinding();
         if (knownAbout != null) {
             bindings.add(0, knownAbout);
@@ -584,7 +614,10 @@ public final class LookupAgent {
         // independent, and the second need not wait for the first (2026-10-02).
         AgentRuntime.SessionSpec spec = new AgentRuntime.SessionSpec(ask.role(), system,
             endpoint, 0.2, maxTurns, List.copyOf(bindings), guard)
-            .with(sessionOptions(tools::upcoming, quirks.workingContextTokens()));
+            .with(sessionOptions(tools::upcoming, quirks.workingContextTokens())
+                // A turn whose lookups all brought nothing new is followed by the role's
+                // draft check, when it has one (section 106).
+                .ordering(tools::afterTurn));
 
         log.info("the {} starts a lookup session (safety stops: {} turns, {} lookups, {} expert "
             + "questions, the same call {} times); resent on every call: system prompt about {} "

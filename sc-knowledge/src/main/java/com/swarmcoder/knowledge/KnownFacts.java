@@ -80,9 +80,13 @@ public final class KnownFacts {
             this(about, source, note, snippet, story, commit, ARCHITECT);
         }
 
-        /** True for what a role concluded in a session, as against a delivered story's finding. */
+        /**
+         * True for what a role concluded or kept in a session, as against a delivered story's
+         * finding: no story was delivered with it. The architect's findings of a build that
+         * is still running are such facts too (section 106).
+         */
         boolean ofASession() {
-            return story == null && commit == null && by != null && !ARCHITECT.equals(by);
+            return story == null && commit == null && by != null;
         }
     }
 
@@ -181,6 +185,75 @@ public final class KnownFacts {
         return of(facts);
     }
 
+    /**
+     * What the roles of one run have kept so far (section 106): added to as a role keeps a
+     * finding, read by every session of the run through {@code known_about}. In memory; after
+     * a restart the run's design holds the same findings ({@link #ofDesignOf}).
+     */
+    public static final class Kept {
+        private final List<Fact> facts = new ArrayList<>();
+
+        /** Adds {@code fact} unless the very same fact is held. */
+        public void add(Fact fact) {
+            if (fact == null) {
+                return;
+            }
+            synchronized (facts) {
+                if (!facts.contains(fact)) {
+                    facts.add(fact);
+                }
+            }
+        }
+
+        /** What is held, oldest first; a copy. */
+        public List<Fact> facts() {
+            synchronized (facts) {
+                return List.copyOf(facts);
+            }
+        }
+    }
+
+    /** One per run, for every session of that run; capped, oldest out. */
+    private static final Map<UUID, Kept> KEPT_BY_RUN =
+        java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<UUID, Kept> eldest) {
+                return size() > 200;
+            }
+        });
+
+    /** What the roles of run {@code runId} have kept so far: the same object for all of them. */
+    public static Kept keptInRun(UUID runId) {
+        return KEPT_BY_RUN.computeIfAbsent(runId, id -> new Kept());
+    }
+
+    /**
+     * The findings of the design run {@code runId} holds, delivered or not: what its architect
+     * kept, as the store has it. For the run's own later sessions, and for the same run after
+     * a restart of the application.
+     */
+    public static KnownFacts ofDesignOf(ArtifactStore store, UUID runId) {
+        if (store == null || runId == null) {
+            return NONE;
+        }
+        DesignDocument design;
+        StoreRoot root = store.root();
+        synchronized (root) {
+            Run run = root.runs.get(runId);
+            design = run == null || run.designId() == null ? null
+                : root.designs.get(run.designId());
+        }
+        if (design == null || design.findings() == null) {
+            return NONE;
+        }
+        List<Fact> facts = new ArrayList<>();
+        for (DesignFinding finding : design.findings()) {
+            facts.add(new Fact(finding.about(), finding.source(), finding.note(),
+                finding.snippet(), null, null));
+        }
+        return of(facts);
+    }
+
     /** These facts and then {@code more}, without the ones that repeat. */
     public KnownFacts and(List<Fact> more) {
         if (more == null || more.isEmpty()) {
@@ -198,6 +271,11 @@ public final class KnownFacts {
 
     public boolean isEmpty() {
         return facts.isEmpty();
+    }
+
+    /** The facts, in order. */
+    public List<Fact> facts() {
+        return facts;
     }
 
     public int size() {
@@ -224,8 +302,8 @@ public final class KnownFacts {
             + (sessions == 0
                 ? " fact(s) the architect of an earlier, delivered story established and kept. "
                 : " fact(s): what the architect of an earlier, delivered story established and "
-                    + "kept, and " + sessions + " that a role concluded from a lookup in a "
-                    + "session of this project (each says who found it). ")
+                    + "kept, and " + sessions + " that a role kept from a lookup in a session "
+                    + "of this project, this build's among them (each says who found it). ")
             + "Titles only: known_about <subject or source> gives each fact with the lines it "
             + "was copied from, the story and commit it was true at, and whether its source has "
             + "changed since. Read a fact before you look the same thing up again.\n");
@@ -253,8 +331,8 @@ public final class KnownFacts {
      */
     public String about(String what, Function<Fact, Source> check) {
         if (facts.isEmpty()) {
-            return "Nothing is recorded for this project yet: no earlier story's architect kept "
-                + "a finding. Look it up.";
+            return "Nothing is recorded yet: no role of this build has kept a fact and no "
+                + "delivered story's architect kept a finding. Look it up.";
         }
         String asked = what == null ? "" : what.strip();
         if (asked.isEmpty()) {

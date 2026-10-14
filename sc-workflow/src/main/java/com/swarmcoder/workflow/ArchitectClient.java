@@ -947,7 +947,8 @@ public class ArchitectClient {
                     document.setBrdRequirementIds(original.brdRequirementIds());
                     carryOverUnchangedSections(draft, original, document);
                     return document;
-                }, draft -> revisionLoses(original, draft), original.contracts());
+                }, draft -> revisionLoses(original, draft), original.contracts(),
+                original.findings());
             LlmDesign parsed = callForJson(REVISE_SYSTEM_PROMPT,
                 reviseUserMessage(original, objections) + context,
                 LlmDesign.class, LlmDesign.class, "the architect's",
@@ -1730,7 +1731,11 @@ public class ArchitectClient {
         + "you. What you check with a tool is WHERE things are: before a task names an existing "
         + "class of this project, a module or a file path, confirm it - list_files shows the "
         + "modules and source directories that really exist, and the tree says which type is in "
-        + "which file and what uses it (which tool is for what is listed at the end). A write "
+        + "which file and what uses it (which tool is for what is listed at the end). What the "
+        + "architect kept while designing - each FACT line of the design, the build declaration "
+        + "a new module follows among them - is not looked up again: known_about <the fact's "
+        + "subject or source> returns it with the lines it was copied from. For anything else "
+        + "in code, body_of returns one type or one method; a whole file is the last resort. A write "
         + "set in a directory the build does not compile sends every worker of that task the "
         + "wrong way.\n"
         + "2. CHECK YOUR DRAFT. Call check_plan with the complete JSON object described above, as "
@@ -1765,6 +1770,19 @@ public class ArchitectClient {
          * an objection.
          */
         default List<String> designNotes(DesignDocument draft) {
+            return List.of();
+        }
+
+        /**
+         * The objections to a draft design that depend on what its architect has kept for the
+         * workers so far (section 106: a design whose build file is still to be written keeps
+         * the build declaration it must follow). Asked for a draft only; empty when there are
+         * none.
+         *
+         * @param kept every finding the design will carry: kept in this session, and carried
+         *             from the design it revises
+         */
+        default List<String> designAgainstKept(DesignDocument draft, List<DesignFinding> kept) {
             return List.of();
         }
 
@@ -1842,12 +1860,21 @@ public class ArchitectClient {
     private record AgentWork(String role, String noun, String how, LookupAgent.Limits limits,
                              List<ApiContract> contracts,
                              java.util.function.Function<String, DraftTools.Checked> check,
-                             KeptConversations.Held prior, String followUp) {
+                             KeptConversations.Held prior, String followUp,
+                             java.util.function.BiFunction<String, List<DesignFinding>,
+                                 List<String>> keptCheck) {
 
         AgentWork(String role, String noun, String how, LookupAgent.Limits limits,
                   List<ApiContract> contracts,
                   java.util.function.Function<String, DraftTools.Checked> check) {
-            this(role, noun, how, limits, contracts, check, null, null);
+            this(role, noun, how, limits, contracts, check, null, null, null);
+        }
+
+        /** This work, with a check of each draft against what the session has kept. */
+        AgentWork checkingKept(java.util.function.BiFunction<String, List<DesignFinding>,
+                List<String>> keptCheck) {
+            return new AgentWork(role, noun, how, limits, contracts, check, prior, followUp,
+                keptCheck);
         }
 
         /**
@@ -1855,7 +1882,8 @@ public class ArchitectClient {
          * back, with {@code followUp} as its next message. Null {@code prior} changes nothing.
          */
         AgentWork continuing(KeptConversations.Held prior, String followUp) {
-            return new AgentWork(role, noun, how, limits, contracts, check, prior, followUp);
+            return new AgentWork(role, noun, how, limits, contracts, check, prior, followUp,
+                keptCheck);
         }
     }
 
@@ -1901,6 +1929,37 @@ public class ArchitectClient {
      *                     what the design had
      */
     private AgentWork designWork(DraftReader<DesignDocument> reader,
+                                 java.util.function.Function<DesignDocument, String> ownObjection,
+                                 List<ApiContract> contracts) {
+        return designWork(reader, ownObjection, contracts, List.of());
+    }
+
+    /**
+     * @param carried the findings the design already carries and this call's design will keep:
+     *                those of the design a revision revises; empty for a first design
+     */
+    private AgentWork designWork(DraftReader<DesignDocument> reader,
+                                 java.util.function.Function<DesignDocument, String> ownObjection,
+                                 List<ApiContract> contracts, List<DesignFinding> carried) {
+        AgentWork work = designWorkOf(reader, ownObjection, contracts);
+        DraftChecks checks = draftChecks.get();
+        if (work == null || checks == null) {
+            return work;
+        }
+        return work.checkingKept((json, kept) -> {
+            DesignDocument draft;
+            try {
+                draft = reader.read(json);
+            } catch (Exception e) {                                        // noqa
+                return List.of();
+            }
+            List<DesignFinding> all = new ArrayList<>(carried == null ? List.of() : carried);
+            all.addAll(kept == null ? List.of() : kept);
+            return checks.designAgainstKept(draft, all);
+        });
+    }
+
+    private AgentWork designWorkOf(DraftReader<DesignDocument> reader,
                                  java.util.function.Function<DesignDocument, String> ownObjection,
                                  List<ApiContract> contracts) {
         if (lookupAgent == null) {
@@ -2004,7 +2063,7 @@ public class ArchitectClient {
                 if (prior != null && work.followUp() != null
                         && prior.tools() instanceof DraftTools again) {
                     // What it handed in was sent back: same conversation, its lookups intact.
-                    again.nextRound(work.check());
+                    again.nextRound(work.check(), work.keptCheck());
                     outcome = agent.resume(clientOf(work.role()), prior.conversation(),
                         work.followUp()).orElse(null);
                     own[0] = outcome == null ? null : again;
@@ -2021,7 +2080,7 @@ public class ArchitectClient {
                             + work.noun() + " you have not given to a tool is lost.",
                         work.contracts(), session -> {
                             own[0] = new DraftTools(session, work.noun(), MAX_DRAFT_CHECKS,
-                                work.check());
+                                work.check()).checkingKept(work.keptCheck());
                             return own[0].bindings();
                         }));
                 }

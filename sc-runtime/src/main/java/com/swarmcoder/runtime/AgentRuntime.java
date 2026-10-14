@@ -180,10 +180,26 @@ public interface AgentRuntime {
      *                        hold whole through a tidy, in estimated tokens - see
      *                        {@code HistoryTrim.tidy}. Negative is no bound, as every session
      *                        ran before section 95.
+     * @param order           nullable. Told every turn's calls after they ran, and may name the
+     *                        one tool the next turn is to call - see {@link TurnOrder}. Null
+     *                        orders nothing, as every session ran before section 106.
      */
     record SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
                           java.util.function.BiConsumer<String, String> upcoming,
-                          int askedAgainTokens) {
+                          int askedAgainTokens, TurnOrder order) {
+
+        /** With no turn ever ordered. */
+        public SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
+                              java.util.function.BiConsumer<String, String> upcoming,
+                              int askedAgainTokens) {
+            this(tidyAboveTokens, tidyToTokens, digestChars, upcoming, askedAgainTokens, null);
+        }
+
+        /** These options with {@code order} deciding what a next turn is to call. */
+        public SessionOptions ordering(TurnOrder order) {
+            return new SessionOptions(tidyAboveTokens, tidyToTokens, digestChars, upcoming,
+                askedAgainTokens, order);
+        }
 
         /** With no bound on the results asked for a second time. */
         public SessionOptions(int tidyAboveTokens, int tidyToTokens, int digestChars,
@@ -198,6 +214,43 @@ public interface AgentRuntime {
                 java.util.function.BiConsumer<String, String> upcoming) {
             return new SessionOptions(0, 0, 0, upcoming);
         }
+    }
+
+    /**
+     * Orders ONE turn of a session (section 106). After a turn's calls have run, the session's
+     * owner is told what they were and which of their results the conversation already held
+     * whole; it may answer with the one tool the NEXT turn is to call. The runtime then asks
+     * the model server for that turn with that tool as the only one it may call (the request's
+     * {@code tool_choice}; the tool list, and so the server's reading of everything before
+     * it, is unchanged), and the turn after it is asked as every turn is. Nothing is refused
+     * by this: an order decides what one request may answer with, never what a tool returns.
+     *
+     * <p>A server that does not take a named tool choice is asked once, answers with an
+     * error, and is from then on asked as always: the notice alone then says what is due.
+     */
+    @FunctionalInterface
+    interface TurnOrder {
+
+        /**
+         * @param turn the calls of the turn just run, in the order they were made
+         * @return what the next turn is to call; empty orders nothing
+         */
+        Optional<Ordered> after(List<Made> turn);
+
+        /**
+         * One call of a turn.
+         *
+         * @param heldWhole true when this very call was made before in this session and the
+         *                  answer it got then is still whole in the conversation and equal to
+         *                  the one it got now
+         */
+        record Made(String tool, String arguments, boolean heldWhole) {}
+
+        /**
+         * @param tool   the tool the next turn is to call, by the name it is bound under
+         * @param notice what the model is told about it; added to the turn's last result
+         */
+        record Ordered(String tool, String notice) {}
     }
 
     /** Links a session to the swarm entities it works for — the observer's join keys. */
