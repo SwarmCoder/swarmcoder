@@ -87,6 +87,18 @@ public final class KoogAgentRuntime implements AgentRuntime {
      */
     static final String GO_ON = "Those are the results of your calls. Go on with your work.";
 
+    /**
+     * Whether a turn the session's owner orders is asked for with the request's tool choice
+     * naming its one tool (section 106). {@code -Dswarmcoder.session.namedToolChoice=false}
+     * leaves every request as it always was; the role is then told by the notice alone.
+     */
+    static final boolean NAMED_TOOL_CHOICE = !"false".equalsIgnoreCase(
+        System.getProperty("swarmcoder.session.namedToolChoice"));
+
+    /** Servers and models, as address and model id, that answered a named tool choice with an error. */
+    private static final java.util.Set<String> NO_NAMED_TOOL_CHOICE =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** What a turn that called no tool is answered with. */
     static final String USE_YOUR_TOOLS =
         "Continue using your tools. When the task is complete, call " + DONE_TOOL + ".";
@@ -614,12 +626,139 @@ public final class KoogAgentRuntime implements AgentRuntime {
                 boolean tidied = tidyIfAsked(ctx);
                 final List<ReceivedToolResult> toSend = withoutRepeatedContent(ctx, calls, results);
                 shortenSuperseded(ctx, calls, toSend);
-                if (countedNotSent.newMessageDue(tidied, spec.options().tidyAboveTokens())) {
+                TurnOrder.Ordered ordered = orderedNext(ctx, calls, results, toSend);
+                if (ordered != null) {
+                    response = askOrdered(ctx, withNotice(toSend, ordered.notice()),
+                        ordered.tool());
+                } else if (countedNotSent.newMessageDue(tidied,
+                        spec.options().tidyAboveTokens())) {
                     response = askInANewMessage(ctx, toSend);
                 } else {
                     response = ask(ctx, () -> ctx.sendToolResults(toSend));
                 }
             }
+        }
+
+        /**
+         * What the session's owner orders for the next turn, after the turn just run (section
+         * 106; see {@link TurnOrder}); null when nobody orders turns here, when nothing is
+         * ordered, or when the tool named is not one of this session's.
+         *
+         * @param results the turn's results as the tools gave them
+         * @param toSend  the same as they will be sent: one that differs was replaced by the
+         *                line saying its answer is already held whole
+         */
+        private TurnOrder.Ordered orderedNext(AIAgentFunctionalContext ctx,
+                                              List<MessagePart.Tool.Call> calls,
+                                              List<ReceivedToolResult> results,
+                                              List<ReceivedToolResult> toSend) {
+            TurnOrder order = spec.options().order();
+            if (order == null || calls.isEmpty() || calls.size() != results.size()
+                    || calls.size() != toSend.size()) {
+                return null;
+            }
+            try {
+                List<Message> held = ctx.llm().writeSession(
+                    session -> session.getPrompt().getMessages());
+                List<TurnOrder.Made> made = new ArrayList<>();
+                for (int i = 0; i < calls.size(); i++) {
+                    MessagePart.Tool.Call call = calls.get(i);
+                    boolean whole = toSend.get(i) != results.get(i)
+                        || HistoryTrim.heldWhole(held, call.getTool(), call.getArgs(),
+                            results.get(i).getOutput());
+                    made.add(new TurnOrder.Made(call.getTool(), call.getArgs(), whole));
+                }
+                TurnOrder.Ordered ordered = order.after(List.copyOf(made)).orElse(null);
+                if (ordered == null || ordered.tool() == null || spec.tools().stream()
+                        .noneMatch(tool -> tool.name().equals(ordered.tool()))) {
+                    return null;
+                }
+                return ordered;
+            } catch (RuntimeException e) {                                 // noqa
+                log.debug("Session '{}': no turn ordered: {}", spec.role(), e.toString());
+                return null;
+            }
+        }
+
+        /** {@code results} with {@code notice} at the end of the last of them. */
+        private static List<ReceivedToolResult> withNotice(List<ReceivedToolResult> results,
+                                                           String notice) {
+            if (notice == null || notice.isBlank() || results.isEmpty()) {
+                return results;
+            }
+            List<ReceivedToolResult> out = new ArrayList<>(results);
+            ReceivedToolResult last = out.get(out.size() - 1);
+            out.set(out.size() - 1, last.copy(last.getId(), last.getTool(), last.getToolArgs(),
+                last.getToolDescription(), (last.getOutput() == null ? "" : last.getOutput())
+                    + "\n\n[" + notice.strip() + "]",
+                last.getResultKind(), last.getResult(), last.getResultObject(), null));
+            return out;
+        }
+
+        /**
+         * Sends a turn's results and asks for the next turn with {@code tool} as the only tool
+         * it may call (section 106). The tool list of the request is the session's own, so
+         * what the server has read of the conversation stays good; only the request's tool
+         * choice names the one. A server that answers such a request with an error is asked
+         * again at once as every turn is asked, and no session is asked that way on that
+         * server and model again: the notice the results carry then says what is due.
+         */
+        private Message.Assistant askOrdered(AIAgentFunctionalContext ctx,
+                                             List<ReceivedToolResult> results, String tool) {
+            String server = spec.endpoint().baseUrl() + "|" + spec.endpoint().modelId();
+            boolean named = NAMED_TOOL_CHOICE && !NO_NAMED_TOOL_CHOICE.contains(server);
+            String sentence = "At turn " + turns.get() + " every call was one this session had "
+                + "made before and brought nothing it does not hold. The next turn is " + tool
+                + (named ? ": the request names it as the only tool to call."
+                    : ": the results say so; this server is not asked to name a tool.");
+            log.info("Session '{}': {}", spec.role(), sentence);
+            tracer.nudge(sentence);
+            if (!named) {
+                return ask(ctx, () -> ctx.sendToolResults(results));
+            }
+            appendResults(ctx, results);
+            try {
+                return ask(ctx, () -> ctx.llm().<Message.Assistant>writeSession(session -> {
+                    for (ai.koog.agents.core.tools.ToolDescriptor offered : session.getTools()) {
+                        if (tool.equals(offered.getName())) {
+                            return session.requestLLMForceOneTool(offered);
+                        }
+                    }
+                    return session.requestLLM();
+                }));
+            } catch (Exception refused) {                                  // noqa
+                // The framework's own failures are not all unchecked, hence Exception.
+                if (refused instanceof KillSignal || cancelRequested != null
+                        || EndpointOutage.isOutage(refused)) {
+                    throw refused instanceof RuntimeException unchecked ? unchecked
+                        : new IllegalStateException(refused);
+                }
+                NO_NAMED_TOOL_CHOICE.add(server);
+                log.warn("Session '{}': the model server did not answer a request that names "
+                    + "the one tool to call ({}). The turn is asked again as every turn is, "
+                    + "and no session names a tool on this server and model again; the role "
+                    + "is told what is due by the notice alone.", spec.role(),
+                    refused.toString());
+                return ask(ctx, () -> ctx.llm().<Message.Assistant>writeSession(
+                    session -> session.requestLLM()));
+            }
+        }
+
+        /** Puts a turn's results into the conversation as {@code sendToolResults} does. */
+        private void appendResults(AIAgentFunctionalContext ctx,
+                                   List<ReceivedToolResult> results) {
+            ctx.llm().<Void>writeSession(session -> {
+                Prompt current = session.getPrompt();
+                List<MessagePart.RequestPart> parts = new ArrayList<>();
+                for (ReceivedToolResult result : results) {
+                    parts.add(result.toMessagePart());
+                }
+                List<Message> messages = new ArrayList<>(current.getMessages());
+                messages.add(new Message.User(parts,
+                    ai.koog.prompt.message.RequestMetaInfo.Companion.getEmpty(), null));
+                session.setPrompt(new Prompt(messages, current.getId(), current.getParams()));
+                return null;
+            });
         }
 
         /** Says, in the log and in the session's trace, why a turn without a call ended it. */
@@ -710,18 +849,7 @@ public final class KoogAgentRuntime implements AgentRuntime {
         private Message.Assistant askInANewMessage(AIAgentFunctionalContext ctx,
                                                    List<ReceivedToolResult> results) {
             long counted = countedNotSent.excessTokens();
-            ctx.llm().<Void>writeSession(session -> {
-                Prompt current = session.getPrompt();
-                List<MessagePart.RequestPart> parts = new ArrayList<>();
-                for (ReceivedToolResult result : results) {
-                    parts.add(result.toMessagePart());
-                }
-                List<Message> messages = new ArrayList<>(current.getMessages());
-                messages.add(new Message.User(parts,
-                    ai.koog.prompt.message.RequestMetaInfo.Companion.getEmpty(), null));
-                session.setPrompt(new Prompt(messages, current.getId(), current.getParams()));
-                return null;
-            });
+            appendResults(ctx, results);
             countedNotSent.beginsNewMessage();
             String sentence = "At turn " + turns.get() + " the model server counted about "
                 + counted + " input tokens this session had not sent (what the model thought "

@@ -7192,6 +7192,16 @@ public class GreenfieldWorkflow {
             }
 
             @Override
+            public List<String> designAgainstKept(DesignDocument draft,
+                    List<com.swarmcoder.domain.DesignFinding> kept) {
+                // A design whose build file is still to be written keeps the build
+                // declaration it must follow (section 106).
+                return BuildFactsAreKept.objections(
+                    withoutContractsForExistingLibraryTypes(draft, line -> { }), kept,
+                    repoLayout(), ProjectTypes.of(repoPath), aReferenceBuildCanBeLookedUp());
+            }
+
+            @Override
             public List<String> plan(TaskGraph draft, DesignDocument design) {
                 return planChecked(draft, design).objections();
             }
@@ -7218,6 +7228,33 @@ public class GreenfieldWorkflow {
                 return new ArchitectClient.PlanDraft(objections, notes);
             }
         });
+    }
+
+    /**
+     * True when the reference material holds a build file at the top of one of its folders,
+     * so that a build declaration can be looked up and kept (section 106).
+     */
+    private boolean aReferenceBuildCanBeLookedUp() {
+        if (librarian == null || librarian.curator() == null) {
+            return false;
+        }
+        Path project = repoPath == null ? null : repoPath.toAbsolutePath().normalize();
+        for (com.swarmcoder.knowledge.KnowledgeCurator.Root root : librarian.curator().roots()) {
+            if (root == null || root.path() == null) {
+                continue;
+            }
+            Path folder = root.path().toAbsolutePath().normalize();
+            if (folder.equals(project)) {
+                continue;
+            }
+            for (String name : List.of("pom.xml", "build.gradle.kts", "build.gradle",
+                    "settings.gradle.kts", "settings.gradle")) {
+                if (java.nio.file.Files.isRegularFile(folder.resolve(name))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

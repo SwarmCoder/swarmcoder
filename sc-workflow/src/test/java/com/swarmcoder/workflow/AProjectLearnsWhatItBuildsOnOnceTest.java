@@ -159,7 +159,7 @@ class AProjectLearnsWhatItBuildsOnOnceTest {
     }
 
     @Test
-    void aProjectThatHoldsNothingOpensItsSessionsAsBefore() throws Exception {
+    void aProjectThatHoldsNothingIsToldNoTitlesAndIsStillOfferedTheLookup() throws Exception {
         Path app = app();
         Librarian librarian = new Librarian(new Context7Client("http://localhost:1/sse"), null,
             List.of(), app, null, world.resolve("cache"));
@@ -176,8 +176,12 @@ class AProjectLearnsWhatItBuildsOnOnceTest {
                 new KoogAgentRuntime(), null, null).withKnown(KnownFacts::none));
 
             assertThat(architect.design("Let a customer rate a title")).isNotNull();
-            assertThat(llm.sessionRequests.get(0))
-                .doesNotContain("known_about").doesNotContain("ALREADY KNOW");
+            assertThat(llm.sessionRequests.get(0)).as("no titles: nothing is known yet")
+                .doesNotContain("WHAT THIS PROJECT ALREADY KNOWS");
+            // Section 106: the lookup is offered all the same, because what the roles of this
+            // build keep is answered by it from the moment it is kept.
+            assertThat(llm.sessionTools.get(0)).contains("known_about");
+            assertThat(llm.sessionRequests.get(0)).contains("WHAT IS ALREADY KNOWN");
         }
     }
 

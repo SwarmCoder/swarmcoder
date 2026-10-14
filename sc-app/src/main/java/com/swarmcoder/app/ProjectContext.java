@@ -460,7 +460,11 @@ public final class ProjectContext {
                 // A project learns what it builds on once (section 97): what the architects
                 // of its delivered stories kept is a lookup for every later role.
                 .withKnown(() -> com.swarmcoder.knowledge.KnownFacts.ofDelivered(
-                    shared.store(), project.id()));
+                    shared.store(), project.id()))
+                // And what the architect of the run itself kept, for the run's later roles
+                // and for the same run after a restart (section 106).
+                .withKnownOfRun(run -> com.swarmcoder.knowledge.KnownFacts.ofDesignOf(
+                    shared.store(), run));
             cloudRoles.architect().setLookupAgent(roleAgent);
             cloudRoles.testAuthor().setLookupAgent(roleAgent);
             // The reviewer reads a design, a plan and tests against the rules as ONE QUESTION

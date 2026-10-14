@@ -52,12 +52,29 @@ final class ScriptedModel implements AutoCloseable {
 
     final HttpServer http;
     final List<JsonNode> requests = new ArrayList<>();
+    /** The requests answered with an error because they named the one tool to call. */
+    final List<JsonNode> refused = new ArrayList<>();
+    /** True for a server that answers a request naming the one tool to call with an error. */
+    volatile boolean refusesANamedTool;
 
     /** Answers with {@code steps} in order, and with the last of them for ever after. */
     ScriptedModel(List<Step> steps) throws Exception {
         http = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         http.createContext("/v1/chat/completions", exchange -> {
             JsonNode request = JSON.readTree(exchange.getRequestBody().readAllBytes());
+            if (refusesANamedTool && request.path("tool_choice").isObject()) {
+                synchronized (requests) {
+                    refused.add(request);
+                }
+                byte[] error = "{\"error\":{\"message\":\"tool_choice is not supported\"}}"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(400, error.length);
+                try (OutputStream out = exchange.getResponseBody()) {
+                    out.write(error);
+                }
+                return;
+            }
             int turn;
             synchronized (requests) {
                 requests.add(request);
@@ -111,6 +128,12 @@ final class ScriptedModel implements AutoCloseable {
 
     /** A session of the real runtime against this server, with {@code tools}. */
     AgentRuntime.AgentSession open(List<AgentRuntime.ToolBinding> tools) {
+        return open(tools, null);
+    }
+
+    /** The same, run with {@code options}; null is a session run as every session was. */
+    AgentRuntime.AgentSession open(List<AgentRuntime.ToolBinding> tools,
+                                   AgentRuntime.SessionOptions options) {
         // Tool calls in the history natively; a room nothing here comes near, so no compaction.
         ModelQuirks quirks = new ModelQuirks("scripted", 4_096, true, null, null, false, true,
             false, 1_000_000, 900_000, 1_024, 4, false);
@@ -118,7 +141,7 @@ final class ScriptedModel implements AutoCloseable {
             "You do the work.", new AgentRuntime.ModelEndpoint(
                 "http://localhost:" + http.getAddress().getPort(), "", "fake", 1_000_000, quirks),
             0.2, 40, tools, info -> Optional.empty());
-        return new KoogAgentRuntime().open(spec);
+        return new KoogAgentRuntime().open(options == null ? spec : spec.with(options));
     }
 
     @Override
