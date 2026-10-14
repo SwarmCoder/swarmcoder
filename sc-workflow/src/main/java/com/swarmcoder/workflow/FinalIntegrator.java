@@ -656,6 +656,13 @@ public class FinalIntegrator {
     }
 
     /**
+     * Each run's last finding of added code nothing reaches, as worded. Kept in memory only: after
+     * a restart the first repeat is not recognised as one.
+     */
+    private static final Map<UUID, String> LAST_UNREACHABLE =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * The failure sentence when the merged tree holds production source files this run added and
      * nothing reachable uses; null otherwise, and whenever that cannot be established. Read from
      * the object graph of the integration worktree ({@link ReachableCode}): no model, nothing run.
@@ -705,10 +712,19 @@ public class FinalIntegrator {
                         }
                     }
                 }
+                // The same finding as at this run's last attempt: whatever was done in between
+                // (a repair round, a retry) did not change it, and a reader must be told, or
+                // the same two answers are offered for ever (section 103).
+                boolean again = objection.equals(LAST_UNREACHABLE.put(run.id(), objection));
                 return objection + ".\n\nEvery acceptance test passed, and none of them shows "
                     + "this: a test that calls the new code directly is green whether or not the "
                     + "application ever does. (-D" + ReachableCode.SWITCH + "=off accepts the "
-                    + "run as it is.)";
+                    + "run as it is.)" + (again ? "\n\nTHIS IS THE SAME FINDING AS AT THE LAST "
+                    + "ATTEMPT OF THIS RUN. The round made in between did not change it, so "
+                    + "another round of the same kind is not expected to. Either the code named "
+                    + "is to be connected or removed by hand, or it is found in a way this check "
+                    + "cannot see (a framework or container that looks for it), and then the "
+                    + "switch above is the answer and the check has a gap to report." : "");
             }
             return null;
         } catch (RuntimeException e) {

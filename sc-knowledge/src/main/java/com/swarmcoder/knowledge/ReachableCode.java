@@ -68,7 +68,13 @@ import java.util.stream.Stream;
  *       full name (a service-loader file, a deployment descriptor, a configuration file);</li>
  *   <li>carries an annotation that this project's own framework-discovered types carry; or</li>
  *   <li>has a supertype that this project's own framework-discovered types have, when those
- *       carry no annotation at all.</li>
+ *       carry no annotation at all; or</li>
+ *   <li>is of a library type that a server container looks for on the classpath: one a library
+ *       of the project asks the container for in its own metadata, or one of the few the
+ *       platform standards make a container find ({@link ContainerDiscovery}, live build of
+ *       2026-10-14). This one rule is not learned from the project, because the first class of
+ *       such a kind has nothing older to be compared with and, found by its supertype alone,
+ *       carries no annotation either.</li>
  * </ol>
  *
  * <p>"Framework-discovered" is established from the code that was there before the run: a
@@ -117,7 +123,8 @@ import java.util.stream.Stream;
  *       nothing uses - one a compiler or a code generator reads and no framework finds included.
  *       It is named in the finding, not refused. The other way round too: the first type of a
  *       <i>new kind</i> of discovery in a root that already shows another kind, and one found by
- *       its supertype alone, are still objected to.</li>
+ *       its supertype alone, are still objected to - unless a container looks for that kind
+ *       (rule 5).</li>
  *   <li><b>Other languages.</b> Only Java sources are in the graph. A tree whose graph could not
  *       be built, or built only in part, is not judged at all ({@link Status#UNDETERMINED}).</li>
  * </ul>
@@ -217,6 +224,9 @@ public final class ReachableCode {
         private final Set<String> namedOutsideJava = new LinkedHashSet<>();
         /** A type of the tree to the production file declaring it. */
         private final Map<String, String> fileOfType = new LinkedHashMap<>();
+        /** Library supertypes and annotations a container finds a class by, full names. */
+        private final Set<String> containerSupertypes = new TreeSet<>();
+        private final Set<String> containerAnnotations = new TreeSet<>();
 
         private Graph(String undetermined) {
             this.undetermined = undetermined;
@@ -326,6 +336,9 @@ public final class ReachableCode {
                 if (node.supertypes().contains(supertype)) {
                     why.add("is a " + simpleName(supertype));
                 }
+            }
+            for (String mark : containerMarksOf(node)) {
+                why.add("found by the container (" + mark + ")");
             }
             Set<String> users = usedBy.getOrDefault(node.file(), Set.of());
             if (!users.isEmpty()) {
@@ -467,7 +480,10 @@ public final class ReachableCode {
                 }
             }
             for (Node node : nodes.values()) {
+                List<String> container = containerMarksOf(node);
+                walk.container.addAll(container);
                 if (node.hasMain() || namedOutsideJava.contains(node.file())
+                        || !container.isEmpty()
                         || intersects(node.typeAnnotations(), walk.annotations)
                         || intersects(node.fileAnnotations(), walk.annotations)
                         || intersects(node.supertypes(), walk.supertypes)) {
@@ -522,6 +538,25 @@ public final class ReachableCode {
             return walk;
         }
 
+        /**
+         * What a server container finds this file's types by, as a reader would write it
+         * ({@code @Name} or {@code Name}); empty for a file no container looks for.
+         */
+        private List<String> containerMarksOf(Node node) {
+            List<String> marks = new ArrayList<>();
+            for (String annotation : node.typeAnnotations()) {
+                if (containerAnnotations.contains(annotation)) {
+                    marks.add("@" + simpleName(annotation));
+                }
+            }
+            for (String supertype : node.supertypes()) {
+                if (containerSupertypes.contains(supertype)) {
+                    marks.add(simpleName(supertype));
+                }
+            }
+            return marks;
+        }
+
         private void reach(Deque<String> open, Set<String> reachable) {
             while (!open.isEmpty()) {
                 Node node = nodes.get(open.poll());
@@ -538,6 +573,8 @@ public final class ReachableCode {
         final Set<String> added = new LinkedHashSet<>();
         final Set<String> annotations = new TreeSet<>();
         final Set<String> supertypes = new TreeSet<>();
+        /** What a container finds types of this tree by, as {@code containerMarksOf} writes it. */
+        final Set<String> container = new TreeSet<>();
         final Set<String> anchors = new LinkedHashSet<>();
         final Set<String> reachable = new LinkedHashSet<>();
         final Set<String> surfaceRoots = new TreeSet<>();
@@ -550,6 +587,7 @@ public final class ReachableCode {
             List<String> all = new ArrayList<>();
             annotations.forEach(a -> all.add("@" + simpleName(a)));
             supertypes.forEach(s -> all.add(simpleName(s)));
+            container.stream().filter(mark -> !all.contains(mark)).forEach(all::add);
             return List.copyOf(all);
         }
     }
@@ -633,6 +671,20 @@ public final class ReachableCode {
                 supertypes, hasMain, usesOfFile.getOrDefault(entry.getKey(), Set.of())));
         }
         graph.fileOfType.putAll(fileOfType);
+        // What a container finds on the classpath: the platform's own contracts, unless the
+        // project declares a type of that name itself, and what the libraries this tree is
+        // parsed with ask the container to hand them.
+        ContainerDiscovery.STANDARD_SUPERTYPES.stream()
+            .filter(type -> !fileOfType.containsKey(type)).forEach(graph.containerSupertypes::add);
+        ContainerDiscovery.STANDARD_ANNOTATIONS.stream()
+            .filter(type -> !fileOfType.containsKey(type)).forEach(graph.containerAnnotations::add);
+        try {
+            ContainerDiscovery.handledTypes(LstReader.classpathFor(tree)).stream()
+                .filter(ReachableCode::notTheLanguages).forEach(graph.containerSupertypes::add);
+        } catch (RuntimeException e) {
+            log.debug("could not read what the libraries of {} ask a container for: {}", tree,
+                e.toString());
+        }
         readNamesOutsideJava(tree, fileOfType, graph.namedOutsideJava);
         log.info("reachable-code graph of {}: {} production file(s), {} named in build or "
             + "resource files, parsed in {} ms", tree, graph.nodes.size(),
