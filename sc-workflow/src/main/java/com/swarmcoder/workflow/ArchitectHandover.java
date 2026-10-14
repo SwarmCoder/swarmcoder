@@ -97,8 +97,13 @@ final class ArchitectHandover {
      * @param findings    what the task is given, most relevant first
      * @param withoutCode how many of them are given as the sentence alone, for room
      * @param leftOut     how many relevant findings did not fit at all
+     * @param byTitle     how many are given as the sentence alone because what they are about
+     *                    is another task's work (section 114)
      */
-    record Given(List<DesignFinding> findings, int withoutCode, int leftOut) {
+    record Given(List<DesignFinding> findings, int withoutCode, int leftOut, int byTitle) {
+        Given(List<DesignFinding> findings, int withoutCode, int leftOut) {
+            this(findings, withoutCode, leftOut, 0);
+        }
     }
 
     /** As {@link #forTask(Task, TaskGraph, DesignDocument, int)} for a task taken alone. */
@@ -129,16 +134,26 @@ final class ArchitectHandover {
                 relevant.add(finding);
             }
         }
-        for (DesignFinding finding : design.findings()) {
-            if (finding != null && finding.wholeProject()) {
-                relevant.add(finding);
-            }
-        }
         List<ApiContract> used = new ArrayList<>();
         for (ApiContract other : design.contracts()) {
             if (other != null && other.namesAType() && !delivers.contains(other)
                     && delivers.stream().anyMatch(own -> names(own, other.simpleTypeName()))) {
                 used.add(other);
+            }
+        }
+        // A finding about the whole project goes whole to every task, unless the lookup it
+        // came from is about another task's work: then by its sentence and its lookup only
+        // (section 114: a task was sent 8.1K characters about types other tasks build, on every
+        // one of its 86 calls).
+        Set<DesignFinding> byTitle = new LinkedHashSet<>();
+        Set<Task> related = relatedTo(task, graph, used);
+        for (DesignFinding finding : design.findings()) {
+            if (finding != null && finding.wholeProject()) {
+                if (anotherTasksWork(finding, graph, related)) {
+                    byTitle.add(finding);
+                } else {
+                    relevant.add(finding);
+                }
             }
         }
         for (DesignFinding finding : design.findings()) {
@@ -158,6 +173,13 @@ final class ArchitectHandover {
         int left = maxChars;
         int withoutCode = 0;
         int leftOut = 0;
+        int titles = 0;
+        for (DesignFinding finding : byTitle) {
+            if (!relevant.contains(finding)) {
+                relevant.add(finding.withoutSnippet());
+                titles++;
+            }
+        }
         for (DesignFinding finding : relevant) {
             if (finding.size() <= left) {
                 given.add(finding);
@@ -171,7 +193,117 @@ final class ArchitectHandover {
                 leftOut++;
             }
         }
-        return new Given(List.copyOf(given), withoutCode, leftOut);
+        return new Given(List.copyOf(given), withoutCode, leftOut, titles);
+    }
+
+    /**
+     * The task itself, the tasks it waits for, and the tasks that deliver a contract its own
+     * contracts name: whose work this task builds on.
+     */
+    private static Set<Task> relatedTo(Task task, TaskGraph graph, List<ApiContract> used) {
+        Set<Task> related = new LinkedHashSet<>();
+        related.add(task);
+        related.addAll(waitedFor(task, graph));
+        if (graph != null && graph.tasks() != null) {
+            for (Task other : graph.tasks()) {
+                if (other != null && other.deliveredContracts().stream().anyMatch(used::contains)) {
+                    related.add(other);
+                }
+            }
+        }
+        return related;
+    }
+
+    /**
+     * True when the lookup a whole-project finding came from is about work of the plan that
+     * none of {@code related} does: the type or file it names is delivered or written by other
+     * tasks only, or its path runs through a module folder only other tasks write. Read from the
+     * finding's recorded source and the plan's write sets and contracts, never from its sentence.
+     * A source that names nothing of the plan says nothing, and the finding stays whole.
+     */
+    static boolean anotherTasksWork(DesignFinding finding, TaskGraph graph, Set<Task> related) {
+        if (graph == null || graph.tasks() == null || finding.source() == null) {
+            return false;
+        }
+        String source = finding.source().strip();
+        int space = source.indexOf(' ');
+        String argument = space < 0 ? "" : source.substring(space + 1).strip();
+        if (argument.isEmpty()) {
+            return false;
+        }
+        argument = argument.replace('\\', '/');
+        int hash = argument.indexOf('#');
+        if (hash >= 0) {
+            argument = argument.substring(0, hash);
+        }
+        argument = argument.replaceFirst(":[0-9][0-9,\\s-]*$", "");
+        List<String> segments = new ArrayList<>();
+        for (String part : argument.split("/")) {
+            if (!part.isBlank()) {
+                segments.add(part.strip());
+            }
+        }
+        if (segments.isEmpty()) {
+            return false;
+        }
+        String last = segments.get(segments.size() - 1);
+        int dot = last.lastIndexOf('.');
+        String stem = segments.size() > 1 || last.endsWith(".java")
+            ? (dot > 0 ? last.substring(0, dot) : last)
+            : (dot >= 0 ? last.substring(dot + 1) : last);
+        String wanted = stem.toLowerCase(java.util.Locale.ROOT);
+        Set<Task> owners = new LinkedHashSet<>();
+        for (Task other : graph.tasks()) {
+            if (other == null) {
+                continue;
+            }
+            boolean delivers = other.deliveredContracts().stream().anyMatch(contract ->
+                contract.namesAType()
+                    && contract.simpleTypeName().toLowerCase(java.util.Locale.ROOT).equals(wanted));
+            if (delivers || fileStems(other.writeSet()).contains(wanted)) {
+                owners.add(other);
+            }
+        }
+        Map<String, Set<Task>> modules = moduleFolders(graph);
+        if (modules.size() > 1) {
+            for (int i = 0; i < segments.size() - 1; i++) {
+                Set<Task> writers = modules.get(segments.get(i));
+                if (writers != null) {
+                    owners.addAll(writers);
+                }
+            }
+        }
+        if (owners.isEmpty()) {
+            return false;
+        }
+        for (Task owner : owners) {
+            if (related.contains(owner)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The top folder of every write-set path of the plan, with the tasks that write under it. */
+    private static Map<String, Set<Task>> moduleFolders(TaskGraph graph) {
+        Map<String, Set<Task>> folders = new LinkedHashMap<>();
+        for (Task task : graph.tasks()) {
+            if (task == null || task.writeSet() == null) {
+                continue;
+            }
+            for (String path : task.writeSet()) {
+                if (path == null) {
+                    continue;
+                }
+                String clean = path.strip().replace('\\', '/');
+                int slash = clean.indexOf('/');
+                if (slash > 0) {
+                    folders.computeIfAbsent(clean.substring(0, slash),
+                        key -> new LinkedHashSet<>()).add(task);
+                }
+            }
+        }
+        return folders;
     }
 
     /**
@@ -208,6 +340,8 @@ final class ArchitectHandover {
                 + "architect's " + all + " finding(s), " + DesignFinding.sizeOf(given.findings())
                 + " characters" + (given.withoutCode() == 0 ? "" : "; " + given.withoutCode()
                     + " without their lines, for room")
+                + (given.byTitle() == 0 ? "" : "; " + given.byTitle() + " by their sentence "
+                    + "and lookup only, being about other tasks' work")
                 + (given.leftOut() == 0 ? "" : "; " + given.leftOut() + " did not fit"));
         }
         List<String> nobody = design.findings().stream()

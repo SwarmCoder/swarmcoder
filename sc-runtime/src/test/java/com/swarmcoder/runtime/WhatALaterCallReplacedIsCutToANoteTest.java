@@ -216,4 +216,34 @@ class WhatALaterCallReplacedIsCutToANoteTest {
         assertThat(result.changed()).isFalse();
         assertThat(result.messages()).isSameAs(history);
     }
+
+    public static final class Verifier {
+        @AgentRuntime.RunAgain(whateverTheArguments = true)
+        public String verify(String scope) {
+            return "verify: FAILED\n" + "a line of the log\n".repeat(100);
+        }
+    }
+
+    /**
+     * Section 114: a worker's {@code verify} runs the contract whatever it is given, so a later
+     * call replaces an earlier one even when the model wrote its argument differently.
+     */
+    @Test
+    void aToolThatRunsTheSameThingWhateverItIsGivenIsReplacedByAnyLaterCall() throws Exception {
+        List<AgentRuntime.ToolBinding> tools = List.of(new AgentRuntime.ToolBinding("verify",
+            "Verifies.", new Verifier(), Verifier.class.getMethod("verify", String.class)));
+        List<Message> history = opening();
+        history.add(calls("c1", "verify", "{\"scope\":\"\"}"));
+        history.add(answers("c1", "verify", "verify: FAILED\n" + "a line\n".repeat(200)));
+        history.add(calls("c2", "verify", "{}"));
+        history.add(answers("c2", "verify", "verify: FAILED\n" + "b line\n".repeat(200)));
+        history.add(calls("c3", "verify", "{\"scope\":\"compile\"}"));
+
+        Superseded.Result cut = Superseded.shorten(history, tools, List.of(
+            new Superseded.Now("c3", "verify", "{\"scope\":\"compile\"}",
+                "verify: PASSED\n" + "c line\n".repeat(200))));
+
+        assertThat(cut.results()).isEqualTo(2);
+        assertThat(cut.tokensAfter()).isLessThan(cut.tokensBefore());
+    }
 }

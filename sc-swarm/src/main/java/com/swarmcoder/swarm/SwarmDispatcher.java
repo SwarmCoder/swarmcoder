@@ -319,8 +319,8 @@ public class SwarmDispatcher {
         // Shared prompt prefix — built ONCE per group, byte-identical for every worker so
         // vLLM's prefix cache pays the prefill a single time (spec §6.3). Diversity content
         // (persona) is appended after the prefix inside WorkerLoop.
-        PromptBundle bundle = buildBundle(task, null, knowledgeBrief, projectRules, protectedPaths,
-            shellNote());
+        PromptBundle bundle = buildBundle(task, null, knowledgeBrief, projectRules,
+            lockedPathsOfTheProject(protectedPaths, task, projectFolder()), shellNote());
         LoggerFactory.getLogger(SwarmDispatcher.class)
             // The size rides beside the hash because it is the other half of the same fact: the
             // hash says the prefill is shared, the token count says how much of every worker's
@@ -632,7 +632,7 @@ public class SwarmDispatcher {
         String family = workers.isEmpty() ? "unconfigured" : workers.get(0).id();
 
         PromptBundle bundle = buildBundle(task, failureEvidence, knowledgeBrief, projectRules,
-            protectedPaths, shellNote());
+            lockedPathsOfTheProject(protectedPaths, task, projectFolder()), shellNote());
         // Once per wave, as in dispatch(): the whole repair wave runs at one size.
         AdaptiveConcurrency.Plan plan = concurrency.plan(family);
         LoggerFactory.getLogger(SwarmDispatcher.class)
@@ -909,6 +909,84 @@ public class SwarmDispatcher {
     /** The span a run report reads the architect's findings given to a task's workers from. */
     public static final String WORKER_HANDOVER_SPAN = "worker handover|";
 
+    /** The project's folder, or null when there is no repository to look in. */
+    private java.nio.file.Path projectFolder() {
+        return gitService == null || !gitService.isEnabled() ? null : gitService.repoPath();
+    }
+
+    /** A line shorter than this is never taken out as a repeat: a brace, a short code line. */
+    static final int SHORTEST_REPEATED_LINE = 20;
+
+    /**
+     * The task's instructions with every line that is the same, character for character after
+     * its surrounding blanks, as an earlier line of them left out (section 114). Short lines
+     * stay: in code a closing brace is said many times and means something each time.
+     */
+    static String withoutRepeatedLines(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        StringBuilder kept = new StringBuilder();
+        boolean dropped = false;
+        for (String line : text.split("\n", -1)) {
+            String key = line.strip();
+            if (key.length() >= SHORTEST_REPEATED_LINE && !seen.add(key)) {
+                dropped = true;
+                continue;
+            }
+            if (!kept.isEmpty()) {
+                kept.append('\n');
+            }
+            kept.append(line);
+        }
+        return dropped ? kept.toString().replaceAll("\n{3,}", "\n\n") : text;
+    }
+
+    /**
+     * Of the operator's locked paths, the ones that mean something in this project: the path
+     * is there, or it covers or lies under an entry of the task's write set (section 114).
+     * Every worker was sent SwarmCoder's own trust kernel ({@code PathPolicy.TRUST_KERNEL}),
+     * paths of the product's repository that the target project does not have. Only the
+     * sentence is narrowed: every write is still checked against the whole list.
+     *
+     * @param repoRoot the project's folder; null keeps the list as it is
+     */
+    static List<String> lockedPathsOfTheProject(List<String> protectedPaths, Task task,
+                                                java.nio.file.Path repoRoot) {
+        if (protectedPaths == null || protectedPaths.isEmpty() || repoRoot == null) {
+            return protectedPaths == null ? List.of() : protectedPaths;
+        }
+        List<String> kept = new ArrayList<>();
+        for (String entry : protectedPaths) {
+            if (entry == null || entry.isBlank()) {
+                continue;
+            }
+            String path = entry.strip().replace('\\', '/');
+            String bare = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+            boolean there;
+            try {
+                there = java.nio.file.Files.exists(repoRoot.resolve(bare));
+            } catch (RuntimeException badPath) {
+                there = false;
+            }
+            boolean meetsTheTask = false;
+            for (String written : task.writeSet() == null ? java.util.Set.<String>of()
+                    : task.writeSet()) {
+                String w = written == null ? "" : written.strip().replace('\\', '/');
+                if (!w.isEmpty() && (w.equals(bare) || w.startsWith(bare + "/")
+                        || bare.startsWith(w.endsWith("/") ? w : w + "/"))) {
+                    meetsTheTask = true;
+                    break;
+                }
+            }
+            if (there || meetsTheTask) {
+                kept.add(entry);
+            }
+        }
+        return kept;
+    }
+
     /**
      * Deterministic shared segments for the task's whole group.
      *
@@ -931,8 +1009,10 @@ public class SwarmDispatcher {
                                     String projectRules, List<String> protectedPaths,
                                     String shellNote) {
         StringBuilder instructions = new StringBuilder();
+        // A line said twice is sent once (section 114: one opening carried the same dependency
+        // line three times, appended by three readings of three tests).
         instructions.append("Task: ").append(task.title()).append('\n')
-            .append(task.instructions() == null ? "" : task.instructions()).append('\n');
+            .append(withoutRepeatedLines(task.instructions())).append('\n');
         // What the architect established for this task, word for word (owner's decision,
         // 2026-10-08; section 73). The task's instructions say WHAT it delivers; how this
         // project and its framework do it comes from the role that looked it up, not from the
@@ -1010,7 +1090,8 @@ public class SwarmDispatcher {
                 + "tree (shape_of, body_of, types_in, usages_of - they answer about your checkout "
                 + "as it is now); change existing Java with replace_member, add_member or "
                 + "remove_member, which need no read of the file; write a NEW file with write_file; verify with "
-                + "problems_in when you have it and by running builds/tests with exec; then call "
+                + "problems_in when you have it and with verify, which runs exactly what this "
+                + "candidate's verification runs (exec runs any other build or test); then call "
                 + "report_done with a short summary when the change is complete and verified. "
                 + "apply_diff takes a unified diff; if it is rejected, do not retry the diff - "
                 + "use replace_member or add_member. ALWAYS use repository-RELATIVE "

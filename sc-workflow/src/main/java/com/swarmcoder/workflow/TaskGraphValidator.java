@@ -82,7 +82,8 @@ public final class TaskGraphValidator {
         public List<String> corrections() {
             List<String> lines = new ArrayList<>();
             for (String warning : warnings) {
-                for (String kind : List.of(TURNED_DEPENDENCY, ADDED_DEPENDENCY, ADDED_DELIVERY)) {
+                for (String kind : List.of(TURNED_DEPENDENCY, ADDED_DEPENDENCY, ADDED_DELIVERY,
+                        MODULE_LIST)) {
                     if (warning.startsWith(kind)) {
                         lines.add(warning.substring(kind.length()));
                     }
@@ -95,6 +96,8 @@ public final class TaskGraphValidator {
     static final String ADDED_DEPENDENCY = "added dependency: ";
     static final String TURNED_DEPENDENCY = "turned dependency: ";
     static final String ADDED_DELIVERY = "added delivery: ";
+    /** What {@link ModulesAreListedAsTheyAreMade} put right (section 114). */
+    static final String MODULE_LIST = "module list: ";
 
     /**
      * Which modules of the build run only in a browser — what {@link #unusedEnablers} needs to
@@ -233,6 +236,12 @@ public final class TaskGraphValidator {
             typeOrder.added().forEach(line -> warnings.add(ADDED_DEPENDENCY + line));
             typeOrder.notes().forEach(line -> warnings.add("dependency not added: " + line));
             violations.addAll(typeOrder.violations());
+            // Section 114: an aggregating build file lists only the modules that exist when
+            // the task that writes it ends; later modules are added by the tasks that make them.
+            ModulesAreListedAsTheyAreMade.Outcome modules =
+                ModulesAreListedAsTheyAreMade.apply(graph, repoRoot);
+            modules.corrections().forEach(line -> warnings.add(MODULE_LIST + line));
+            violations.addAll(modules.violations());
             checkWriteSetDisjointness(graph, violations);
         }
 

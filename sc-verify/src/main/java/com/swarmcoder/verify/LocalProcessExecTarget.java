@@ -396,6 +396,11 @@ public final class LocalProcessExecTarget implements ExecTarget {
         return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 
+    @Override
+    public boolean posixShell() {
+        return !isWindows();
+    }
+
     /**
      * A leading {@code cd} to a POSIX-spelled Windows drive path — {@code cd /c/Users/dev/...}
      * — rewritten to the form {@code cmd.exe}'s own {@code cd} accepts: {@code cd /d C:/Users/dev/...}.

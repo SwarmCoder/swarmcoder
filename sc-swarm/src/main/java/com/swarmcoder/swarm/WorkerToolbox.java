@@ -24,9 +24,13 @@ import com.swarmcoder.runtime.AgentRuntime.ToolBinding;
 import com.swarmcoder.runtime.ExpertHelp;
 import com.swarmcoder.sandbox.ConfinedPath;
 import com.swarmcoder.sandbox.DockerSandboxManager;
+import com.swarmcoder.verify.CommandPipelineVerifier;
 import com.swarmcoder.verify.ExecResult;
 import com.swarmcoder.verify.ExecTarget;
 import com.swarmcoder.verify.LocalProcessExecTarget;
+import com.swarmcoder.verify.Verdicts;
+import com.swarmcoder.verify.VerifySpec;
+import com.swarmcoder.verify.VerifySpecLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -774,12 +778,17 @@ public final class WorkerToolbox {
             return "error: " + com.swarmcoder.domain.HostExecution.refusal("a worker's command");
         }
         try {
-            ExecResult result = commandTarget.exec(command, EXEC_TIMEOUT_SECONDS);
+            // A pipeline fails when any stage fails, and the exit line says so (section 114:
+            // `mvn ... | tail` answered exit=0 on a build that had failed).
+            boolean posix = commandTarget.posixShell();
+            ExecResult result = commandTarget.exec(PipelineFailure.wrap(command, posix),
+                EXEC_TIMEOUT_SECONDS);
             String audit = auditAndRevertStrayWrites();
             // Both ends of a long output are kept (2026-10-02): a build log has its first error
             // near the top and its summary at the bottom, and the old cut kept only the top.
             String answer = ReadSlice.headAndTail("exit=" + result.exitCode()
-                + (result.timedOut() ? " (timed out)" : "") + "\n"
+                + (result.timedOut() ? " (timed out)" : "")
+                + PipelineFailure.note(command, posix) + "\n"
                 + (result.timedOut() ? timeoutMessage(result) + "\n" : "")
                 + result.output() + audit, MAX_TOOL_OUTPUT_CHARS)
                 + frameworkErrorHint(result.output());
@@ -813,6 +822,91 @@ public final class WorkerToolbox {
     private static String timeoutMessage(ExecResult result) {
         return "Your command ran for " + result.duration().toSeconds() + " seconds and was "
             + "stopped. " + CONSOLE_WAIT_GUIDANCE;
+    }
+
+    /** How much of the verification log a {@code verify} answer carries: both ends. */
+    static final int VERIFY_EXCERPT_CHARS = 3_000;
+
+    /** The first line of every {@code verify} answer that has a verdict. */
+    static final String VERIFY_PASSED = "verify: PASSED";
+    static final String VERIFY_FAILED = "verify: FAILED";
+
+    /**
+     * {@code verify}: runs exactly what the product's verification of this candidate will run
+     * for compiling - the project's verification contract's compile commands - and, when the
+     * task has acceptance tests, its acceptance commands, from the root of the checkout, on the
+     * same target as {@code exec}, through the same pipeline ({@link CommandPipelineVerifier}).
+     * Answers with the verdict and both ends of the log (section 114).
+     *
+     * <p>Why it exists: a worker chose its own build command, piped it into {@code tail} or
+     * {@code grep}, read {@code exit=0} and reported done on a tree the contract's
+     * {@code test-compile} from the root then failed. It runs the contract; it never changes it,
+     * and the contract is read from the project's own folder, never from the checkout a worker
+     * can write ({@link VerifySpecLoader#loadTrusted}). The existing-test, lint, rule and browser
+     * stages are left to verification: they are about the whole tree and cost the most.
+     *
+     * <p>Every call runs the same thing, so a later call replaces the earlier one's answer in the
+     * conversation whatever it was given (section 98's cut, {@code whateverTheArguments}).
+     *
+     * @param scope ignored; the tool runs what verification runs. Present because a tool with no
+     *              parameter is not offered by every model server's chat template.
+     */
+    @com.swarmcoder.runtime.AgentRuntime.RunAgain(whateverTheArguments = true)
+    public String verify(@com.swarmcoder.runtime.AgentRuntime.MayBeOmitted String scope) {
+        // A build, so let through the read pause as a build command is.
+        if (commandTarget == localTarget
+                && com.swarmcoder.domain.HostExecution.allowedBy().isEmpty()) {
+            return "error: " + com.swarmcoder.domain.HostExecution.refusal("a worker's command");
+        }
+        java.util.Optional<VerifySpec> contract = projectRoot == null ? java.util.Optional.empty()
+            : VerifySpecLoader.loadTrusted(projectRoot, projectRoot);
+        if (contract.isEmpty() || contract.get().compile() == null
+                || contract.get().compile().isEmpty()) {
+            return "verify: this project has no verification contract with a compile command, "
+                + "so there is nothing to run here. Build with exec.";
+        }
+        VerifySpec full = contract.get();
+        boolean tests = !task.authoredTestPaths().isEmpty()
+            && full.acceptance() != null && !full.acceptance().isEmpty();
+        VerifySpec checked = new VerifySpec(full.toolchain(), full.compile(),
+            tests ? full.acceptance() : List.of(), List.of(), List.of(), null,
+            full.testReports(), Math.min(full.effectiveTimeoutSeconds(), EXEC_TIMEOUT_SECONDS),
+            null);
+        com.swarmcoder.domain.VerificationReport report;
+        try {
+            report = new CommandPipelineVerifier().verify(commandTarget, task, checked,
+                List.of(), new java.util.LinkedHashSet<>(changedPaths()));
+        } catch (RuntimeException e) {
+            return "error: verification could not be run: " + e.getMessage();
+        }
+        String audit = auditAndRevertStrayWrites();
+        Verdicts.Verdict verdict = Verdicts.assess(report, List.of());
+        StringBuilder answer = new StringBuilder(verdict.survived() ? VERIFY_PASSED
+            : VERIFY_FAILED);
+        answer.append(" - ran from the root of your checkout, as verification will: ")
+            .append(String.join(" ; ", full.compile()));
+        if (tests) {
+            answer.append(" ; ").append(String.join(" ; ", full.acceptance()));
+        } else {
+            answer.append(" (this task has no acceptance tests of its own, so only the compile)");
+        }
+        answer.append('\n');
+        if (!verdict.survived() && verdict.reason() != null) {
+            answer.append("Why: ").append(verdict.reason().strip()).append('\n');
+        }
+        if (tests && report.acceptance() != null) {
+            answer.append("Acceptance: ").append(report.acceptance().passed()).append(" passed, ")
+                .append(report.acceptance().failed()).append(" failed, ")
+                .append(report.acceptance().errored()).append(" errored\n");
+        }
+        String tail = report.logTail() == null ? "" : report.logTail().strip();
+        if (!tail.isEmpty()) {
+            answer.append("--- log ---\n")
+                .append(ReadSlice.headAndTail(tail, VERIFY_EXCERPT_CHARS)).append('\n');
+        }
+        answer.append(audit);
+        String text = answer.toString().stripTrailing();
+        return text + countInvestigation(text);
     }
 
     /**
@@ -2233,6 +2327,7 @@ public final class WorkerToolbox {
                 String.class);
             Method removeMember = WorkerToolbox.class.getMethod("removeMember", String.class);
             Method exec = WorkerToolbox.class.getMethod("exec", String.class);
+            Method verify = WorkerToolbox.class.getMethod("verify", String.class);
             Method read = WorkerToolbox.class.getMethod("read", String.class);
             Method applyDiff = WorkerToolbox.class.getMethod("applyDiff", String.class);
             Method writeFile = WorkerToolbox.class.getMethod("writeFile", String.class, String.class);
@@ -2342,7 +2437,8 @@ public final class WorkerToolbox {
                     this, removeMember),
                 new ToolBinding("exec",
                     "Run a shell command in the repository working directory - to build and to "
-                    + "run tests. Returns exit code and output.",
+                    + "run tests. Returns exit code and output. A pipeline fails when any of "
+                    + "its stages fails.",
                     this, exec),
                 new ToolBinding("read",
                     "LAST RESORT for learning the project: body_of returns one member, shape_of "
@@ -2431,6 +2527,22 @@ public final class WorkerToolbox {
                     + "file: the sentence, the lookup it came from, who found it, and whether "
                     + "its source has changed since. An empty string lists every title.",
                     this, WorkerToolbox.class.getMethod("knownAbout", String.class)));
+            }
+            // Section 114: the commands verification will run, not the worker's own. Offered
+            // when the project has a contract, right after exec; the same for every candidate.
+            if (projectRoot != null
+                    && VerifySpecLoader.loadTrusted(projectRoot, projectRoot).isPresent()) {
+                int afterExec = 0;
+                while (afterExec < tools.size() && !tools.get(afterExec).name().equals("exec")) {
+                    afterExec++;
+                }
+                tools.add(Math.min(afterExec + 1, tools.size()), new ToolBinding("verify",
+                    "Run EXACTLY what this candidate's verification will run: the project's "
+                    + "compile commands and, when your task has acceptance tests, its acceptance "
+                    + "commands, from the root of your checkout. Answers PASSED or FAILED with "
+                    + "the reason and the ends of the log. Call it before report_done; scope "
+                    + "may be empty.",
+                    this, verify));
             }
             return List.copyOf(tools);
         } catch (NoSuchMethodException e) {
