@@ -229,6 +229,15 @@ public final class WorkerLookups implements ApiLookup {
         }
     }
 
+    @Override
+    public String othersNamed(String what) {
+        try {
+            return TreeQueries.forAWorkerOf(librarian.curator(), projectPath).othersNamed(what);
+        } catch (RuntimeException unknown) {                               // noqa
+            return "";
+        }
+    }
+
     private DocumentQueries documents() {
         return DocumentQueries.forAWorkerOf(librarian.curator(), projectPath);
     }

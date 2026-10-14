@@ -19,6 +19,7 @@ package com.swarmcoder.workflow;
 
 import com.swarmcoder.domain.DesignFinding;
 import com.swarmcoder.knowledge.ExpertTools;
+import com.swarmcoder.knowledge.LookupParts;
 import com.swarmcoder.knowledge.LookupAgent;
 import com.swarmcoder.runtime.AgentRuntime.ToolBinding;
 import org.slf4j.Logger;
@@ -245,15 +246,39 @@ public final class DraftTools {
                 return "error: say the fact in one sentence, as note.";
             }
             Optional<Map.Entry<String, String>> found = session.resultOf(lookup);
-            if (found.isEmpty()) {
+            String wanted = lines == null ? "" : lines.strip();
+            Matcher range = LINE_RANGE.matcher(wanted);
+            if (!wanted.isEmpty() && !wanted.equalsIgnoreCase("none") && !range.matches()) {
+                return "error: give lines as first-last (for example 3-14), counted "
+                    + "from the first line of that lookup's result; empty for all of a "
+                    + "short result; none for the sentence alone.";
+            }
+            // The file and the file's own line numbers, when a lookup of this session returned
+            // those lines (section 105): the lines meant are the same, however they were named.
+            LookupParts.Lines ofFile = null;
+            if (range.matches()) {
+                int from = Integer.parseInt(range.group(1));
+                int to = Integer.parseInt(range.group(2));
+                if (found.isEmpty()) {
+                    ofFile = session.linesOfFile(lookup, from, to).orElse(null);
+                } else if (from > found.get().getValue().strip().split("\\R", -1).length) {
+                    ofFile = LookupParts.linesOf(found.get().getValue(), "", from, to,
+                        found.get().getKey()).orElse(null);
+                }
+            }
+            if (found.isEmpty() && ofFile == null) {
                 List<String> made = session.callsThatFound(8);
                 return "error: no lookup of this session matches '" + (lookup == null ? ""
                     : lookup.strip()) + "'. Give lookup as the tool and its argument, exactly as "
-                    + "you called it" + (made.isEmpty() ? "; you have made no lookup that found "
+                    + "you called it - or a file with its own line numbers as lines, when a "
+                    + "lookup you made returned those lines"
+                    + (made.isEmpty() ? "; you have made no lookup that found "
                     + "anything yet." : ". Your latest: " + String.join(" | ", made));
             }
-            String wanted = lines == null ? "" : lines.strip();
-            String[] all = found.get().getValue().strip().split("\\R", -1);
+            String madeAs = ofFile != null ? ofFile.call() : found.get().getKey();
+            String result = ofFile != null ? String.join("\n", ofFile.text())
+                : found.get().getValue().strip();
+            String[] all = result.split("\\R", -1);
             String snippet = null;
             String took;
             if (wanted.equalsIgnoreCase("none")) {
@@ -261,35 +286,27 @@ public final class DraftTools {
             } else {
                 int first = 1;
                 int last = all.length;
-                if (!wanted.isEmpty()) {
-                    Matcher range = LINE_RANGE.matcher(wanted);
-                    if (!range.matches()) {
-                        return "error: give lines as first-last (for example 3-14), counted "
-                            + "from the first line of that lookup's result; empty for all of a "
-                            + "short result; none for the sentence alone.";
-                    }
+                if (range.matches() && ofFile == null) {
                     first = Math.max(1, Integer.parseInt(range.group(1)));
                     last = Math.min(all.length, Integer.parseInt(range.group(2)));
                     if (first > last) {
                         return "error: that lookup's result has " + all.length + " line(s); "
-                            + wanted + " is outside it.";
+                            + wanted + " is outside it, and it holds no lines " + wanted
+                            + " of a file either.";
                     }
                 }
-                // More lines than a finding carries: sent back, never cut to its first lines.
+                // More lines than a finding carries: never cut to its first lines.
                 // Live run 100: five of thirteen findings named a whole file from the line
                 // after its licence header; each was kept as its first twenty lines - the
                 // package line, the imports and a comment - and the workers given them read
                 // the same five files again. The head of a range is not what the architect
                 // meant, and only it knows which lines are.
+                // And never dropped (section 105): refused, a 204-line constructor reached no
+                // worker, and each of them read the 19,435-character file it is in. It is
+                // handed on as the lookup that returns exactly that part, with its size and
+                // without its lines, and the role is told what named parts it is made of.
                 if (last - first + 1 > FINDING_LINES) {
-                    return "NOT KEPT: " + (wanted.isEmpty() ? "that lookup's result has "
-                        + all.length + " lines" : wanted + " is " + (last - first + 1)
-                        + " lines") + ", and a finding carries at most " + FINDING_LINES
-                        + ". Name the lines that DO the thing the note says (first-last, counted "
-                        + "from the first line of that result) - not a file's package line, its "
-                        + "imports or its comments. Or look the one member or type up on its "
-                        + "own (body_of <Type>#<member>, body_of <Type>) and keep that result "
-                        + "whole. Two places that both matter are two findings.";
+                    return keepNamed(about, note, madeAs, result, all, first, last, ofFile);
                 }
                 boolean cut = false;
                 StringBuilder text = new StringBuilder();
@@ -314,38 +331,120 @@ public final class DraftTools {
                     snippet = String.join("\n", imports) + "\n" + snippet;
                 }
                 took = taken == 0 ? "no line (the first one is longer than a finding carries)"
+                    : ofFile != null ? "lines " + ofFile.range().first() + "-"
+                        + (ofFile.range().first() + taken - 1) + " of "
+                        + ofFile.range().address() + ", as that lookup returned them"
                     : "lines " + first + "-" + (first + taken - 1) + " of " + all.length
                     + (imports.isEmpty() ? "" : ", with the " + imports.size()
                         + " import line(s) of that result they use")
                     + (cut ? " (a finding carries at most " + FINDING_SNIPPET_CHARS
                         + " characters; keep the rest as a second finding if it matters)" : "");
             }
-            String sentence = note.strip().replaceAll("\\s+", " ");
-            if (sentence.length() > FINDING_NOTE_CHARS) {
-                sentence = sentence.substring(0, FINDING_NOTE_CHARS);
-            }
-            String subject = about == null || about.isBlank() ? null : about.strip();
-            String source = found.get().getKey();
-            DesignFinding finding = new DesignFinding(UUID.randomUUID(), subject, source,
-                sentence, snippet == null || snippet.isBlank() ? null : snippet);
-            synchronized (kept) {
-                // The same place kept again for the same subject replaces what was kept.
-                kept.removeIf(k -> java.util.Objects.equals(k.about(), subject)
-                    && java.util.Objects.equals(k.source(), source)
-                    && java.util.Objects.equals(k.snippet(), finding.snippet()));
-                if (kept.size() >= MAX_FINDINGS) {
-                    return "error: this design already carries " + MAX_FINDINGS + " findings, "
-                        + "the ceiling, so this one was not kept.";
-                }
-                kept.add(finding);
-                log.info("keep_for_workers: [{}] from {} ({}), {} characters, {} kept",
-                    subject == null ? "the whole project" : subject, source, took,
-                    finding.size(), kept.size());
-                return "KEPT for " + (subject == null ? "every task (the whole project)"
-                    : "the tasks that build or change " + subject) + ": " + took + " of "
-                    + source + ". " + kept.size() + " kept so far.";
-            }
+            return keep(about, madeAs, sentenceOf(note), snippet, took);
         });
+    }
+
+    private static String sentenceOf(String note) {
+        String sentence = note.strip().replaceAll("\\s+", " ");
+        return sentence.length() > FINDING_NOTE_CHARS
+            ? sentence.substring(0, FINDING_NOTE_CHARS) : sentence;
+    }
+
+    /** Records one finding and says what was kept. */
+    private String keep(String about, String source, String sentence, String snippet,
+                        String took) {
+        String subject = about == null || about.isBlank() ? null : about.strip();
+        DesignFinding finding = new DesignFinding(UUID.randomUUID(), subject, source,
+            sentence, snippet == null || snippet.isBlank() ? null : snippet);
+        synchronized (kept) {
+            // The same place kept again for the same subject replaces what was kept.
+            kept.removeIf(k -> java.util.Objects.equals(k.about(), subject)
+                && java.util.Objects.equals(k.source(), source)
+                && java.util.Objects.equals(k.snippet(), finding.snippet()));
+            if (kept.size() >= MAX_FINDINGS) {
+                return "error: this design already carries " + MAX_FINDINGS + " findings, "
+                    + "the ceiling, so this one was not kept.";
+            }
+            kept.add(finding);
+            log.info("keep_for_workers: [{}] from {} ({}), {} characters, {} kept",
+                subject == null ? "the whole project" : subject, source, took,
+                finding.size(), kept.size());
+            return "KEPT for " + (subject == null ? "every task (the whole project)"
+                : "the tasks that build or change " + subject) + ": " + took + " of "
+                + source + ". " + kept.size() + " kept so far.";
+        }
+    }
+
+    /** How many named parts a reply to a keep that is too long lists. */
+    static final int PARTS_LISTED = 30;
+
+    /**
+     * A part of a lookup longer than a finding carries, handed on as a named lookup (section
+     * 105): the sentence, and the one lookup that returns exactly that part with how long it
+     * is - the lookup as it was made when all of its result was meant, else the member the
+     * lines lie in, else the file's lines. No text is carried: the limit on carried lines
+     * stays. The reply lists the named declarations inside the part with their line counts,
+     * so that the role can keep the one it means as a finding with its lines.
+     */
+    private String keepNamed(String about, String note, String madeAs, String result,
+                             String[] all, int first, int last, LookupParts.Lines ofFile) {
+        boolean whole = ofFile == null && first == 1 && last == all.length;
+        LookupParts.FileRange where = ofFile != null ? ofFile.range()
+            : LookupParts.rangeOf(result, first, last, whole).orElse(null);
+        LookupParts.Described made = where == null ? null : session.describe(where);
+        String named;
+        int namedLines;
+        int namedChars;
+        if (whole) {
+            named = madeAs;
+            namedLines = all.length;
+            namedChars = result.length();
+        } else if (made != null && made.around() != null) {
+            named = made.around();
+            namedLines = made.aroundLines();
+            namedChars = made.aroundChars();
+        } else if (where != null) {
+            named = "read_file " + where.address() + ":" + where.first() + "-" + where.last();
+            namedLines = where.lines();
+            namedChars = 0;
+            for (int i = first; i <= last; i++) {
+                namedChars += all[i - 1].length() + 1;
+            }
+        } else {
+            return "NOT KEPT: lines " + first + "-" + last + " are " + (last - first + 1)
+                + " lines, a finding carries at most " + FINDING_LINES + ", and that result "
+                + "does not say which file's lines they are, so no lookup can be named that "
+                + "returns them. Name the lines that DO the thing the note says (first-last, "
+                + "counted from the first line of that result), or look the one member or type "
+                + "up on its own (body_of <Type>#<member>) and keep that.";
+        }
+        StringBuilder parts = new StringBuilder();
+        List<String> inside = made == null ? List.of() : made.inside();
+        for (String one : inside.subList(0, Math.min(PARTS_LISTED, inside.size()))) {
+            // The part itself is no smaller part of it.
+            if (!(one.startsWith(named + " - "))) {
+                parts.append("  ").append(one).append('\n');
+            }
+        }
+        if (inside.size() > PARTS_LISTED) {
+            parts.append("  ... and ").append(inside.size() - PARTS_LISTED).append(" more\n");
+        }
+        String sized = namedLines + " lines, " + String.format(java.util.Locale.ROOT, "%,d",
+            namedChars) + " characters";
+        String kept = keep(about, named, sentenceOf(note) + " [Not carried: " + sized
+            + ". Ask for exactly the lookup named here; do not read the file.]", null,
+            "the lookup by name, " + sized + ", without its lines");
+        if (kept.startsWith("error:")) {
+            return kept;
+        }
+        return kept + "\nThat part is " + (last - first + 1) + " lines and a finding carries at "
+            + "most " + FINDING_LINES + ", so the workers are given your sentence and the "
+            + "lookup to ask for, not its lines."
+            + (parts.length() == 0 ? " No smaller named part lies inside it: to hand lines on "
+                + "as well, keep the lines that do the thing (first-last, at most "
+                + FINDING_LINES + ") as a finding of their own."
+                : " To hand lines on as well, look up the part that does the thing and keep "
+                + "it as a finding of its own. Inside it:\n" + parts.toString().stripTrailing());
     }
 
     private static final Pattern IMPORT_LINE =
@@ -427,8 +526,12 @@ public final class DraftTools {
                         + "within that lookup's result (for example 3-14; at most "
                         + FINDING_LINES + " lines - the lines that do the thing, not a "
                         + "file's imports), empty for all of a short result, or none "
-                        + "for the sentence alone. note: the fact in one sentence. You never "
-                        + "type the code: the lines are copied from the lookup.",
+                        + "for the sentence alone. A file with the file's own line numbers is "
+                        + "taken too, when a lookup you made returned those lines. A longer "
+                        + "part is handed on as the lookup that returns it, without its lines, "
+                        + "and you are told the named parts inside it. note: the fact in one "
+                        + "sentence. You never type the code: the lines are copied from the "
+                        + "lookup.",
                     this, DraftTools.class.getMethod("keepForWorkers", String.class,
                         String.class, String.class, String.class)));
             }

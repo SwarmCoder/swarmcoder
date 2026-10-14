@@ -65,7 +65,7 @@ final class SemanticFacts {
      * build is ignored rather than half-understood. It is part of the cache key, exactly as
      * {@code INDEX_FORMAT} is for the text index.
      */
-    static final String FORMAT = "lst-relations-v3";
+    static final String FORMAT = "lst-relations-v4";
 
     private static final ObjectMapper JSON = new ObjectMapper();
 

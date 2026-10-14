@@ -10780,3 +10780,132 @@ library type nobody asks for is not. Run with it and unchanged:
   that adds such a class with no annotation named in its task can still be sent back there.
 - The repeated-stop sentence has no test; it is one comparison.
 - Nothing was run against a model. The full test suite was not run; the classes above were.
+
+## 105. A lookup answered about another application's class of the same name, and what a role tried to hand on was refused (call-by-call audit of one local build, 2026-10-14)
+
+**The build.** An empty project built on a reference library that ships eight example
+applications. Every call of every role and worker was read. Five findings, all in the lookup
+tools and in `keep_for_workers`.
+
+**A. A name several types share was answered with the first of them.** `body_of <SimpleName>`
+and the members lookup returned the class of that name from a different example application
+than the one the architect was reading. It then read files instead: 19 file reads, at least
+0.47 million tokens. Two causes, both closed.
+
+- *The lookups took the first.* `SemanticIndex.declarationOf` and `publicShape` return the
+  first type a name resolves to. `TreeQueries` now asks `SemanticIndex.declarationsOf`, which
+  returns every declaration of a simple or full name, and with more than one it answers with
+  the list and picks none: each candidate on a line with what to ask by, its kind, its file
+  and line, and a last line `For example: <tool> <one of them>#<member>`. What to ask by is
+  the full name when that is enough, and the file's address when the same full name is
+  declared in several files.
+- *A type may be named by its file.* `body_of`, the members lookup and `texts_of` take a
+  simple name, a full name, or the address of the type's Java file as the reader's own tools
+  print it (`<root>/<path>` for a role, a repository path or `/reference/<root>/<path>` for a
+  worker). An address that is only the end of several files' addresses is answered with those
+  files.
+- *The graph did not hold the other declarations at all.* A root is parsed as one batch; the
+  compiler keeps the first declaration of a full name and gives the others no type, and
+  `LstReader` recorded only declarations with a type. So a second example's class of the
+  same package and name was declared nowhere as far as the graph knew, and a lookup by its
+  own file said "no such type". A declaration the compiler gave no type is now recorded
+  under the name its source writes (package, enclosing types, name). Its members are not
+  resolved; the members lookup lists them as written and says so. `SemanticFacts.FORMAT` is
+  `lst-relations-v4`, so indexes cached by an older build are rebuilt.
+- *What the tools print is what the tools take.* The outline of a file, the note under a
+  whole-file read and the "its members are listed" answer name the type by its file's
+  address when its simple name is shared (`TreeQueries.lookupNameOf`), and by the simple
+  name otherwise, as before. The members lookup ends with the file's address, root included,
+  where it printed the path without the root.
+- *Lookups that answer about every type of a name at once* (`find_usages`,
+  `find_implementations`, a worker's `usages_of`, answered from the graph) say in one line
+  which types those are and how to ask about one. `files_using` with a shared name used to
+  answer "no file uses all of" them, since no file uses every type of the name; it now lists
+  the full names.
+- *A worker's own checkout still answers first* for a name it holds exactly one file of: that
+  is the code the worker is changing. The answer then ends with one line naming the other
+  types of that name in the reference material (`ApiLookup.othersNamed`).
+- *The shared answer store* (sections 100, 101) is unchanged. A list of candidates is an
+  answer like any other: computed once for roles and workers, addresses written for each
+  reader. A type named by its file is answered for its asker only, since the address is the
+  asker's.
+- *The language server* already answered a simple name of several types with the list of
+  them and "ask again with the full name" (`JdtLanguageServer.resolve`). Not changed.
+
+**B. `keep_for_workers` refused 8 of 20 keeps.** The architect tried to keep a 204-line
+constructor of an example screen and was refused for the 40-line limit, so every worker of
+the client tasks read the 19,435-character file it is in, 15 times.
+
+1. *The file and the file's own line numbers are taken* when a lookup of the session returned
+   those lines, whatever that lookup was called. `LookupParts` reads which lines of which
+   file an answer holds from the two headings the lookups write themselves
+   (`// <address>:<first>-<last>` and ``Lines <first>-<last> of <n> of `<address>`:``). The
+   finding names the lookup that was made.
+2. *A part over the limit is answered with what it is made of:* the named declarations
+   wholly inside it, each as `body_of <Type>#<member> - <n> lines`, read from the file's
+   syntax.
+3. *It is handed on as a named lookup, with its size and no text.* The finding is the
+   sentence plus `[Not carried: 204 lines, 11,571 characters. Ask for exactly the lookup named
+   here; do not read the file.]`, and its source is the one lookup that returns exactly that
+   part: the lookup as it was made when all of its result was meant, else the member the
+   lines lie in, else the file's lines. A part of an answer that says nothing of a file
+   (a search result) is still refused, with the reason.
+
+The limit of 40 lines and 3,200 characters on carried text is unchanged, and nothing was added
+to `DesignFinding`: the size is part of the sentence.
+
+**C. Workers read whole build files: 183,367 characters.** They were writing the build files
+of new modules, and `build_of` answers with what is declared, not with the declarations.
+`build_of <module>#<part>` now returns one part in the file's own syntax
+(`TreeQueries.buildParts`). A part is, tried in this order: an element by its path from the
+root (`parent`, `properties`, `dependencies`, `build/plugins`); an element by its name
+anywhere, the first in the file; every plugin, dependency, parent or extension whose
+`artifactId` it is, with or without the group. Several parts are separated by commas. A part
+the file does not have is answered with the parts it has and its plugins by name. The summary
+ends with one line saying how to ask. Nothing is known about any plugin or library: the names
+come from the file. A worker may name a reference module as `/reference/<root>/<module>`,
+which `build_of` did not take before.
+
+**D. No lookup returned a file's imports.** The architect read lines 1-33 of a file for them.
+`body_of <Type>#import` returns the package line and the import lines with their lines, and
+`#import,<member>` both in one call. `import` is a word of the language, so no member can
+have that name and no tool was added to any role's list.
+
+**E. `keep_finding` (section 100) was called by no role.** No opening mentioned it. The tool
+guide of every lookup session (`LookupAgent.toolGuide`) now has one line for it, under the one
+for `known_about`, when the session has the tool.
+
+**Tests.** `ALookupNamesWhatItMeansTest` (sc-knowledge), on an empty project and a library
+with two example applications that declare one class under the same full name and one under
+two: A for a role and a worker, the outline's hint, the shared store, C and D.
+`AFindingTooLongToCarryIsHandedOnByNameTest` (sc-workflow): B, the three parts.
+`TheArchitectHandsItsFindingsToTheWorkersTest` follows B: a whole long result is handed on by
+name and still never kept as its first lines. Run with them and unchanged:
+`ARoleLearnsTheProjectFromItsObjectGraphTest`,
+`ABuildFileAndAModulesResourcesAreAnsweredWithoutReadingThemTest`,
+`AnAnswerComesAtTheSizeOfTheQuestionTest`, `AProjectEstablishesAnAnswerOnceTest`,
+`ARoleAndAWorkerShareOneComputationTest`, `TheSemanticIndexAnswersStructurallyTest`,
+`CheckoutCodeTest`, `ATypeAContainerFindsIsReachedTest`,
+`EveryBuildFileMeansTheProjectsOwnTest`, `AWorkerChangesOneMemberWithoutTheFileTest`,
+`WorkerToolboxTest`, `WorkerLookupsTest`, `AWorkersOpeningAndItsLookupsAreSharedTest`.
+
+**Not done, not checked.**
+
+- Nothing was run against a model or the audited build. Whether a role asks by the full name
+  or the file after it is shown the list, and whether a worker asks for a named lookup
+  instead of the file, is what the next run's record of lookups shows.
+- A finding names its lookup as the architect made it: the role's tool names and addresses
+  (`read_file`, `<root>/<path>`). A worker's `body_of` takes such an address by its end; its
+  `read` does not.
+- `types_annotated_with` and `call_chain` still answer about every type of a shared name
+  without saying so. The language server keeps one declaration of a full name that two
+  modules of the project declare.
+- A worker's `shape_of` by a file's path is answered from the tree, so for a file the worker
+  changed it is the file as it was when the task started; by name it is the file as it is.
+- A declaration the compiler gave no type has no resolved supertypes beyond the ones its
+  source writes in full or imports, and nothing is recorded as using it.
+- A fact kept by an earlier build under a simple name that several types share can no longer
+  be held against its source by that name; `known_about` then says its source is gone.
+- A build file's part is written from the parsed file, indented anew: comments inside the
+  part are kept, the file's own line breaks are not.
+- The full test suite was not run; the classes above were.

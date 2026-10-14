@@ -353,12 +353,17 @@ public final class LookupAgent {
                     + "has changed since. Read what is known about a thing before you look "
                     + "that thing up; look up only what is not there, or what is marked as "
                     + "changed.\n" : "")
+            + (toolNames.contains("keep_finding")
+                ? "- WHAT YOU ESTABLISH, FOR EVERY SESSION AFTER YOURS. keep_finding <what it "
+                    + "is about, the lookup it comes from, one or two sentences> keeps one "
+                    + "thing you concluded from a lookup, so that no later role or story has "
+                    + "to work it out again.\n" : "")
             + "- THE PROJECT'S OBJECT GRAPH FIRST. What the project is made of - its types, "
             + "their members, what extends or uses what, what each module's build declares - is "
             + "held as a graph the compiler resolved, and these tools answer from it in a few "
             + "hundred characters: public_shape (a type's members), body_of (ONE method or type, "
-            + "as Type#method), types_in (the types of a package, module or folder), find_usages, find_implementations, files_using, "
-            + "types_annotated_with, call_chain, build_of (a module's dependencies, plugin configuration, test-scope dependencies), resources_of (a module's beans.xml, persistence and property files), "
+            + "as Type#method; Type#import for its file's imports), types_in (the types of a package, module or folder), find_usages, find_implementations, files_using, "
+            + "types_annotated_with, call_chain, build_of (a module's dependencies, plugin configuration, test-scope dependencies; <module>#<part> for one part as the file writes it), resources_of (a module's beans.xml, persistence and property files), "
             + "dependency_declaring. The project map at the top of your task says where "
             + "everything is. Start from these.\n"
             + "- DOCUMENTS BY SECTION. The project's written documents - requirements, "

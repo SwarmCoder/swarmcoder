@@ -317,6 +317,75 @@ public final class ExpertTools {
         return Optional.empty();
     }
 
+    /**
+     * The latest lookup of this session whose answer holds the lines {@code first} to
+     * {@code last} of a file, one for one (section 105): a role that names a file and the
+     * file's own line numbers means lines some lookup of its session returned, whatever that
+     * lookup was called.
+     *
+     * @param named a tool, a space and a file - or the file alone - with or without a part of
+     *              it ({@code :10-40}, {@code #member}); lookups of that tool are tried first
+     */
+    public Optional<LookupParts.Lines> linesOfFile(String named, int first, int last) {
+        String asked = named == null ? "" : named.strip();
+        int space = asked.indexOf(' ');
+        String tool = space < 0 ? "" : asked.substring(0, space);
+        String file = LookupParts.fileOf(space < 0 ? asked : asked.substring(space + 1));
+        if (file.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Found> all = lookups();
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = all.size() - 1; i >= 0; i--) {
+                Found found = all.get(i);
+                if (!found.foundSomething() || found.argument() == null
+                        || ownTools.contains(found.tool())
+                        || (pass == 0) != found.tool().equals(tool)) {
+                    continue;
+                }
+                Optional<LookupParts.Lines> lines = LookupParts.linesOf(found.result(), file,
+                    first, last, found.tool() + " " + found.argument().strip());
+                if (lines.isPresent()) {
+                    return lines;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * What lines of a Java file of the roots are made of: the named declarations inside them
+     * and the one member around them, each as the lookup that returns it. Read from the file's
+     * syntax; nothing when the file is not Java or cannot be read.
+     */
+    public LookupParts.Described describe(LookupParts.FileRange range) {
+        LookupParts.Described nothing = new LookupParts.Described(List.of(), null, 0, 0);
+        try {
+            String address = range == null ? null : resolveInsideRoots(range.address());
+            if (address == null || !address.endsWith(".java") || curator.isFolder(address)) {
+                return nothing;
+            }
+            String source = curator.readFile(address, WHOLE_FILE_CHARS);
+            if (source.startsWith("error:")) {
+                return nothing;
+            }
+            java.util.function.UnaryOperator<String> name =
+                simple -> TreeQueries.lookupNameOf(curator, address, simple);
+            List<String> inside = new ArrayList<>();
+            for (LookupParts.Named one
+                    : LookupParts.inside(source, range.first(), range.last(), name)) {
+                inside.add("body_of " + one.ask() + " - " + one.lines() + " lines");
+            }
+            LookupParts.Named around =
+                LookupParts.around(source, range.first(), range.last(), name).orElse(null);
+            return around == null ? new LookupParts.Described(inside, null, 0, 0)
+                : new LookupParts.Described(inside, "body_of " + around.ask(), around.lines(),
+                    around.chars());
+        } catch (RuntimeException unreadable) {                            // noqa
+            return nothing;
+        }
+    }
+
     /** The names of the role's own tools that ran in this session: they are not lookups. */
     private final Set<String> ownTools = ConcurrentHashMap.newKeySet();
 
@@ -361,6 +430,7 @@ public final class ExpertTools {
             return fromIndex(index -> {
                 String known = knownName(index, type);
                 return renamed(type, known, index)
+                    + TreeQueries.sharedNameNote(index, known, "find_implementations")
                     + refs("What implements or extends `" + known + "`",
                         index.implementationsOf(known));
             });
@@ -377,6 +447,7 @@ public final class ExpertTools {
             return fromIndex(index -> {
                 String known = knownName(index, typeOrMethod);
                 return renamed(typeOrMethod, known, index)
+                    + TreeQueries.sharedNameNote(index, known, "find_usages")
                     + refs("Where `" + known + "` is used, and what it is used on",
                         index.usagesOf(known));
             });
@@ -428,6 +499,16 @@ public final class ExpertTools {
                 return "Name at least one type, e.g. files_using(types=\"com.example.Ledger, "
                     + "com.example.Entry\").";
             }
+            // A file that uses "all of" a name's types uses every type of that name: for a
+            // name several types share that is no file, which reads as "nothing uses it".
+            for (String name : wanted) {
+                List<String> full = index.resolve(name);
+                if (full.size() > 1) {
+                    return "`" + name + "` is the name of " + full.size() + " types, and none "
+                        + "was picked: " + String.join(", ", full) + ". Give the full name of "
+                        + "the one you mean in its place.";
+                }
+            }
             List<String> files = index.filesUsingAll(wanted);
             if (files.isEmpty()) {
                 return "No file in this project's material uses all of " + wanted + " together.";
@@ -454,10 +535,13 @@ public final class ExpertTools {
     public String publicShape(String type) {
         return withIndex("public_shape", type, index -> {
             String known = knownName(index, type);
-            String shape = index.publicShape(known);
-            if (!shape.isEmpty()) {
-                return renamed(type, known, index) + "`" + known
-                    + "`, as the compiler resolves it:\n```java\n" + shape + "\n```\n";
+            // One type, or - for a name several types share - the list of them: never the
+            // first of them (section 105).
+            TreeQueries.Shape shape = new TreeQueries(curator).shape(known, "public_shape");
+            if (shape != null) {
+                return renamed(type, known, index) + (shape.several() ? shape.text()
+                    : "`" + known + "`, as the compiler resolves it:\n```java\n" + shape.text()
+                        + "\n```\n");
             }
             // A type the tree cannot list lives in a library jar: the language server reads jars.
             String fromServer = language().membersOrNull(type == null ? "" : type.strip());
@@ -674,7 +758,8 @@ public final class ExpertTools {
                 // The file is the answer. The note says, from the file itself, which query
                 // returns the part of it (run 82).
                 return whole + new DocumentQueries(curator).wholeFileNote(address, whole)
-                    + TreeQueries.wholeFileNote(address, whole, "public_shape");
+                    + TreeQueries.wholeFileNote(address, whole, "public_shape",
+                        simple -> TreeQueries.lookupNameOf(curator, address, simple));
             }
             // Cut on a line, and say how to get the rest - a cut with no way on is what makes a
             // session read the same file again hoping for more.
@@ -1076,7 +1161,10 @@ public final class ExpertTools {
                 + "properties, dependencies (test-scope ones with their resolved versions) and "
                 + "plugins with their configuration, executions and dependencies - without the "
                 + "file's text. Give the module or folder; an empty string lists every build "
-                + "file. Use this instead of reading a build file.",
+                + "file. To WRITE a build file, ask for one part as the file writes it: "
+                + "<module>#parent, #properties, #dependencies, #build, or #<artifactId> for one "
+                + "plugin or dependency; several as #a,b. Use this instead of reading a build "
+                + "file.",
             this, method("buildOf", String.class)));
         all.add(new ToolBinding("resources_of",
             "A module's resource files (beans.xml, persistence descriptors, property files, "
@@ -1090,8 +1178,11 @@ public final class ExpertTools {
                 + "and lines: Type#method for a method (every overload, or a list of them when "
                 + "they are long), Type#Type for a constructor, Type#field for a field with its "
                 + "initialiser, Type#first,second for several members at once, Type alone for "
-                + "the whole type as code - no comments, no imports. This is how you read code: "
-                + "ask for the members you need, not for the file they are in.",
+                + "the whole type as code - no comments, no imports - and Type#import for its "
+                + "file's package and imports. Type is a simple name, a full name, or the "
+                + "address of its file; a name several types share is answered with those types "
+                + "and how to ask for one. This is how you read code: ask for the members you "
+                + "need, not for the file they are in.",
             this, method("bodyOf", String.class)));
         // Every role, not only the test author of a screen (live run 90, section 66): the
         // architect read three classes of text constants whole, 9,110 characters, to learn four
@@ -1226,14 +1317,20 @@ public final class ExpertTools {
         StringBuilder sb = new StringBuilder("The language server lists no type for `" + asked
             + "`, but the project's tree knows it:\n");
         for (String one : full) {
-            SemanticIndex.Ref declared = index.declarationOf(one);
-            sb.append("  ").append(one).append(declared == null
-                ? " - from a library jar, known by the code that uses it"
-                : " - declared at " + declared.file().replace('\\', '/') + ":" + declared.line())
-                .append('\n');
+            List<SemanticIndex.Declaration> declared = index.declarationsOf(one);
+            if (declared.isEmpty()) {
+                sb.append("  ").append(one)
+                    .append(" - from a library jar, known by the code that uses it\n");
+            }
+            // Every file that declares it: the same full name can be in several applications.
+            for (SemanticIndex.Declaration at : declared) {
+                sb.append("  ").append(one).append(" - declared at ").append(at.canonical())
+                    .append(':').append(at.line()).append('\n');
+            }
         }
         return sb.append("public_shape <that name> lists its members; find_usages <that name> "
-            + "shows the code that calls it.\n").toString();
+            + "shows the code that calls it. Where one name is declared in several files, give "
+            + "the file's address in place of the name.\n").toString();
     }
 
     /**
@@ -1257,7 +1354,8 @@ public final class ExpertTools {
                 if (!text.startsWith("error:")) {
                     int lines = text.split("\n", -1).length;
                     String outline = WholeFileAnswer.java(address, text, "public_shape", lines,
-                        "the whole file: read_file " + address + ":1-" + lines);
+                        "the whole file: read_file " + address + ":1-" + lines,
+                        simple -> TreeQueries.lookupNameOf(curator, address, simple));
                     if (outline != null) {
                         answeredAs.set(com.swarmcoder.inference.LookupMeter.Kind.TREE);
                         return outline;

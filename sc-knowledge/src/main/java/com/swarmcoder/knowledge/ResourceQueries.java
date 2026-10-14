@@ -275,6 +275,38 @@ final class ResourceQueries {
             : address + "#" + part + "\n" + sb;
     }
 
+    /** One element as XML text; a line saying so when it cannot be written. */
+    static String textOf(Element element) {
+        try {
+            // A copy without the file's own line breaks, so that it is indented once.
+            Element copy = (Element) element.cloneNode(true);
+            java.util.ArrayDeque<org.w3c.dom.Node> open = new java.util.ArrayDeque<>();
+            open.add(copy);
+            while (!open.isEmpty()) {
+                org.w3c.dom.Node at = open.poll();
+                for (org.w3c.dom.Node child = at.getFirstChild(); child != null;) {
+                    org.w3c.dom.Node next = child.getNextSibling();
+                    if (child.getNodeType() == org.w3c.dom.Node.TEXT_NODE
+                            && child.getTextContent().isBlank()) {
+                        at.removeChild(child);
+                    } else {
+                        open.add(child);
+                    }
+                    child = next;
+                }
+            }
+            Transformer transformer = TransformerFactory.newInstance().newTransformer();
+            transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
+            transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+            transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+            StringWriter out = new StringWriter();
+            transformer.transform(new DOMSource(copy), new StreamResult(out));
+            return out.toString().strip().replace("\r\n", "\n") + "\n";
+        } catch (Exception unwritable) {                                   // noqa
+            return "(could not be written as XML)\n";
+        }
+    }
+
     private static String serialize(Element element) throws Exception {
         Transformer transformer = TransformerFactory.newInstance().newTransformer();
         transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");

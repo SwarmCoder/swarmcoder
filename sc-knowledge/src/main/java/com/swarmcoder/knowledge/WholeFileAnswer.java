@@ -73,7 +73,8 @@ final class WholeFileAnswer {
         String whole = "the whole file: read_file " + address + ":1-" + lines;
         String outline = null;
         if (name.endsWith(".java")) {
-            outline = java(address, text, shapeTool, lines, whole);
+            outline = java(address, text, shapeTool, lines, whole,
+                simple -> TreeQueries.lookupNameOf(curator, address, simple));
         } else if (DocumentOutline.isDocument(address)) {
             outline = document(curator, address, text, lastQuestion, whole);
         } else if (name.equals("pom.xml") && curator != null) {
@@ -97,6 +98,16 @@ final class WholeFileAnswer {
 
     /** A Java file as its types and members, one line each with its lines; null if unreadable. */
     static String java(String address, String text, String shapeTool, int lines, String whole) {
+        return java(address, text, shapeTool, lines, whole, null);
+    }
+
+    /**
+     * @param nameFor gives, for the simple name of the file's first type, what the queries
+     *                take for it - the file's address when other types share the name (section
+     *                105); null is the simple name
+     */
+    static String java(String address, String text, String shapeTool, int lines, String whole,
+                       java.util.function.UnaryOperator<String> nameFor) {
         JavaOutline outline;
         try {
             outline = JavaOutline.of(text);
@@ -113,11 +124,12 @@ final class WholeFileAnswer {
         for (JavaOutline.Member type : outline.types) {
             member(sb, type, 0);
         }
-        String first = outline.types.get(0).name();
+        String first = nameFor == null ? outline.types.get(0).name()
+            : nameFor.apply(outline.types.get(0).name());
         return sb.append("[Outline, not the file: the bodies, comments and imports are left "
             + "out. ONE member: body_of ").append(first).append("#<member>; several: body_of ")
-            .append(first).append("#<first>,<second>; the type without comments and imports: "
-                + "body_of ").append(first).append("; members as the compiler resolves them: ")
+            .append(first).append("#<first>,<second>; its imports: body_of ").append(first)
+            .append("#import; the type without comments and imports: body_of ").append(first).append("; members as the compiler resolves them: ")
             .append(shapeTool).append(' ').append(first).append("; lines: read_file ")
             .append(address).append(":FROM-TO; ").append(whole).append(".]").toString();
     }

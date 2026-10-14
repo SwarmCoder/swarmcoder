@@ -316,12 +316,12 @@ final class LstReader {
             public J.ClassDeclaration visitClassDeclaration(J.ClassDeclaration declaration,
                                                             Integer p) {
                 J.ClassDeclaration result = super.visitClassDeclaration(declaration, p);
-                JavaType.FullyQualified type = TypeUtils.asFullyQualified(declaration.getType());
-                if (type == null) {
+                String name = declaredName(unit, getCursor(), declaration);
+                if (name == null) {
                     return result;
                 }
                 return SearchResult.found(result, mark(ids, pending,
-                    new Pending("type", type.getFullyQualifiedName(),
+                    new Pending("type", name,
                         kindOf(declaration), String.valueOf(isAbstract(declaration)), "")));
             }
 
@@ -409,9 +409,9 @@ final class LstReader {
             @Override
             public J.ClassDeclaration visitClassDeclaration(J.ClassDeclaration declaration,
                                                             Integer p) {
-                JavaType.FullyQualified type = TypeUtils.asFullyQualified(declaration.getType());
-                if (type != null) {
-                    declarations.put(type.getFullyQualifiedName(), declaration);
+                String name = declaredName(unit, getCursor(), declaration);
+                if (name != null) {
+                    declarations.put(name, declaration);
                 }
                 return super.visitClassDeclaration(declaration, p);
             }
@@ -432,7 +432,7 @@ final class LstReader {
                 case "type" -> {
                     J.ClassDeclaration declaration = declarations.get(what.a());
                     JavaType.FullyQualified type = declaration == null ? null
-                        : TypeUtils.asFullyQualified(declaration.getType());
+                        : attributed(declaration);
                     List<String> annotations = new ArrayList<>();
                     if (declaration != null) {
                         for (J.Annotation annotation : declaration.getLeadingAnnotations()) {
@@ -599,6 +599,50 @@ final class LstReader {
         all.remove("Unknown");
         return all.size() == resolved.size() && !resolved.contains("Unknown")
             ? resolved : List.copyOf(all);
+    }
+
+    /** The type the compiler gave a declaration; null when it gave none it can be named by. */
+    private static JavaType.FullyQualified attributed(J.ClassDeclaration declaration) {
+        JavaType.FullyQualified type = TypeUtils.asFullyQualified(declaration.getType());
+        return type == null || type instanceof JavaType.Unknown
+            || "Unknown".equals(type.getFullyQualifiedName()) ? null : type;
+    }
+
+    /**
+     * The full name a declaration is recorded under: the compiler's, or - when the compiler
+     * gave it no type - the one the source writes, from the file's package and the types the
+     * declaration is nested in (section 105).
+     *
+     * <p>A root is parsed as one batch. A reference library with several example applications
+     * declares the same full name once in each; the compiler keeps the first and gives the
+     * others no type, and those files then declared nothing as far as the graph knew. A lookup
+     * for the class of one application was answered with the class of another, and a lookup
+     * by that file's own address with "no such type". Such a declaration has no resolved
+     * members; it is still declared where it is. Null for a class inside a method, which has
+     * no name another file could use.
+     */
+    private static String declaredName(J.CompilationUnit unit, org.openrewrite.Cursor cursor,
+                                       J.ClassDeclaration declaration) {
+        JavaType.FullyQualified type = attributed(declaration);
+        if (type != null) {
+            return type.getFullyQualifiedName();
+        }
+        List<String> names = new ArrayList<>();
+        names.add(declaration.getSimpleName());
+        for (org.openrewrite.Cursor up = cursor.getParent(); up != null; up = up.getParent()) {
+            Object at = up.getValue();
+            if (at instanceof J.MethodDeclaration || at instanceof J.Lambda
+                    || at instanceof J.NewClass) {
+                return null;
+            }
+            if (at instanceof J.ClassDeclaration outer) {
+                names.add(0, outer.getSimpleName());
+            }
+        }
+        String packageName = unit.getPackageDeclaration() == null ? ""
+            : unit.getPackageDeclaration().getPackageName();
+        return (packageName == null || packageName.isBlank() ? "" : packageName + ".")
+            + String.join("$", names);
     }
 
     /** A type name as the source writes it, dotted; "" for anything that is not a plain name. */

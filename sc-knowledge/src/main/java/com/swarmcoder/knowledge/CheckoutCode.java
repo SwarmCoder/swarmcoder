@@ -158,7 +158,7 @@ public final class CheckoutCode {
         int hash = asked.indexOf('#');
         String typeName = (hash < 0 ? asked : asked.substring(0, hash)).strip();
         String member = hash < 0 ? null : asked.substring(hash + 1).strip();
-        if (typeName.isEmpty() || isPath(typeName)) {
+        if (typeName.isEmpty()) {
             return null;
         }
         List<Path> files = filesOf(checkout, typeName);
@@ -167,8 +167,18 @@ public final class CheckoutCode {
         }
         try {
             String address = relative(checkout, files.get(0));
-            String answer = TreeQueries.bodyIn(address, Files.readString(files.get(0)), typeName,
-                member);
+            // A type named by its file (section 105) is the type of the file's own name, and
+            // what the answer says to ask by stays the file.
+            String named = typeName;
+            if (isPath(typeName)) {
+                String file = files.get(0).getFileName().toString();
+                if (!file.endsWith(".java")) {
+                    return null;
+                }
+                named = file.substring(0, file.length() - ".java".length());
+            }
+            String answer = TreeQueries.bodyIn(address, Files.readString(files.get(0)), named,
+                member, isPath(typeName) ? address : null);
             return answer.startsWith("`" + address + "` ") ? null : answer;
         } catch (IOException | RuntimeException unreadable) {                // noqa
             return null;

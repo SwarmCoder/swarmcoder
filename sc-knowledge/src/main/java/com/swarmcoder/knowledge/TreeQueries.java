@@ -134,10 +134,14 @@ public final class TreeQueries {
 
     // -------------------------------------------------------------------------------------------
 
-    /** True when the tree holds a type of this name and can list its members. */
+    /** True when the tree holds a type of this name, or several, and can answer about it. */
     public boolean holds(String type) {
         SemanticIndex index = index();
-        return index != null && !index.publicShape(type == null ? "" : type.strip()).isEmpty();
+        if (index == null || type == null || type.isBlank()) {
+            return false;
+        }
+        Named named = named(index, "shape_of", type.strip(), "");
+        return named.type() != null || named.instead() != null;
     }
 
     /** A type's members as the compiler resolved them, and where it is declared. */
@@ -146,9 +150,244 @@ public final class TreeQueries {
         if (index == null) {
             return NO_TREE;
         }
-        String shape = index.publicShape(type == null ? "" : type.strip());
-        return shape.isEmpty() ? "No type `" + type + "` in this project's material."
-            : "```java\n" + shape + "\n```\n";
+        Shape shape = shape(type, "shape_of");
+        return shape == null ? "No type `" + type + "` in this project's material."
+            : shape.several() ? shape.text() : "```java\n" + shape.text() + "\n```\n";
+    }
+
+    /**
+     * What {@link #shape} found.
+     *
+     * @param text    the type's members and where it is declared; or, for a name several types
+     *                share, the list of them
+     * @param several true when {@code text} is that list
+     */
+    public record Shape(String text, boolean several) {}
+
+    /**
+     * One type's members as the compiler resolved them, with the address of its file as the
+     * asker's own read tool takes it; the candidates when several types share the name; null
+     * when the tree declares no such type.
+     *
+     * @param tool what the asker's members query is called, for the line saying how to ask
+     */
+    public Shape shape(String type, String tool) {
+        SemanticIndex index = index();
+        String asked = type == null ? "" : type.strip();
+        if (index == null || asked.isEmpty()) {
+            return null;
+        }
+        Named named = named(index, tool, asked, "");
+        if (named.instead() != null) {
+            return new Shape(named.instead(), true);
+        }
+        String text = named.type() == null ? "" : index.publicShape(named.type());
+        if (text.isEmpty()) {
+            return null;
+        }
+        // The graph writes the file without its root; a reader's lookups take the address.
+        int declaredIn = text.lastIndexOf("\n  declared in ");
+        return new Shape((declaredIn < 0 ? text : text.substring(0, declaredIn))
+            + (index.resolvedMembers(named.type()) > 0 ? "" : asWritten(named.type()))
+            + "\n  declared in " + address(named.type().rootLabel(), named.type().file()) + ":"
+            + named.type().line(), false);
+    }
+
+    /**
+     * The members a declaration writes, for one the compiler resolved none for: a second
+     * declaration of a full name in one root is given no type by the compiler, and its members
+     * are then in its source only. "" when the source declares no member to show.
+     */
+    private String asWritten(SemanticIndex.Declaration declared) {
+        try {
+            String source = curator.readFile(declared.canonical(), 2_000_000);
+            if (source.startsWith("error:")) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (JavaOutline.Member type : JavaOutline.of(source).types) {
+                if (!type.name().equals(declared.simpleName())) {
+                    continue;
+                }
+                for (JavaOutline.Member member : type.children()) {
+                    if (member.exposed() && member.kind() != JavaOutline.Kind.TYPE) {
+                        sb.append("\n  ").append(JavaOutline.stripAnnotations(member.header()));
+                    }
+                }
+            }
+            return sb.length() == 0 ? "" : "\n  (as written - the compiler resolved no members "
+                + "for this declaration)" + sb;
+        } catch (Exception unreadable) {                                   // noqa
+            return "";
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // What a name given to a lookup stands for (section 105).
+
+    /**
+     * One type, or the answer to give instead of one.
+     *
+     * @param type    the one declaration the name stands for; null when there is none or several
+     * @param instead the list of the types that share the name; null when there is one or none
+     * @param askAs   the name a later lookup takes for this type without being asked which:
+     *                its simple name while no other type has it, else what was asked
+     */
+    private record Named(SemanticIndex.Declaration type, String instead, String askAs) {}
+
+    /** True for a type named by its file: {@code <address>.java}, as the lookups print it. */
+    static boolean isFile(String name) {
+        return name != null && (name.indexOf('/') >= 0 || name.indexOf((char) 92) >= 0
+            || name.endsWith(".java"));
+    }
+
+    /** How many candidates one answer lists. */
+    static final int CANDIDATES_LISTED = 20;
+
+    /**
+     * The type {@code name} stands for. A name several types share is never resolved to one of
+     * them: a reference library with eight example applications declares the same class name
+     * in each, and a live build's architect was answered with the class of another application
+     * than the one it was reading, then read files whole (19 reads, 0.47M tokens).
+     *
+     * @param name a simple name, a full name, or a Java file's address
+     * @param rest what follows the type in the question, {@code #member} or "", for the line
+     *             that shows how to ask
+     */
+    private Named named(SemanticIndex index, String tool, String name, String rest) {
+        String asked = name.strip();
+        boolean byFile = isFile(asked);
+        List<SemanticIndex.Declaration> found;
+        if (byFile) {
+            if (forEveryone) {
+                // A file is addressed as its reader writes it: answered for that reader.
+                throw Addresses.notForEveryone("a type named by its file");
+            }
+            found = new ArrayList<>();
+            Set<String> files = new LinkedHashSet<>();
+            for (SemanticIndex.Declaration one : inFile(index, asked.replace((char) 92, '/'))) {
+                if (files.add(one.canonical())) {
+                    found.add(one); // the type of the file's own name is first
+                }
+            }
+        } else {
+            found = index.declarationsOf(asked);
+        }
+        if (found.isEmpty()) {
+            return new Named(null, null, asked);
+        }
+        if (found.size() == 1) {
+            String simple = found.get(0).simpleName();
+            return new Named(found.get(0), null, byFile || (!simple.equals(asked)
+                && index.declarationsOf(simple).size() > 1) ? asked : simple);
+        }
+        Map<String, Integer> timesDeclared = new LinkedHashMap<>();
+        found.forEach(one -> timesDeclared.merge(one.fqn(), 1, Integer::sum));
+        StringBuilder sb = new StringBuilder("`" + asked + "` is "
+            + (byFile ? "the end of the address of " + found.size() + " files"
+                : "the name of " + found.size() + " types")
+            + " in this project's material, and none was picked. Ask again with one of these "
+            + "in its place:\n");
+        String example = null;
+        for (SemanticIndex.Declaration one : found.subList(0,
+                Math.min(CANDIDATES_LISTED, found.size()))) {
+            String address = address(one.rootLabel(), one.file());
+            boolean byName = !byFile && timesDeclared.get(one.fqn()) == 1;
+            sb.append("  ").append(byName ? one.fqn() + "  - " + one.kind() + ", " + address
+                + ":" + one.line() : address + "  - " + one.kind() + " " + one.fqn() + ", line "
+                + one.line()).append('\n');
+            if (example == null) {
+                example = byName ? one.fqn() : address;
+            }
+        }
+        if (found.size() > CANDIDATES_LISTED) {
+            sb.append("  ... and ").append(found.size() - CANDIDATES_LISTED)
+                .append(" more; types_in <package or folder> lists the types of one part\n");
+        }
+        return new Named(null, sb.append("For example: ").append(tool).append(' ')
+            .append(example).append(rest == null ? "" : rest).append('\n').toString(), asked);
+    }
+
+    /** The types of the file a reader's address names; of every file it ends, when it is none. */
+    private List<SemanticIndex.Declaration> inFile(SemanticIndex index, String path) {
+        String asked = path;
+        if (ownRoot != null) {
+            if (asked.startsWith("/reference/")) {
+                asked = asked.substring("/reference/".length());
+            } else if (!ownRoot.isBlank()) {
+                String own = asked;
+                while (own.startsWith("/")) {
+                    own = own.substring(1);
+                }
+                List<SemanticIndex.Declaration> ofCheckout =
+                    index.declarationsIn(ownRoot + "/" + own);
+                if (!ofCheckout.isEmpty() && ofCheckout.get(0).canonical()
+                        .equals(ownRoot + "/" + own)) {
+                    return ofCheckout;
+                }
+            }
+        }
+        return index.declarationsIn(asked);
+    }
+
+    /**
+     * One line for a lookup that answers about every type of a name at once (usages,
+     * implementations): which types those are. "" when the name stands for one type or none.
+     */
+    static String sharedNameNote(SemanticIndex index, String what, String tool) {
+        String asked = what == null ? "" : what.strip();
+        int hash = asked.indexOf('#');
+        String type = hash < 0 ? asked : asked.substring(0, hash);
+        List<String> full = index == null || type.isBlank() ? List.of() : index.resolve(type);
+        if (full.size() < 2) {
+            return "";
+        }
+        return "(`" + type + "` is the name of " + full.size() + " types: "
+            + String.join(", ", full.subList(0, Math.min(CANDIDATES_LISTED, full.size())))
+            + (full.size() > CANDIDATES_LISTED ? ", ..." : "") + ". What follows is about all "
+            + "of them; " + tool + " <one full name>" + (hash < 0 ? "" : asked.substring(hash))
+            + " is about one.)\n";
+    }
+
+    /**
+     * For a worker whose own checkout answered for a name: the types of that name outside the
+     * checkout, on one line, so that the answer is not taken for the only one. "" when there
+     * is none, or when the type was named by its file.
+     */
+    public String othersNamed(String what) {
+        String asked = what == null ? "" : what.strip();
+        int hash = asked.indexOf('#');
+        String type = (hash < 0 ? asked : asked.substring(0, hash)).strip();
+        if (type.isEmpty() || isFile(type) || ownRoot == null) {
+            return "";
+        }
+        SemanticIndex index;
+        try {
+            index = curator == null ? null : curator.semanticIndex();
+        } catch (Throwable unusable) {                                     // noqa
+            return "";
+        }
+        if (index == null || !index.available()) {
+            return "";
+        }
+        List<SemanticIndex.Declaration> all = index.declarationsOf(type);
+        Map<String, Integer> timesDeclared = new LinkedHashMap<>();
+        all.forEach(one -> timesDeclared.merge(one.fqn(), 1, Integer::sum));
+        List<String> others = new ArrayList<>();
+        for (SemanticIndex.Declaration one : all) {
+            if (!ownRoot.equals(one.rootLabel())) {
+                others.add(timesDeclared.get(one.fqn()) == 1 ? one.fqn()
+                    : address(one.rootLabel(), one.file()));
+            }
+        }
+        if (others.isEmpty()) {
+            return "";
+        }
+        return "[This is the `" + type + "` of your checkout. " + others.size() + " other "
+            + "type(s) of that name are in the reference material, not shown: "
+            + String.join(", ", others.subList(0, Math.min(5, others.size())))
+            + (others.size() > 5 ? ", ..." : "") + ". Ask with one of those in place of the "
+            + "name for that one.]\n";
     }
 
     /** Where a type or {@code Type#method} is used, with file and line. */
@@ -161,8 +400,8 @@ public final class TreeQueries {
         if (found.isEmpty()) {
             return "Nothing in this project's material uses `" + what + "`.";
         }
-        StringBuilder sb = new StringBuilder("Where `" + what + "` is used (" + found.size()
-            + "):\n");
+        StringBuilder sb = new StringBuilder(sharedNameNote(index, what, "usages_of")
+            + "Where `" + what + "` is used (" + found.size() + "):\n");
         for (SemanticIndex.Ref ref : found.subList(0, Math.min(MAX_REFS, found.size()))) {
             sb.append("  ").append(address(ref.rootLabel(), ref.file())).append(':')
                 .append(ref.line()).append(ref.detail() == null || ref.detail().isBlank()
@@ -180,6 +419,21 @@ public final class TreeQueries {
     static final int TYPE_NAMES_A_PAGE = 60;
     /** How many packages are named with their counts before the rest are counted. */
     static final int PACKAGES_NAMED = 40;
+
+    /**
+     * What a lookup takes for the type {@code simple} of the file at {@code address} without
+     * being asked which: the simple name while no other type has it, else the address. What an
+     * outline or a note prints after {@code body_of}, so that the next call is answered.
+     */
+    public static String lookupNameOf(KnowledgeCurator curator, String address, String simple) {
+        try {
+            SemanticIndex index = curator == null ? null : curator.semanticIndex();
+            return index != null && index.available() && index.declarationsOf(simple).size() > 1
+                ? address : simple;
+        } catch (Throwable unusable) {                                     // noqa
+            return simple;
+        }
+    }
 
     /** {@code <where>:<N>}: the names from the N-th on, as a continuation line prints it. */
     private static final java.util.regex.Pattern FROM_NTH =
@@ -321,7 +575,10 @@ public final class TreeQueries {
      * The text of ONE declaration, taken out of the tree by name: {@code Type#member} for a
      * method, a constructor ({@code Type#Type}) or a field with its initialiser, {@code Type} for
      * the type itself. Overloads are all returned while they are short, and listed with their
-     * lines when they are not.
+     * lines when they are not. {@code Type#import} is the file's package and import lines.
+     *
+     * <p>{@code Type} is a simple name, a full name, or the address of the type's file. A name
+     * several types share is answered with those types and how to ask for one (section 105).
      *
      * <p>A nested type is named as the language names it, {@code Outer.Inner} or
      * {@code Outer$Inner}, and a member may follow a dot as well as a {@code #} (run 86,
@@ -341,30 +598,37 @@ public final class TreeQueries {
         if (typeName.isBlank()) {
             return "Give Type#member, or Type for the whole type - for example Ledger#append.";
         }
+        String memberPart = member == null ? "" : "#" + member;
+        String designator = typeName.strip();
         // Outer$Inner is walked like Outer.Inner: the index places it in the outer type's file
         // under a name the source never spells.
-        SemanticIndex.Ref declared = typeName.indexOf('$') >= 0 ? null
-            : index.declarationOf(typeName.strip());
+        Named named = designator.indexOf('$') >= 0 && !isFile(designator)
+            ? new Named(null, null, designator)
+            : named(index, "body_of", designator, memberPart);
         // The names after the outermost type the tree knows: nested types, then maybe a member.
         List<String> inner = new ArrayList<>();
-        String outer = typeName.strip().replace('$', '.');
-        while (declared == null && outer.contains(".")) {
+        String outer = isFile(designator) ? designator : designator.replace('$', '.');
+        while (named.type() == null && named.instead() == null && !isFile(designator)
+                && outer.contains(".")) {
             inner.add(0, outer.substring(outer.lastIndexOf('.') + 1));
             outer = outer.substring(0, outer.lastIndexOf('.'));
-            declared = index.declarationOf(outer);
+            named = named(index, "body_of", outer, "." + String.join(".", inner) + memberPart);
         }
+        if (named.instead() != null) {
+            return named.instead();
+        }
+        SemanticIndex.Declaration declared = named.type();
         if (declared == null) {
             return "No type `" + typeName + "` is declared in this project's material (a class "
                 + "from a library jar has no source here).";
         }
         String address = address(declared.rootLabel(), declared.file());
-        String source = curator.readFile(
-            (declared.rootLabel() == null || declared.rootLabel().isBlank()
-                ? "" : declared.rootLabel() + "/") + declared.file().replace('\\', '/'), 2_000_000);
+        String source = curator.readFile(declared.canonical(), 2_000_000);
         if (source.startsWith("error:")) {
             return source;
         }
-        return inner.isEmpty() ? bodyIn(address, source, typeName.strip(), member)
+        return inner.isEmpty() ? bodyIn(address, source, isFile(designator)
+                ? declared.simpleName() : designator, member, named.askAs())
             : nestedIn(address, source, outer, inner, member);
     }
 
@@ -387,19 +651,21 @@ public final class TreeQueries {
         if (typeName.isBlank()) {
             return "Give a type - for example LogbookScreen.";
         }
-        SemanticIndex.Ref declared = index.declarationOf(typeName);
+        Named named = named(index, "texts_of", typeName, "");
+        if (named.instead() != null) {
+            return named.instead();
+        }
+        SemanticIndex.Declaration declared = named.type();
         if (declared == null) {
             return "No type `" + typeName + "` is declared in this project's material (a class "
                 + "from a library jar has no source here).";
         }
         String address = address(declared.rootLabel(), declared.file());
-        String source = curator.readFile(
-            (declared.rootLabel() == null || declared.rootLabel().isBlank()
-                ? "" : declared.rootLabel() + "/") + declared.file().replace('\\', '/'), 2_000_000);
+        String source = curator.readFile(declared.canonical(), 2_000_000);
         if (source.startsWith("error:")) {
             return source;
         }
-        return textsIn(address, source, typeName);
+        return textsIn(address, source, isFile(typeName) ? declared.simpleName() : typeName);
     }
 
     /**
@@ -624,7 +890,8 @@ public final class TreeQueries {
                     + type.name() + "#name.\n";
             }
         }
-        return declarationIn(address, type, asked);
+        return IMPORTS.equals(asked) ? importsIn(address, source)
+            : declarationIn(address, type, asked, null);
     }
 
     /**
@@ -635,6 +902,63 @@ public final class TreeQueries {
      * @param member null or blank for the type itself; one name; or several separated by commas
      */
     static String bodyIn(String address, String source, String typeName, String member) {
+        return bodyIn(address, source, typeName, member, null);
+    }
+
+    /**
+     * What {@code body_of} takes in place of a member's name for the file's package and import
+     * lines: a word of the language, so no member can have it.
+     */
+    static final String IMPORTS = "import";
+
+    /**
+     * The package line and the import lines of a file, with their lines (section 105): a live
+     * build's architect read lines 1-33 of a file for them, because no lookup returned them
+     * and every other answer leaves them out.
+     */
+    static String importsIn(String address, String source) {
+        String[] lines = source.split("\n", -1);
+        int end = lines.length;
+        try {
+            for (JavaOutline.Member type : JavaOutline.of(source).types) {
+                end = Math.min(end, type.startLine() - 1);
+            }
+        } catch (Exception unreadable) {                                   // noqa
+            // read to the end: only lines that are imports are taken
+        }
+        StringBuilder sb = new StringBuilder();
+        int first = 0;
+        int last = 0;
+        int imports = 0;
+        for (int i = 1; i <= end; i++) {
+            String line = lines[i - 1].strip();
+            boolean isImport = line.startsWith("import ") && line.endsWith(";");
+            if (isImport || (line.startsWith("package ") && line.endsWith(";"))) {
+                sb.append(line).append('\n');
+                first = first == 0 ? i : first;
+                last = i;
+                imports += isImport ? 1 : 0;
+            }
+        }
+        return first == 0 ? "`" + address + "` has no package line and no import.\n"
+            : "// " + address + ":" + first + "-" + last + " - " + imports
+                + " import(s), nothing else of the file\n" + sb;
+    }
+
+    /**
+     * @param askAs the name a later lookup takes for this type, for the lines that say how to
+     *              ask for a member; null is the type's simple name
+     */
+    static String bodyIn(String address, String source, String typeName, String member,
+                         String askAs) {
+        if (member != null && java.util.Arrays.stream(member.split(","))
+                .anyMatch(one -> one.strip().equals(IMPORTS))) {
+            String others = java.util.Arrays.stream(member.split(","))
+                .map(String::strip).filter(one -> !one.isEmpty() && !one.equals(IMPORTS))
+                .collect(java.util.stream.Collectors.joining(","));
+            return importsIn(address, source) + (others.isEmpty() ? ""
+                : "\n" + bodyIn(address, source, typeName, others, askAs));
+        }
         JavaOutline outline;
         try {
             outline = JavaOutline.of(source);
@@ -657,12 +981,14 @@ public final class TreeQueries {
         if (type == null) {
             return "`" + address + "` does not declare `" + simple + "`.";
         }
-        return declarationIn(address, type, member);
+        return declarationIn(address, type, member, askAs);
     }
 
     /** {@code member} of {@code type}, or the type itself, as {@link #bodyIn} answers it. */
-    private static String declarationIn(String address, JavaOutline.Member type, String member) {
+    private static String declarationIn(String address, JavaOutline.Member type, String member,
+                                        String askAs) {
         String simple = type.name();
+        String ask = askAs == null || askAs.isBlank() ? simple : askAs;
         if (member == null || member.isBlank()) {
             // The whole type is asked for to see what it does, so it is answered as the
             // compiler reads it: no comments, no blank lines, and no imports (run 82: roles
@@ -676,7 +1002,7 @@ public final class TreeQueries {
             }
             StringBuilder sb = new StringBuilder("// " + address + ":" + type.startLine() + "-"
                 + type.endLine() + " - " + code.length() + " characters of code, so its members "
-                + "are listed; ask for one as " + simple + "#name, or several as " + simple
+                + "are listed; ask for one as " + ask + "#name, or several as " + ask
                 + "#first,second\n" + type.header() + "\n");
             for (JavaOutline.Member child : type.children()) {
                 sb.append("  ").append(child.header()).append("  // :").append(child.startLine())
@@ -735,6 +1061,16 @@ public final class TreeQueries {
      * @param shapeTool what the asker's members query is called: public_shape or shape_of
      */
     public static String wholeFileNote(String address, String text, String shapeTool) {
+        return wholeFileNote(address, text, shapeTool, null);
+    }
+
+    /**
+     * @param nameFor gives, for the simple name of the file's type, what the queries take for
+     *                it: the name itself, or the file's address when other types share the
+     *                name ({@link #lookupNameOf}); null is the simple name
+     */
+    public static String wholeFileNote(String address, String text, String shapeTool,
+                                       java.util.function.UnaryOperator<String> nameFor) {
         if (text == null || address == null || !address.endsWith(".java")) {
             return "";
         }
@@ -747,11 +1083,12 @@ public final class TreeQueries {
         if (type == null || type.children().size() < 2) {
             return "";
         }
+        String name = nameFor == null ? type.name() : nameFor.apply(type.name());
         String note = "\n[You read this whole file: " + text.length() + " characters, sent again "
-            + "with every later call. " + shapeTool + " " + type.name() + " lists its "
-            + type.children().size() + " members; body_of " + type.name() + "#<member> returns "
-            + "ONE of them, body_of " + type.name() + "#<first>,<second> several, body_of "
-            + type.name() + " the type without comments and imports.]";
+            + "with every later call. " + shapeTool + " " + name + " lists its "
+            + type.children().size() + " members; body_of " + name + "#<member> returns "
+            + "ONE of them, body_of " + name + "#<first>,<second> several, body_of "
+            + name + " the type without comments and imports.]";
         return note.length() * 10 <= text.length() ? note : "";
     }
 
@@ -818,14 +1155,27 @@ public final class TreeQueries {
      * and scopes resolved from the module's properties and dependency management) and plugins
      * with their configuration, executions and dependencies - without the build file's text. A
      * blank {@code where} is every build file the tree knows, each with its counts only.
+     *
+     * <p>{@code <module>#<part>} is one part of the build file as the file writes it (section
+     * 105): what somebody writing a build file copies from. See {@link #buildParts}.
      */
     public String buildOf(String where) {
         if (curator == null) {
             return NO_TREE;
         }
         String asked = where == null ? "" : where.strip().replace('\\', '/');
+        String parts = null;
+        int hash = asked.indexOf('#');
+        if (hash >= 0) {
+            parts = asked.substring(hash + 1).strip();
+            asked = asked.substring(0, hash).strip();
+        }
         while (asked.startsWith("/")) {
             asked = asked.substring(1);
+        }
+        if (ownRoot != null && asked.startsWith("reference/")) {
+            // A worker's address of a reference module, as its other lookups print it.
+            asked = asked.substring("reference/".length());
         }
         if (asked.endsWith("pom.xml")) {
             asked = asked.substring(0, asked.length() - "pom.xml".length());
@@ -866,6 +1216,19 @@ public final class TreeQueries {
             return "No build file in `" + where + "` in this project's material (only Maven "
                 + "pom.xml files are read as a tree).";
         }
+        if (parts != null && !parts.isEmpty()) {
+            if (files.size() > PART_OF_BUILD_FILES) {
+                return "`" + asked + "` holds " + files.size() + " build files: "
+                    + String.join(", ", files.keySet()) + ". Name the module of one to get a "
+                    + "part of it.\n";
+            }
+            StringBuilder text = new StringBuilder();
+            String module = where.strip().substring(0, where.strip().indexOf('#'));
+            for (Map.Entry<String, Path> file : files.entrySet()) {
+                text.append(buildParts(file.getKey(), file.getValue(), module, parts));
+            }
+            return text.toString();
+        }
         boolean countsOnly = asked.isEmpty() && files.size() > 3;
         StringBuilder sb = new StringBuilder();
         // Asked for everything, a reference checkout answers with how many build files it has,
@@ -885,8 +1248,113 @@ public final class TreeQueries {
             .append("/<module> for one; types_in ").append(label).append(" for its modules.\n"));
         if (countsOnly) {
             sb.append("Ask for one module to see what it declares.\n");
+        } else if (files.size() <= PART_OF_BUILD_FILES) {
+            sb.append("[What is declared, not the file's text. To write a build file, one part "
+                + "as the file writes it: build_of <module>#parent, #properties, #dependencies, "
+                + "#build - or #<artifactId> for one plugin or dependency; several as #a,b.]\n");
         }
         return sb.toString();
+    }
+
+    /** A part is given of at most this many build files at once. */
+    static final int PART_OF_BUILD_FILES = 3;
+
+    /**
+     * Parts of one build file in the file's own syntax (section 105). A live build's workers,
+     * writing the build files of new modules, read existing ones whole - 183,367 characters -
+     * because {@link #buildOf} answers with what is declared and not with the declarations.
+     *
+     * <p>A part is, tried in this order: an element by its path from the root
+     * ({@code parent}, {@code properties}, {@code dependencies}, {@code build/plugins}); an
+     * element by its name anywhere, the first in the file ({@code plugins}); or every
+     * declaration - plugin, dependency, parent, extension - whose {@code artifactId} it is,
+     * with or without its group ({@code maven-compiler-plugin},
+     * {@code org.example:some-library}). Nothing is known here about any plugin or library:
+     * the names come from the file.
+     *
+     * @param module the module as it was asked for, for the line saying what else can be asked
+     * @param parts  one part, or several separated by commas
+     */
+    private static String buildParts(String address, Path file, String module, String parts) {
+        Element project;
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setExpandEntityReferences(false);
+            project = factory.newDocumentBuilder().parse(file.toFile()).getDocumentElement();
+        } catch (Exception unreadable) {                                   // noqa
+            return address + " could not be read as XML.\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String asked : parts.split(",")) {
+            String part = asked.strip();
+            if (part.isEmpty()) {
+                continue;
+            }
+            List<Element> found = new ArrayList<>();
+            Element at = project;
+            for (String step : part.split("/")) {
+                at = at == null ? null : child(at, step.strip());
+            }
+            if (at != null && at != project) {
+                found.add(at);
+            }
+            NodeList all = project.getElementsByTagName("*");
+            for (int i = 0; found.isEmpty() && i < all.getLength(); i++) {
+                if (((Element) all.item(i)).getTagName().equals(part)) {
+                    found.add((Element) all.item(i));
+                }
+            }
+            if (found.isEmpty()) {
+                String group = part.contains(":") ? part.substring(0, part.indexOf(':')) : "";
+                String artifact = part.substring(part.indexOf(':') + 1);
+                for (int i = 0; i < all.getLength(); i++) {
+                    Element element = (Element) all.item(i);
+                    if (text(element, "artifactId").equals(artifact)
+                            && (group.isEmpty() || group.equals(text(element, "groupId")))) {
+                        found.add(element);
+                    }
+                }
+            }
+            if (found.isEmpty()) {
+                List<String> sections = new ArrayList<>();
+                children(project).forEach(c -> {
+                    if (!children(c).isEmpty() && !sections.contains(c.getTagName())) {
+                        sections.add(c.getTagName());
+                    }
+                });
+                List<String> plugins = new ArrayList<>();
+                for (int i = 0; i < all.getLength(); i++) {
+                    Element element = (Element) all.item(i);
+                    if (element.getTagName().equals("plugin")
+                            && !plugins.contains(text(element, "artifactId"))) {
+                        plugins.add(text(element, "artifactId"));
+                    }
+                }
+                sb.append(address).append(" has no part `").append(part).append("`. Its parts: ")
+                    .append(String.join(", ", sections))
+                    .append(plugins.isEmpty() ? "" : "; its plugins, each a part by its "
+                        + "artifactId: " + String.join(", ", plugins))
+                    .append(". A dependency is a part by its artifactId too; build_of ")
+                    .append(module).append(" lists them.\n");
+                continue;
+            }
+            for (Element element : found) {
+                sb.append("<!-- ").append(address).append(": ").append(pathOf(element))
+                    .append(" -->\n").append(ResourceQueries.textOf(element));
+            }
+        }
+        return sb.toString();
+    }
+
+    /** {@code build/plugins/plugin}: where an element is, from the root of its file. */
+    private static String pathOf(Element element) {
+        StringBuilder path = new StringBuilder(element.getTagName());
+        for (Node up = element.getParentNode(); up instanceof Element parent
+                && parent.getParentNode() instanceof Element; up = up.getParentNode()) {
+            path.insert(0, parent.getTagName() + "/");
+        }
+        return path.toString();
     }
 
     /** The label of the reference root a file is under; null for the project's own. */

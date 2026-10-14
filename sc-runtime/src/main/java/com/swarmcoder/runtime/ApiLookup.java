@@ -102,6 +102,17 @@ public interface ApiLookup {
     }
 
     /**
+     * For a name the worker's own checkout answered for: one line naming the other types of
+     * that name in the reference material, so that the answer is not taken for the only one
+     * (section 105); "" when there is none.
+     *
+     * @param what the type, or {@code Type#member}, that was asked about
+     */
+    default String othersNamed(String what) {
+        return "";
+    }
+
+    /**
      * True when {@link #tree} has something behind one of the two queries a worker is offered
      * only when it does (section 100): {@code known_about}, what the project's roles and its
      * delivered stories established, and {@code rule_of}, one project rule in full by its name.
