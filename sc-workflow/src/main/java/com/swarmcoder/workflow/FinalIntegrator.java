@@ -544,7 +544,8 @@ public class FinalIntegrator {
                         // combining independently green tasks must surface at the merge that did it.
                         VerifyOutcome outcome = verifyIntegration(worktree, task, lsp,
                             com.swarmcoder.verify.VerificationBaseline.of(
-                                run.baselineFailingTests()));
+                                run.baselineFailingTests()),
+                            store.describeClaimedChecks(task), testsDue);
                         if (outcome.report() != null) {
                             lastVerification[0] = outcome.report();
                         }
@@ -555,8 +556,18 @@ public class FinalIntegrator {
                         markTaskDone(task);
                         unchangedNotYetVerified.forEach(this::markTaskDone);
                         unchangedNotYetVerified.clear();
-                        log.info("Run {}: merged '{}' ({}) — integration verified green",
-                            run.id(), task.title(), winner.branch());
+                        // "Verified" is said only of a merge a verification was made of
+                        // (section 104). The other line is the allowance for a project with no
+                        // contract and a run that owes no proof.
+                        if (outcome.report() != null) {
+                            log.info("Run {}: merged '{}' ({}) — integration verified green",
+                                run.id(), task.title(), winner.branch());
+                        } else {
+                            log.warn("Run {}: merged '{}' ({}) — NOT verified: this project has "
+                                + "no verification contract and the run claims no check, so "
+                                + "nothing was built or run", run.id(), task.title(),
+                                winner.branch());
+                        }
                     }
                 }
                 if (!unchangedNotYetVerified.isEmpty() && testsCommit != null) {
@@ -579,7 +590,7 @@ public class FinalIntegrator {
                         placed.describe());
                     VerifyOutcome outcome = verifyIntegration(worktree, last, lsp,
                         com.swarmcoder.verify.VerificationBaseline.of(
-                            run.baselineFailingTests()), claimed);
+                            run.baselineFailingTests()), claimed, testsDue);
                     if (outcome.report() != null) {
                         lastVerification[0] = outcome.report();
                     }
@@ -1038,7 +1049,7 @@ public class FinalIntegrator {
             try (LspService lsp = lspFactory.create(worktree)) {
                 outcome = verifyIntegration(worktree, first, lsp,
                     com.swarmcoder.verify.VerificationBaseline.of(run.baselineFailingTests()),
-                    claimed);
+                    claimed, testsDue);
             }
             if (outcome.failure() != null) {
                 return new Result(integrationBranch, "Nothing was built for this run, because "
@@ -1162,19 +1173,48 @@ public class FinalIntegrator {
         return spec != null && spec.browser() != null && spec.browser().serve() != null;
     }
 
-    private VerifyOutcome verifyIntegration(Path worktree, Task task, LspService lsp,
-                                            com.swarmcoder.verify.VerificationBaseline baseline) {
-        return verifyIntegration(worktree, task, lsp, baseline, store.describeClaimedChecks(task));
-    }
-
-    /** The same, held to {@code claimedChecks} - several tasks' when no single task was merged. */
+    /**
+     * Builds the tree and runs its tests, held to {@code claimedChecks} - one task's after its
+     * merge, several tasks' when no single task was merged.
+     *
+     * <p><b>No contract is not a pass when proof is owed</b> (section 104, live local build of
+     * 2026-10-14). This used to answer "green, no report" whenever no contract could be read,
+     * whatever the run had to prove. A run taken up at this stage after a restart then merged
+     * three tasks, called each "verified green" within a second, and ended its story for want
+     * of proof: nothing had been built or run. The allowance is kept for the one case it was
+     * made for - a project with no contract and a run that claims no check and has no
+     * acceptance test due. In every other case the stage fails here, says where it looked, and
+     * the run waits at this stage, to be made again once the contract can be read. A contract
+     * file that is there and cannot be read is never taken for "no contract".
+     *
+     * @param testsDue the acceptance test files due on the tree at this point
+     */
     private VerifyOutcome verifyIntegration(Path worktree, Task task, LspService lsp,
                                             com.swarmcoder.verify.VerificationBaseline baseline,
-                                            List<String> claimedChecks) {
+                                            List<String> claimedChecks,
+                                            java.util.Collection<String> testsDue) {
         // Trusted root, not the integration worktree — same reason as in the swarm engine.
         Optional<VerifySpec> spec = VerifySpecLoader.loadTrusted(gitService.repoPath(), worktree);
         if (spec.isEmpty()) {
-            return new VerifyOutcome(null, null); // no verification contract — the M1 allowance
+            boolean thereAndUnreadable = VerifySpecLoader.unreadable(gitService.repoPath()) != null
+                || VerifySpecLoader.unreadable(worktree) != null;
+            int checks = claimedChecks == null ? 0 : claimedChecks.size();
+            int tests = testsDue == null ? 0 : testsDue.size();
+            if (!thereAndUnreadable && checks == 0 && tests == 0) {
+                return new VerifyOutcome(null, null); // no verification contract — the M1 allowance
+            }
+            return new VerifyOutcome(null, "NOTHING WAS VERIFIED. No verification contract could "
+                + "be read: " + VerifySpecLoader.whyNone(gitService.repoPath(), worktree) + ". "
+                + "The contract holds the commands that build the tree and run its tests; "
+                + "without it nothing was built and no test was run, so this merge is not "
+                + "called verified. At this point " + checks + " check(s) are claimed and "
+                + tests + " acceptance test file(s) are due on the tree"
+                + (tests == 0 ? "" : " " + new java.util.TreeSet<>(testsDue))
+                + ", and none of them has a result.\n\nNothing is lost: every chosen "
+                + "candidate keeps its branch. Put a readable " + VerifySpecLoader.SPEC_PATH
+                + " in the project's own checkout, then answer this question; the stage is "
+                + "made again from the run's tests commit and the merged tree is built and "
+                + "tested.");
         }
         // One container for the whole integration: this runs after every merge, on the same tree.
         // It is started from the image with a browser in it when the contract has a browser check

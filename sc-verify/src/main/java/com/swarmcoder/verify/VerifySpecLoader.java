@@ -53,6 +53,55 @@ public final class VerifySpecLoader {
         return load(workspaceRoot);
     }
 
+    /**
+     * Why {@link #loadTrusted} gave no contract, for whoever has to act on it: each place it
+     * looked, and whether the file is not there or is there and cannot be read (section 104).
+     * The two are different facts. A file that is absent may mean the project has no contract;
+     * a file that is there and unreadable never means that.
+     */
+    public static String whyNone(Path trustedRoot, Path workspaceRoot) {
+        StringBuilder why = new StringBuilder();
+        if (trustedRoot != null) {
+            why.append("in the project's own checkout (").append(trustedRoot).append(") ")
+                .append(stateOf(trustedRoot));
+        }
+        if (workspaceRoot != null && !workspaceRoot.equals(trustedRoot)) {
+            why.append(why.length() == 0 ? "" : "; ").append("in the tree being verified ")
+                .append(stateOf(workspaceRoot));
+        }
+        return why.length() == 0 ? "no place to look for it was given" : why.toString();
+    }
+
+    /**
+     * Null when {@code root} holds no contract file or one that reads; otherwise why the file
+     * that is there cannot be read.
+     */
+    public static String unreadable(Path root) {
+        if (root == null) {
+            return null;
+        }
+        Path specFile = root.resolve(SPEC_PATH);
+        if (!Files.isRegularFile(specFile)) {
+            return null;
+        }
+        try {
+            parse(Files.readString(specFile));
+            return null;
+        } catch (IOException | RuntimeException e) {
+            String message = e.getMessage() == null ? e.toString() : e.getMessage();
+            return message.lines().findFirst().orElse(e.toString());
+        }
+    }
+
+    private static String stateOf(Path root) {
+        if (!Files.isRegularFile(root.resolve(SPEC_PATH))) {
+            return "there is no " + SPEC_PATH;
+        }
+        String unreadable = unreadable(root);
+        return unreadable == null ? SPEC_PATH + " is there and reads"
+            : SPEC_PATH + " is there and cannot be read: " + unreadable;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(VerifySpecLoader.class);
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory())
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
