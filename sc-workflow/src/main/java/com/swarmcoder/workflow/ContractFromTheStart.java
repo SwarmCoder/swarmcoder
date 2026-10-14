@@ -42,6 +42,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
@@ -63,9 +64,8 @@ import java.util.UUID;
  * has no build to read, so the place used to be the repository root. When the plan names the
  * build files of several modules, the root is an aggregator and compiles nothing: tests put
  * there are run by nobody and the acceptance stage selects none. The same build files that
- * decide the contract therefore decide the place: a module that compiles, and among several
- * the one whose tasks come after the tasks of the most other modules, which is the plan's
- * own statement of what builds on what.
+ * decide the contract therefore decide the place: a module that compiles, per task the one
+ * its own main sources are written to (section 109, {@link #acceptancePlaces}).
  */
 final class ContractFromTheStart {
 
@@ -171,43 +171,205 @@ final class ContractFromTheStart {
     }
 
     /**
-     * Where the acceptance tests of this plan go: read from the project's build when it has
-     * one, and otherwise from the build files the plan names. The conventional place at the
-     * repository root only when neither says anything.
+     * Where the acceptance tests go, per task (section 109).
+     *
+     * @param planDefault the place for a task that writes no main source of its own (a task
+     *                    that only writes build files) or only code that runs in a browser;
+     *                    also the place the plan as a whole is described by
+     * @param perTask     every task of the plan, by id
      */
+    record Places(AcceptanceTestLocation.Location planDefault,
+                  Map<UUID, AcceptanceTestLocation.Location> perTask) {
+
+        AcceptanceTestLocation.Location of(Task task) {
+            AcceptanceTestLocation.Location own = task == null ? null : perTask.get(task.id());
+            return own == null ? planDefault : own;
+        }
+    }
+
+    /** The plan's default place; see {@link #acceptancePlaces}. */
     static AcceptanceTestLocation.Location acceptanceLocation(BuildLayout.Layout layout,
                                                               TaskGraph graph) {
+        return acceptancePlaces(layout, graph, null).planDefault();
+    }
+
+    /**
+     * Where the acceptance tests of each task of this plan go.
+     *
+     * <p><b>A project whose build can be read</b> keeps one place for every task: the module
+     * whose classpath reaches the most other modules ({@link AcceptanceTestLocation#resolve}),
+     * because there the modules' real dependencies are known.
+     *
+     * <p><b>A project whose build is still to be written</b> (section 107) has no dependencies to
+     * read, only the plan. A task's test goes in the module its own main sources are written to:
+     * that module's build file is the one that must declare everything the task's code, and so
+     * its test, uses. A task writing the main sources of several modules takes the one whose
+     * tasks come after the tasks of the most other modules. A task that writes no main source
+     * (a task that only writes build files), or only code of a module that runs in a browser,
+     * takes the plan's default: among the modules that do not run only in a browser, the one
+     * whose tasks come after the most other modules' tasks; a tie goes to the module whose last
+     * task comes latest in the plan. A build file a task writes does not make the task one of
+     * that module's tasks: the task that writes every module's build file first would otherwise
+     * come before everything, and every module would then seem to come after every other (the
+     * live build of 2026-10-14 put a server test in the browser client so). The conventional
+     * place at the repository root only when nothing says anything.
+     *
+     * @param repoPath the project's folder, to tell a module that runs only in a browser from
+     *                 its build file when that file is already there; null when unknown
+     */
+    static Places acceptancePlaces(BuildLayout.Layout layout, TaskGraph graph, Path repoPath) {
+        List<Task> tasks = graph == null || graph.tasks() == null ? List.of() : graph.tasks();
         if (layout != null && layout.determined()) {
-            return AcceptanceTestLocation.resolve(layout);
+            return everyTaskAt(AcceptanceTestLocation.resolve(layout), tasks);
         }
         List<String> files = plannedBuildFiles(graph);
         BuildLayout.Layout modules = GeneratedContract.plannedLayout(files, Map.of());
         if (modules == null) {
-            return AcceptanceTestLocation.resolve(layout);
+            return everyTaskAt(AcceptanceTestLocation.resolve(layout), tasks);
         }
-        BuildLayout.Layout planned = GeneratedContract.plannedLayout(files,
-            comesAfter(graph, modules.compilingModules()));
-        return AcceptanceTestLocation.resolve(planned == null ? modules : planned);
+        List<String> compiling = modules.compilingModules();
+        Set<String> browserOnly = new TreeSet<>(
+            BrowserOnlyCode.survey(repoPath, modules).browserOnlyDirs());
+        Map<UUID, Set<String>> sources = sourceModules(tasks, compiling);
+        Map<String, Set<String>> after = comesAfter(graph, sources);
+        Map<UUID, Integer> position = planOrder(graph);
+        Map<String, Integer> lastTask = new HashMap<>();
+        for (Task task : tasks) {
+            for (String module : sources.getOrDefault(task.id(), Set.of())) {
+                lastTask.merge(module, position.getOrDefault(task.id(), -1), Math::max);
+            }
+        }
+        List<String> eligible = compiling.stream().filter(m -> !browserOnly.contains(m)).toList();
+        String fallback = latest(eligible.isEmpty() ? compiling : eligible, after, lastTask);
+        int reach = after.getOrDefault(fallback, Set.of()).size();
+        AcceptanceTestLocation.Location planDefault = place(fallback,
+            compiling.size() == 1 || reach == compiling.size() - 1,
+            "No build file of this project exists yet; the plan names " + compiling.size()
+                + " compiling module" + (compiling.size() == 1 ? "" : "s") + ". A task's "
+                + "acceptance tests go in the module its own main sources are written to. A task "
+                + "that writes none goes in " + label(fallback) + ", whose tasks come after the "
+                + "tasks of " + reach + " of the other " + (compiling.size() - 1) + " modules"
+                + (browserOnly.isEmpty() ? "" : ", leaving out the modules that run only in a "
+                    + "browser (" + String.join(", ", browserOnly) + ")")
+                + ".");
+        Map<UUID, AcceptanceTestLocation.Location> perTask = new LinkedHashMap<>();
+        for (Task task : tasks) {
+            List<String> own = sources.getOrDefault(task.id(), Set.of()).stream()
+                .filter(m -> !browserOnly.contains(m)).toList();
+            if (own.isEmpty()) {
+                perTask.put(task.id(), planDefault);
+                continue;
+            }
+            String module = latest(own, after, lastTask);
+            perTask.put(task.id(), place(module, compiling.size() == 1,
+                "Task '" + task.title() + "' writes the main sources of " + label(module)
+                    + (own.size() == 1 ? "" : " (of " + own.size() + " modules, the one whose "
+                        + "tasks come after the most others)")
+                    + "; its acceptance tests go there, where that module's build file declares "
+                    + "what its code uses."));
+        }
+        return new Places(planDefault, perTask);
+    }
+
+    private static Places everyTaskAt(AcceptanceTestLocation.Location location, List<Task> tasks) {
+        Map<UUID, AcceptanceTestLocation.Location> perTask = new LinkedHashMap<>();
+        for (Task task : tasks) {
+            perTask.put(task.id(), location);
+        }
+        return new Places(location, perTask);
+    }
+
+    private static AcceptanceTestLocation.Location place(String module, boolean seesEvery,
+                                                        String note) {
+        String prefix = module.isEmpty() ? "" : module + "/";
+        return new AcceptanceTestLocation.Location(module,
+            prefix + AcceptanceTestLocation.PROTECTED_SUBDIR,
+            prefix + AcceptanceTestLocation.WRITE_SUBDIR, seesEvery, note);
+    }
+
+    private static String label(String module) {
+        return module.isEmpty() ? "the repository root" : module;
     }
 
     /**
-     * Per module, the modules whose tasks its own tasks are planned to come after, directly
-     * or through other tasks.
+     * Of {@code modules}, the one whose tasks come after the most other modules' tasks; a tie
+     * goes to the one whose last task comes latest in the plan, then to the first named.
      */
-    static Map<String, Set<String>> comesAfter(TaskGraph graph, List<String> modules) {
-        Map<UUID, Set<String>> modulesOf = new HashMap<>();
-        for (Task task : graph.tasks()) {
+    private static String latest(List<String> modules, Map<String, Set<String>> after,
+                                 Map<String, Integer> lastTask) {
+        String best = null;
+        for (String module : modules) {
+            if (best == null) {
+                best = module;
+                continue;
+            }
+            int reach = after.getOrDefault(module, Set.of()).size();
+            int bestReach = after.getOrDefault(best, Set.of()).size();
+            if (reach > bestReach || reach == bestReach
+                    && lastTask.getOrDefault(module, -1) > lastTask.getOrDefault(best, -1)) {
+                best = module;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Per task, the compiling modules whose main sources its write set holds: every entry that
+     * is not a build file. A task that only writes build files has none.
+     */
+    static Map<UUID, Set<String>> sourceModules(List<Task> tasks, List<String> modules) {
+        Map<UUID, Set<String>> of = new HashMap<>();
+        for (Task task : tasks) {
             Set<String> written = new LinkedHashSet<>();
             if (task.writeSet() != null) {
                 for (String raw : task.writeSet()) {
-                    String module = moduleOf(BuildLayout.normalize(raw), modules);
+                    String path = BuildLayout.normalize(raw);
+                    if (path == null || path.isEmpty()
+                            || !GeneratedContract.buildFilesAmong(List.of(path)).isEmpty()) {
+                        continue;
+                    }
+                    String module = moduleOf(path, modules);
                     if (module != null) {
                         written.add(module);
                     }
                 }
             }
-            modulesOf.put(task.id(), written);
+            of.put(task.id(), written);
         }
+        return of;
+    }
+
+    /**
+     * Each task's position in the plan: its depth in the dependency order (a task comes after
+     * everything it depends on), then its place in the plan's list.
+     */
+    private static Map<UUID, Integer> planOrder(TaskGraph graph) {
+        List<Task> tasks = graph.tasks();
+        Map<UUID, Set<UUID>> before = earlierTasks(graph);
+        Map<UUID, Integer> depth = new HashMap<>();
+        for (int round = 0; round <= tasks.size(); round++) {
+            boolean changed = false;
+            for (Task task : tasks) {
+                int d = 0;
+                for (UUID earlier : before.getOrDefault(task.id(), Set.of())) {
+                    d = Math.max(d, depth.getOrDefault(earlier, 0) + 1);
+                }
+                Integer was = depth.put(task.id(), d);
+                changed |= was == null || was != d;
+            }
+            if (!changed) {
+                break; // a cycle stops at the round limit; it is not a valid plan anyway
+            }
+        }
+        Map<UUID, Integer> position = new HashMap<>();
+        for (int i = 0; i < tasks.size(); i++) {
+            position.put(tasks.get(i).id(),
+                depth.getOrDefault(tasks.get(i).id(), 0) * (tasks.size() + 1) + i);
+        }
+        return position;
+    }
+
+    private static Map<UUID, Set<UUID>> earlierTasks(TaskGraph graph) {
         Map<UUID, Set<UUID>> before = new HashMap<>();
         if (graph.dependencies() != null) {
             for (TaskEdge edge : graph.dependencies()) {
@@ -216,6 +378,15 @@ final class ContractFromTheStart {
                 }
             }
         }
+        return before;
+    }
+
+    /**
+     * Per module, the modules whose tasks its own tasks are planned to come after, directly
+     * or through other tasks. A task counts for the modules whose main sources it writes.
+     */
+    static Map<String, Set<String>> comesAfter(TaskGraph graph, Map<UUID, Set<String>> modulesOf) {
+        Map<UUID, Set<UUID>> before = earlierTasks(graph);
         Map<String, Set<String>> after = new LinkedHashMap<>();
         for (Task task : graph.tasks()) {
             Set<UUID> seen = new HashSet<>();

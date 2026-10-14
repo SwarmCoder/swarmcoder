@@ -11384,3 +11384,79 @@ version with a jar; a question with neither; listening ports read from the kerne
   journeys on its tree and a generated contract without a block still fails there.
 - `checks: []`: the block names no page to look at; journeys start at `/`. An application
   whose `/` does not answer 2xx is reported as not started.
+
+## 109. A server task's acceptance test was put in the browser client, and the run stopped on library packages it called undelivered (live local build, 2026-10-14)
+
+**What happened.** A project built from an empty folder had a plan of four tasks in four
+waves: (1) the build files (root and three module build files), (2) the shared module, (3) the
+client module, compiled to JavaScript, (4) the server module. The acceptance test of the
+server task was written in the client module. It imports the server's classes and library
+packages only the server module's build file declares (a database client, a server test kit,
+CDI annotations). At wave 4 the run stopped: "its tests need `<four packages>`, which no task
+delivers and [the server task] cannot create". About 13 million local tokens of work ended on a
+place the product chose, and the message called library packages types a task must deliver.
+
+**Why the client module was chosen.** `ContractFromTheStart.acceptanceLocation` (section 107)
+put every task's test in one module: the one whose tasks come after the tasks of the most other
+modules. A task counted for every module its write set touched, build files included. Task 1
+writes every module's build file, so it counted for all three modules, and every module's tasks
+came after it. Each module therefore "came after" both others: a tie at two. The tie went to
+the first module in sorted order, and the client's name sorts before the server's.
+
+**The rule now** (`ContractFromTheStart.acceptancePlaces`, per task; only for a project whose
+build files do not exist yet; a build that can be read keeps one place for all tasks, chosen by
+the modules' real dependencies as before):
+
+- A task's test goes in the module its own main sources are written to: every write-set entry
+  that is not a build file. That module's build file is the one that must declare everything
+  the task's code uses, and so everything its test uses.
+- A task writing the main sources of several modules: the one whose tasks come after the
+  tasks of the most other modules.
+- A task writing no main source (only build files), or only code of a module that runs in a
+  browser: the plan's default, which is the module whose tasks come after the most other
+  modules' tasks, among the modules that do not run only in a browser.
+- Writing a build file does not make a task one of that module's tasks. This is the fix to the
+  tie above.
+- Ties go to the module whose last task comes latest in the plan (dependency depth, then list
+  order), not to the first name.
+- A module runs only in a browser when its build file declares a browser runtime
+  (`BrowserOnlyCode.survey`, the same test section 108 uses to drop mains). In an empty project
+  that file does not exist at plan time, so this only applies once it does.
+- The test author is told the place through the task's `acceptanceTestDir`, as before; the
+  path policy, the overlay and the contract's acceptance command read the same per-task string.
+  The contract selects tests by path in every module, so different modules per task agree.
+
+**The message** (`UndeliverableType.park` with the tree, `LibraryPackages`). A missing name is
+a library package when the jar of an artifact that a build file on the tree declares, or that
+its dependency management pins, holds classes in that package. The jar is read from the local
+Maven repository. Nothing is matched on the name's words. For such a name:
+
+- If the build file of the test's module can still be written, by this task or one still to run,
+  the library can still be declared there. The name does not stop the run.
+- Otherwise the message says: "`x` is a package of the library g:a, not a type a task delivers.
+  It is declared by `<module>/pom.xml`, and not by `<test module>/pom.xml`, the build file of the
+  module the tests are in". When no build file declares it: "It is declared by no build file this
+  task or an earlier one writes". It ends with which side to fix: the tests are in the wrong
+  module, or that build file must declare the library.
+- Names that are not library packages get the old text.
+
+All three wave-time callers pass the tree they compiled on.
+
+**Tests.** `AnAcceptanceTestGoesInTheModuleOfItsTaskTest` (sc-workflow). The four-task plan
+puts the server task's test in the server module, the shared and client tasks' tests in their
+own modules, and the build-files task's test in the server module. A client module whose build
+file declares a browser runtime receives no test. Library packages are named with the build
+file that declares them, or as declared by none. A task that may still write the build file is
+not stopped. Also run: `ARunOwingProofHasItsContractBeforeAnythingIsBuiltTest`.
+
+**Not done, not checked.**
+
+- In a project built from nothing, the browser client task's own test still goes in the client
+  module. At plan time no build file says that module runs only in a browser, and nothing
+  structured in the design says so either.
+- The planner's brief and the PLAN log line still describe the place from the readable build,
+  which for an empty project is the repository root (section 107 left this open too).
+- Gradle: library packages are not recognised. The message falls back to the old text.
+- A library's transitive dependencies are not read. A package that comes only through another
+  library is not recognised as a library package.
+- Nothing was run against a model or in a container.
