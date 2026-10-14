@@ -10690,3 +10690,93 @@ product's, so there was nothing to correct.
 - No test deletes a project that holds established answers; the removal is one line in
   `ArtifactStore.deleteProject`.
 - The full test suite was not run; the classes above were.
+
+## 103. A class the server container finds by scanning was refused as code nothing can reach, twice (live local build, 2026-10-14)
+
+**What happened.** Final integration stopped a build for "production code that nothing in the
+application can reach", and stopped it again with the same words after a repair round. The
+class was a Jakarta WebSocket deployment configuration: it implements
+`jakarta.websocket.server.ServerApplicationConfig` and returns the endpoint class to deploy.
+No code names such a class, by design. The container scans the deployment for
+implementations of that interface. The library the project builds on ships the same class in
+its example applications, and the workers had copied it correctly. The verdict was false, and
+the repair round was spent on code that had nothing wrong with it.
+
+**How an entry point was decided before** (`ReachableCode`, sections 62 and 68). A file was
+one when it declared `main`, when a build file or a non-Java file of a main source tree named
+its type in full, or when it carried a mark that the project's own older code shows to be
+discovery: an annotation (or, for files with no annotation at all, a supertype) of a
+pre-existing production file that no other pre-existing file uses. A source root with no
+such older file believed any type-level annotation on an added type. That is why the service
+implementations and providers of the same module passed: they carry annotations the module's
+older classes carry. The configuration class has no annotation, and no older class of the
+module implements that interface, so no rule could apply. Everything was learned from the
+project; nothing was known about what a container does.
+
+**The rule added** (`ContainerDiscovery`, rule 5 in `ReachableCode`). A file is an entry
+point when one of its types is of a library type a server container looks for on the
+classpath. Two sources, both read, neither asked of a model:
+
+1. *What the libraries on the classpath declare.* The servlet standard has one mechanism by
+   which a library says "hand me every class of the application that is one of these": a
+   `ServletContainerInitializer` registered in the library's own `META-INF/services`,
+   carrying `@HandlesTypes`. The registered initializers of every jar and class folder the
+   tree is parsed with are read (the class file with ASM, nothing loaded), and the types
+   they name count as supertypes a container finds. No framework is named in the product.
+2. *What the platform standards require a container to find.* A short fixed list, in the
+   `jakarta` and the older `javax` namespace: the supertype
+   `websocket.server.ServerApplicationConfig`, and the type annotations
+   `servlet.annotation.WebServlet`, `WebFilter`, `WebListener`,
+   `websocket.server.ServerEndpoint`, `ws.rs.ApplicationPath`, `ws.rs.Path`,
+   `ws.rs.ext.Provider`.
+
+**Why a fixed list at all.** Source 1 alone does not close the case. The `@HandlesTypes` for
+WebSocket is declared by the container's implementation, and a project is compiled against
+the standard's API jar only; the implementation is supplied where the application is
+deployed and is not on the classpath the product reads. The API jar says nothing in metadata
+about scanning; the specification does. So the specification's deployment-by-scanning
+contracts are written down, for Servlet, WebSocket and REST, and nothing of any product. A
+name of the list that the project declares itself does not count.
+
+**Why not something broader.** "Implements or extends any library type" would excuse every
+screen class that extends a library's layout, which is the defect this check exists for
+(section 62). Annotations a library names in `@HandlesTypes` are deliberately not taken:
+libraries ask for annotations that mark a class without making it an entry, and a class
+nobody opens would pass for carrying one.
+
+**A second cause, in the reader of the tree** (`LstReader`). When the jar of a supertype is
+not on the machine, `implements TheirInterface` resolved to nothing and the type was recorded
+with no supertype, so no rule about supertypes could ever fire. A supertype the classpath
+cannot resolve is now kept by the name the source gives it: a name written in full, or a
+simple name one of the file's single-type imports gives in full. A name only a wildcard
+import or the file's own package could explain is left out. It was not established which of
+the two (unresolved, or resolved and without a rule) the live build was; both are closed.
+
+**The same stop twice.** `FinalIntegrator` remembers each run's last finding of this kind.
+When the next attempt of the run produces the identical finding, the stop says so: the round
+in between did not change it, another of the same kind is not expected to, and the code is
+either to be connected or removed by hand or is found in a way the check cannot see. Kept in
+memory, so the first repeat after a restart is not recognised.
+
+**Tests.** `ATypeAContainerFindsIsReachedTest` (sc-knowledge), on an invented server module
+whose older code is found by an annotation of its own: the class of the live build is
+reached, written with the interface in full and imported in the older namespace, and so is
+the endpoint class it returns; an implementation of a project-own interface that nothing
+uses, that interface, and a plain unused class are still refused; an interface of the same
+simple name declared by the project explains nothing; `@HandlesTypes` is read from a jar and
+from a class folder; a class of a type a library asks the container for is reached, one of a
+library type nobody asks for is not. Run with it and unchanged:
+`AddedCodeNothingReachesIsFoundOnTheGraphTest`.
+
+**Not done, not checked.**
+
+- An unresolved annotation is still kept by its simple name, so the annotations of the
+  standard list only match when the standard's API jar is on the machine.
+- What a library does with a class it is handed is not seen: a handled supertype is taken
+  as found and run.
+- Other platform discovery (enterprise beans, persistence units) is not in the list; nothing
+  has needed it. Discovery a library implements by its own scan is not seen at all.
+- The plan-time check (`planObjection`) knows a new file by its task's text only. A plan
+  that adds such a class with no annotation named in its task can still be sent back there.
+- The repeated-stop sentence has no test; it is one comparison.
+- Nothing was run against a model. The full test suite was not run; the classes above were.

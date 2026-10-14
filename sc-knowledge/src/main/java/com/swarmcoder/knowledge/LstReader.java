@@ -26,6 +26,7 @@ import org.openrewrite.java.JavaParser;
 import org.openrewrite.java.tree.J;
 import org.openrewrite.java.tree.JavaSourceFile;
 import org.openrewrite.java.tree.JavaType;
+import org.openrewrite.java.tree.TypeTree;
 import org.openrewrite.java.tree.TypeUtils;
 import org.openrewrite.marker.SearchResult;
 import org.openrewrite.tree.ParseError;
@@ -443,8 +444,9 @@ final class LstReader {
                     }
                     annotationsOfFile.addAll(annotations);
                     facts.types.add(new SemanticFacts.TypeFact(what.a(), file, line, what.b(),
-                        Boolean.parseBoolean(what.c()), assignableTo(type), annotations,
-                        shapeOf(type)));
+                        Boolean.parseBoolean(what.c()),
+                        withWrittenSupertypes(assignableTo(type), declaration, unit),
+                        annotations, shapeOf(type)));
                 }
                 case "annotation" -> {
                     annotationsOfFile.add(what.a());
@@ -545,6 +547,70 @@ final class LstReader {
             line++;
         }
         return lines;
+    }
+
+    /**
+     * The supertypes plus the ones the declaration writes and the classpath could not resolve.
+     *
+     * <p>A library whose jar is not on this machine leaves {@code implements TheirInterface}
+     * without a type, and the declaration then looked as if it had no supertype at all - which
+     * made a class a container finds by its interface look like a class nothing can find
+     * (DEVELOPER_CORRECTIONS section 103). The source still says which type it is: a name
+     * written in full, or a simple name one of the file's single-type imports gives in full.
+     * Nothing is guessed: a name only a wildcard import or the file's own package could
+     * explain is left out.
+     */
+    private static List<String> withWrittenSupertypes(List<String> resolved,
+                                                      J.ClassDeclaration declaration,
+                                                      J.CompilationUnit unit) {
+        if (declaration == null) {
+            return resolved;
+        }
+        List<TypeTree> written = new ArrayList<>();
+        if (declaration.getExtends() != null) {
+            written.add(declaration.getExtends());
+        }
+        if (declaration.getImplements() != null) {
+            written.addAll(declaration.getImplements());
+        }
+        Set<String> all = new LinkedHashSet<>(resolved);
+        for (TypeTree tree : written) {
+            if (TypeUtils.asFullyQualified(tree.getType()) != null) {
+                continue;
+            }
+            String name = writtenName(tree instanceof J.ParameterizedType generic
+                ? generic.getClazz() : tree);
+            if (name.isEmpty()) {
+                continue;
+            }
+            String first = name.contains(".") ? name.substring(0, name.indexOf('.')) : name;
+            if (name.contains(".") && Character.isLowerCase(first.charAt(0))) {
+                all.add(name);                                  // written with its package
+                continue;
+            }
+            for (J.Import imported : unit.getImports()) {
+                String full = imported.getTypeName();
+                if (!imported.isStatic() && full != null && full.endsWith("." + first)) {
+                    all.add(full + name.substring(first.length()));
+                    break;
+                }
+            }
+        }
+        all.remove("Unknown");
+        return all.size() == resolved.size() && !resolved.contains("Unknown")
+            ? resolved : List.copyOf(all);
+    }
+
+    /** A type name as the source writes it, dotted; "" for anything that is not a plain name. */
+    private static String writtenName(J tree) {
+        if (tree instanceof J.Identifier identifier) {
+            return identifier.getSimpleName();
+        }
+        if (tree instanceof J.FieldAccess access) {
+            String target = writtenName(access.getTarget());
+            return target.isEmpty() ? "" : target + "." + access.getSimpleName();
+        }
+        return "";
     }
 
     /** Everything this type can stand in for: every supertype and every interface, transitively. */
