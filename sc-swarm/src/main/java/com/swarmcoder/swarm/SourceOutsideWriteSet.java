@@ -19,9 +19,13 @@ package com.swarmcoder.swarm;
 
 import com.swarmcoder.domain.CandidateSolution;
 import com.swarmcoder.domain.Task;
+import com.swarmcoder.runtime.PathPolicy;
+import com.swarmcoder.verify.UnifiedDiffPaths;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A candidate that changed source files outside its task's write set does not pass.
@@ -58,8 +62,20 @@ import java.util.List;
  *
  * <p>The write set is the one the task has NOW: when the product widened it
  * ({@link RepairCannotHelp}, {@link SiblingDefects}), the files it was widened to are inside
- * it. Files that are not source keep being dropped at integration, and a build file is left to
- * the judge as before - a task may need to declare a dependency.
+ * it. Files that are not source keep being dropped at integration.
+ *
+ * <h2>Section 112: build files, and the whole diff (live local build, 2026-10-14)</h2>
+ *
+ * <p>A worker of the shared module's task wrote the server module's build file, a 16-line stub,
+ * because the root build file it wrote lists that module. The file was in the write set of the
+ * server task, which the plan ran later. Build files were left out of this check, out of the
+ * reservations and out of the merge's drop, so the stub was merged and the server task's test
+ * could not compile against it. A build file is now held like a source file: a task of its
+ * module has it in its write set ({@code BuildFilesInTheJob}); any other task is refused it.
+ *
+ * <p>The paths are read from the candidate's whole diff as well as from what its tools
+ * recorded, so a change no tool saw is checked too. The check is made BEFORE the candidate is
+ * built and tested: nothing is spent verifying a change that can never be selected.
  */
 final class SourceOutsideWriteSet {
 
@@ -69,9 +85,12 @@ final class SourceOutsideWriteSet {
     }
 
     /**
-     * The source files this candidate's change touches outside the task's write set: recorded by
-     * its toolbox as outside, still part of its change, not covered by the write set as it is
-     * now, and neither a build file nor a non-source stray.
+     * The files this candidate's change touches outside the task's write set as it is now:
+     * every file its diff adds, changes or deletes, and every file its toolbox recorded as
+     * written outside that is still part of the change. Source and build files alike; a stray
+     * that is not source (a note, a script, build output) is not counted, it is dropped at
+     * integration, and a file the build ignores is never in a diff. Protected paths are not
+     * listed here: they are refused, and audited at integration, on their own terms.
      */
     static List<String> paths(Task task, CandidateSolution candidate) {
         List<String> outside = new ArrayList<>();
@@ -80,28 +99,37 @@ final class SourceOutsideWriteSet {
             return outside; // an empty write set is unrestricted
         }
         String diff = candidate.diffUnified() == null ? "" : candidate.diffUnified();
+        Set<String> touched = new LinkedHashSet<>();
         for (String recorded : candidate.outOfWriteSetPaths()) {
             if (recorded == null || recorded.isBlank()) {
                 continue;
             }
             String path = recorded.strip().replace('\\', '/');
-            if (StrayFileCheck.isStray(path) || isBuildFile(path)
+            // Written and then put back as it was: not part of the change any more.
+            if (diff.isBlank() || diff.contains(path)) {
+                touched.add(path);
+            }
+        }
+        for (String path : UnifiedDiffPaths.touched(diff)) {
+            touched.add(path.strip().replace('\\', '/'));
+        }
+        for (String path : touched) {
+            if (path.isEmpty() || StrayFileCheck.isStray(path) || isProtected(task, path)
                     || RepairCannotHelp.covered(task.writeSet(), path)) {
                 continue;
             }
-            // Written and then put back as it was: not part of the change any more.
-            if (!diff.isBlank() && !diff.contains(path)) {
-                continue;
-            }
-            if (!outside.contains(path)) {
-                outside.add(path);
-            }
+            outside.add(path);
         }
         return outside;
     }
 
+    /** The task's acceptance tests and what controls the build: never a task's to take. */
+    private static boolean isProtected(Task task, String path) {
+        return PathPolicy.check(path, Set.of(path), task.acceptanceTestDir(), List.of()).lethal();
+    }
+
     /**
-     * The source files outside the task's write set that another task of the plan holds, each
+     * The files outside the task's write set that another task of the plan holds, each
      * with the title of that task. Empty when the candidate took only files nobody else holds.
      *
      * @param book who holds what in this run's plan; null knows of no other task, so nothing
@@ -125,8 +153,8 @@ final class SourceOutsideWriteSet {
     }
 
     /**
-     * The verdict sentence, or null when every source file the candidate changed outside its
-     * write set is one no other task of the plan holds.
+     * The verdict sentence, or null when every file the candidate changed outside its write set
+     * is one no other task of the plan holds.
      */
     static String objection(Task task, CandidateSolution candidate, ReservationBook book) {
         java.util.Map<String, String> held = heldByOthers(task, candidate, book);
@@ -140,7 +168,7 @@ final class SourceOutsideWriteSet {
             }
         });
         boolean one = held.size() == 1;
-        return "the candidate changed " + (one ? "a source file" : held.size() + " source files")
+        return "the candidate changed " + (one ? "a file" : held.size() + " files")
             + " that another task of this plan holds: " + String.join(", ", named)
             + (held.size() > MAX_NAMED ? " and " + (held.size() - MAX_NAMED) + " more" : "")
             + ". A change there is never selected, whatever else it passes: the other task's "

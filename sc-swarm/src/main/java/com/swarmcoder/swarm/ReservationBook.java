@@ -53,8 +53,12 @@ import java.util.UUID;
  * <p>What is protected - the acceptance tests and journeys, {@code .swarmcoder/}, {@code .git/},
  * locked modules - is refused by {@link PathPolicy} before this is asked, whoever holds what.
  *
- * <p>Build files and files that are not source are nobody's here, as before: two tasks of one
- * module share its build file by construction, and a stray file is dropped at integration.
+ * <p>Files that are not source are nobody's here: a stray file is dropped at integration. A
+ * build file is held like a source file (section 112): two tasks of one module both have its
+ * build file in their write sets by construction ({@code BuildFilesInTheJob}), so they share it
+ * as their own and are never asked here; a task of ANOTHER module is refused it. Until section
+ * 112 build files were nobody's, and a worker of the shared module's task wrote the server
+ * module's build file, a file of a task the plan ran later, which reached the progress branch.
  *
  * <p>Read from the plan's own tasks, live: a write set the product widened is seen as it is
  * now. Held in memory by the engine for one run; nothing here is read from a worker's tree.
@@ -93,7 +97,7 @@ final class ReservationBook {
             return Decision.FREE;
         }
         String file = path.strip().replace('\\', '/');
-        if (StrayFileCheck.isStray(file) || SourceOutsideWriteSet.isBuildFile(file)) {
+        if (StrayFileCheck.isStray(file)) {
             return Decision.FREE;
         }
         int own = waveOf(task.id());
@@ -130,8 +134,7 @@ final class ReservationBook {
         String file = path == null ? "" : path.strip().replace('\\', '/');
         if (decision.standing() == Standing.FREE) {
             if (task != null && !file.isEmpty() && waveOf(task.id()) >= 0
-                    && !StrayFileCheck.isStray(file)
-                    && !SourceOutsideWriteSet.isBuildFile(file)) {
+                    && !StrayFileCheck.isStray(file)) {
                 taken.computeIfAbsent(task.id(), id -> new LinkedHashSet<>()).add(file);
             }
             return null;

@@ -877,6 +877,21 @@ public final class WorkerToolbox {
         return note.toString();
     }
 
+    /**
+     * The last check of the worker's whole checkout, made when it has finished and before its
+     * change is taken as a candidate (section 112). Every changed path is put to the same
+     * decision as a write: what another task of the plan holds, or what is protected, is put
+     * back as it was. The tools refuse such a write when they make it and a shell command's is
+     * put back after the command; this pass is for whatever reached the checkout some other way,
+     * so that nothing outside the task's files is ever part of what is verified and merged.
+     * Files the build ignores are not changes and are not seen here.
+     *
+     * @return what was put back, as the sentence a worker would have been told; "" when nothing
+     */
+    public String settleBeforeTheChangeIsTaken() {
+        return auditAndRevertStrayWrites();
+    }
+
     /** Notes one path as changed outside the write set; true when it was not already known. */
     private boolean record(String canonical) {
         if (canonical == null || canonical.isBlank()) {

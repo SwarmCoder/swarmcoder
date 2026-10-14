@@ -3889,6 +3889,9 @@ public class SwarmEngineImpl implements SwarmEngine {
         if (selection.winner() == null) {
             return null;
         }
+        // As at every selection: what the winner took beyond the plan is the task's now, so the
+        // merge, which puts back anything outside the write set (section 112), keeps it.
+        recordWhatWasTakenBeyondThePlan(task, selection.winner());
         markTaskState(task, TaskState.SELECTED);
         archiveCandidates(allowed, selection.winner());
         log.info("Task '{}': re-selected from its own candidates under the answer: {}",
@@ -4281,6 +4284,24 @@ public class SwarmEngineImpl implements SwarmEngine {
         CandidateSolution sol = result.candidate();
         if (sol.state() != CandidateState.SURVIVED) {
             return sol; // already failed/killed during the worker loop
+        }
+        // Files changed outside the task's write set that ANOTHER TASK of the plan holds (live
+        // run 74; build files too since section 112), read from the candidate's whole diff,
+        // whatever wrote them: such a candidate can never be selected, so it fails here, BEFORE
+        // anything is built or run for it. A file nobody else holds is the task's to take
+        // (section 73). Its worker was refused the file, or had it put back, when it was
+        // written, and again before its change was taken; this is the last check before the
+        // change could reach a winner. Failed rather than trimmed: the tree that is verified
+        // must be the tree that is merged. See SourceOutsideWriteSet.
+        String heldElsewhere = SourceOutsideWriteSet.objection(task, sol, reservationsOf(runId));
+        if (heldElsewhere != null) {
+            VerificationReport report = new VerificationReport(UUID.randomUUID(), true, true,
+                null, null, null, null, java.time.Duration.ZERO, "", null);
+            recordVerdict(report, heldElsewhere);
+            log.error("Candidate {} FAILED before verification: {}", sol.id(), heldElsewhere);
+            return new CandidateSolution(sol.id(), sol.taskId(), sol.workerIndex(), sol.branch(),
+                sol.sampling(), sol.diffUnified(), report, sol.cluster(), sol.judge(),
+                CandidateState.FAILED, sol.killReason()).carryingAuditFrom(sol);
         }
         if (result.workspace() == null) {
             log.warn("Candidate {} has no workspace — UNVERIFIED (configure repoPath)", sol.id());
