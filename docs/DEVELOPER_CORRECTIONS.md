@@ -11679,3 +11679,88 @@ its author with the compiler's output, and the park that follows offers `retest`
 - A worker may still write a build file outside its task's write set (non-lethal, recorded).
   That is how the server's empty build file was written; nothing here changes it.
 - Nothing was run against a model or in a container. The live run was not resumed.
+
+## 112. A worker of an earlier task wrote a later task's build file, and it was merged (live local build, 2026-10-14)
+
+**What happened.** The run of section 111: the shared module's task (wave 1), then the browser
+client and the server. A repair worker of the shared task (candidate 101) wrote the root build
+file listing all three modules, and then, with its `write_file` tool, a 16-line stub of the
+client's and the server's build files "so the aggregator resolves". Both were outside its write
+set and in the write sets of the two later tasks. The candidate was selected ("2 file(s) outside
+its write set"), merged onto the progress branch, and the server task's acceptance test could not
+compile against a build file that declared nothing.
+
+**How it got through.** Not a shell command and not the language server: the file tool.
+
+- `PathPolicy.check` answers "outside the write set" for such a path: allowed, recorded. It then
+  asks the run's `ReservationBook` (section 73) whether another task holds the path, and the book
+  answered "nobody's" for every build file without looking (`standing` returned `FREE` for
+  `isBuildFile`). So the write happened and was only recorded.
+- Verification's check (`SourceOutsideWriteSet`) skipped build files, and it read only the paths
+  the toolbox had recorded, never the candidate's diff.
+- `WaveIntegrator` dropped only strays that are not source; a build file was kept.
+
+The exemption came from `BuildFilesInTheJob`: every task of a module has that module's build file
+in its write set, so two tasks of one module share it. That is still true and needs no exemption:
+a file in a task's own write set is allowed before the book is ever asked.
+
+**The rule now.** A change outside a task's write set that another task of the plan holds never
+reaches a winner or the progress branch, whatever wrote it. Section 73 stands: a file NO other
+task holds is still the task's to take, and is added to its write set at selection.
+
+1. *Build files are held like source* (`ReservationBook`). A task of another module is refused
+   one, at the write, naming the task (same wave: "built at the same time"; later: "the plan runs
+   after yours", remembered for `FileOfATaskNotYetRun`). A shell command's change to one is put
+   back after the command, as for source. Strays that are not source stay nobody's.
+2. *One last pass over the whole checkout before the change is taken*
+   (`WorkerToolbox.settleBeforeTheChangeIsTaken`, called by `WorkerLoop` before `git add -A`).
+   Every changed path gets the write decision again; what another task holds or what is protected
+   is put back. This catches whatever reached the checkout past the tools and the shell audit.
+3. *The candidate's whole diff is checked before verification* (`SourceOutsideWriteSet.paths`
+   now reads every file the diff adds, changes, deletes or renames away, as well as what the tools
+   recorded; build files included). A candidate whose diff still holds a file another task holds
+   FAILS, before anything is built or run for it, with the files and their tasks as the reason.
+   The same check after verification is kept as a second line.
+4. *The merge puts back what is still outside* (`WaveIntegrator.putBackOutsideTheWriteSet`). By
+   merge time a winner's write set holds everything it may have taken, so any source or build
+   file of its diff still outside is restored to what the progress branch had before that merge
+   (deleted if it was new), committed, and logged. The merged tree is compiled after, as before.
+   A re-selection under an operator's answer about a rule now also records what the winner took
+   beyond the plan, so this never strips a file it was allowed to take.
+
+**Dropped or failed?** Dropped (put back) while the worker is working and once more when it
+finishes: the worker is told at the write, and the tree that is verified is then the tree that is
+merged. Failed at verification when the diff still holds such a file: a verified tree is never
+changed afterwards, because what was verified would no longer be what is merged. If the task
+really needed the file, it fails on that honestly (its build does not resolve), and when every
+worker was refused the same later task's file, `FileOfATaskNotYetRun` blames the plan.
+
+**Generated build output** is not a change: a file under a folder the project ignores (`target/`)
+is never in `git status` or the diff, and a path that is not source or a build file is a stray,
+not counted here and dropped at the merge as before.
+
+**The planner's part.** In this run the shared task wrote a root build file listing modules that
+did not exist yet, and the reactor needs each listed module's build file. That is a plan fault:
+either the root build file lists only the modules that exist when it is written (each module's
+task adds its own entry; the root file belongs to an earlier task, so it is free to them), or the
+module build files belong to the task that writes the root. The rule is not loosened for it.
+
+**Tests.** New: `AFileOutsideTheWriteSetNeverReachesTheProgressBranchTest` (a shell command
+writing a later task's build file is put back and the task's own file stays; generated output
+under an ignored folder is neither touched nor recorded; a file written past every tool is put
+back before the change is taken; the whole diff, with nothing recorded, fails the candidate, a
+deletion counts, generated output and the task's own files do not; at the merge a later task's
+build file is not created and another task's existing file is as it was, while the winner's own
+file lands). Changed: `AWriteOutsideTheReservationIsDecidedByRuleTest` (a build file another task
+holds is refused; one nobody holds is taken), `ACandidateThatChangedSourceAnotherTaskHoldsDoesNotPassTest`
+(the verdict says "file", not "source file"). Also run: `WaveIntegratorTest`, `WorkerToolboxTest`,
+`NoRepairRoundWhenEveryCandidateWroteAFileOfATaskNotYetRunTest`.
+
+**Not done, not checked.**
+
+- `FinalIntegrator` (end of run) is unchanged: it still parks on protected paths and only logs
+  other paths outside a write set. The progress branch it builds on is already clean.
+- A run resumed with a winner selected before this change whose diff holds a build file outside
+  its write set: that file is now put back at the merge, and the wave's compile check decides.
+- `FileOfATaskNotYetRun`'s message still says "source file" for a refused build file.
+- Nothing was run against a model or in a container. The live run was not resumed.

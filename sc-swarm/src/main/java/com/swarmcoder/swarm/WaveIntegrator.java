@@ -171,6 +171,7 @@ public final class WaveIntegrator {
                 for (String path : audit.outOfWriteSet()) {
                     claimedBy.putIfAbsent(path, winner.task().title());
                 }
+                String beforeMerge = git.headSha(branch);
                 try {
                     git.mergeBranch(worktree, winner.candidate().branch());
                 } catch (Exception e) {
@@ -194,6 +195,8 @@ public final class WaveIntegrator {
                     .filter(path -> !coveredByAnyWriteSet(path, writeSetUnion))
                     .toList();
                 dropStrayFiles(worktree, winner.task().title(), uncontested);
+                putBackOutsideTheWriteSet(worktree, winner.task().title(), beforeMerge,
+                    audit.outOfWriteSet());
             }
             String compileFailure = compiles(worktree, winners);
             if (compileFailure != null) {
@@ -264,6 +267,64 @@ public final class WaveIntegrator {
             log.info("dropped {} from the winner of '{}': not a source file and not in the "
                 + "write set", path, taskTitle);
         }
+    }
+
+    /**
+     * Puts back, as the progress branch had them before this winner was merged, the source and
+     * build files its diff changed outside its task's write set (section 112).
+     *
+     * <p>By the time a winner is merged its write set holds everything it was allowed to take:
+     * its own files, and what it took that no other task held, added at selection (section 73).
+     * A file still outside is one that should never have reached a winner - a file of another
+     * task, written past every earlier check - and it does not reach the progress branch either.
+     * Run of 2026-10-14: a worker of the shared module's task wrote the server module's build
+     * file, a stub, which was merged; the server task, run later, could not compile its test.
+     * Strays that are not source are dropped by {@link #dropStrayFiles}; this is for the rest.
+     * The merged tree is compiled afterwards, so a winner that needed the file it lost is found
+     * there, not later.
+     */
+    private void putBackOutsideTheWriteSet(Path worktree, String taskTitle, String beforeMerge,
+                                           List<String> outOfWriteSet) {
+        List<String> foreign = outOfWriteSet.stream()
+            .filter(path -> !StrayFileCheck.isStray(path)).toList();
+        if (foreign.isEmpty() || beforeMerge == null) {
+            return;
+        }
+        List<String> putBack = new ArrayList<>();
+        for (String path : foreign) {
+            try {
+                Path file = worktree.resolve(path).normalize();
+                if (!file.startsWith(worktree.normalize())) {
+                    continue;
+                }
+                byte[] before = git.fileAt(beforeMerge, path);
+                if (before == null) {
+                    if (Files.deleteIfExists(file)) {
+                        putBack.add(path);
+                    }
+                } else {
+                    Files.createDirectories(file.getParent());
+                    Files.write(file, before);
+                    putBack.add(path);
+                }
+            } catch (Exception e) {
+                log.warn("Could not put back {} in {}: {}", path, worktree, e.getMessage());
+            }
+        }
+        if (putBack.isEmpty()) {
+            return;
+        }
+        try {
+            git.commitAll(worktree, "SwarmCoder: put back file(s) outside the write set of the "
+                + "winner of '" + taskTitle + "'\n\n" + String.join(", ", putBack)
+                + " reached the winning diff but is not in the task's write set.");
+        } catch (Exception e) {
+            log.warn("Could not commit putting back {} from the winner of '{}': {}", putBack,
+                taskTitle, e.getMessage());
+        }
+        log.warn("Put back {} on the progress branch: the winner of '{}' changed {} outside its "
+            + "write set, and only a task's own files are merged", putBack, taskTitle,
+            putBack.size() == 1 ? "it" : "them");
     }
 
     /**

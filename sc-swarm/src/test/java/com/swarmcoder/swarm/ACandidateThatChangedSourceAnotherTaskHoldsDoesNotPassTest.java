@@ -84,7 +84,7 @@ class ACandidateThatChangedSourceAnotherTaskHoldsDoesNotPassTest {
         String objection = SourceOutsideWriteSet.objection(extend,
             candidate(extend, diffOf(API, IMPL, COPY), IMPL, COPY), run74);
 
-        assertThat(objection).contains("2 source files that another task of this plan holds")
+        assertThat(objection).contains("2 files that another task of this plan holds")
             .contains(IMPL + " (held by 'Implement cancel', which the plan runs later)")
             .contains(COPY + " (held by 'Add the cancel command', which the plan runs later)")
             .contains("never selected");
@@ -95,7 +95,7 @@ class ACandidateThatChangedSourceAnotherTaskHoldsDoesNotPassTest {
         String objection = SourceOutsideWriteSet.objection(implement,
             candidate(implement, diffOf(IMPL, COPY), COPY), run74);
 
-        assertThat(objection).contains("a source file that another task of this plan holds")
+        assertThat(objection).contains("a file that another task of this plan holds")
             .contains(COPY + " (held by 'Add the cancel command', built at the same time)");
     }
 

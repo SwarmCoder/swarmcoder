@@ -39,6 +39,19 @@ public final class UnifiedDiffPaths {
      * reads as "nothing could be established" — never as "nothing was changed".
      */
     public static Set<String> addedOrChanged(String unifiedDiff) {
+        return read(unifiedDiff, false);
+    }
+
+    /**
+     * Every file the diff adds, changes or deletes - what a candidate's change touches, for the
+     * check that it stayed inside its task's files (section 112). A deleted file is a change to
+     * a file as much as a written one.
+     */
+    public static Set<String> touched(String unifiedDiff) {
+        return read(unifiedDiff, true);
+    }
+
+    private static Set<String> read(String unifiedDiff, boolean withDeleted) {
         Set<String> paths = new LinkedHashSet<>();
         if (unifiedDiff == null || unifiedDiff.isBlank()) {
             return paths;
@@ -47,11 +60,13 @@ public final class UnifiedDiffPaths {
         boolean deleted = false;
         for (String line : unifiedDiff.split("\r?\n")) {
             if (line.startsWith("diff --git ")) {
-                if (current != null && !deleted) {
+                if (current != null && (withDeleted || !deleted)) {
                     paths.add(current);
                 }
                 current = postImagePath(line.substring("diff --git ".length()));
                 deleted = false;
+            } else if (withDeleted && line.startsWith("rename from ")) {
+                paths.add(unquote(line.substring("rename from ".length())));  // moved away
             } else if (line.startsWith("deleted file mode ")) {
                 deleted = true;
             } else if (line.startsWith("+++ ")) {
@@ -63,7 +78,7 @@ public final class UnifiedDiffPaths {
                 }
             }
         }
-        if (current != null && !deleted) {
+        if (current != null && (withDeleted || !deleted)) {
             paths.add(current);
         }
         paths.remove(null);

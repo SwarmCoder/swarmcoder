@@ -107,13 +107,18 @@ class AWriteOutsideTheReservationIsDecidedByRuleTest {
     }
 
     @Test
-    void whatIsNotSourceAndWhatIsABuildFileIsNobodys() {
+    void whatIsNotSourceIsNobodysAndABuildFileIsHeldLikeSource() {
         Task module = task("The whole server", Set.of(), "server");
         ReservationBook book = ReservationBook.of(List.of(List.of(service, module)));
 
-        assertThat(book.take(service, "0", "server/pom.xml")).isNull();
         assertThat(book.take(service, "0", "server/notes.txt")).isNull();
-        assertThat(book.takenBy(service.id())).as("neither is recorded as taken").isEmpty();
+        assertThat(book.takenBy(service.id())).as("a stray is not recorded as taken").isEmpty();
+        assertThat(book.take(service, "0", "server/pom.xml"))
+            .as("section 112: a build file another task holds is refused like its source")
+            .contains("'The whole server'");
+        assertThat(book.take(service, "0", "pom.xml"))
+            .as("a build file nobody holds is the task's to take").isNull();
+        assertThat(book.takenBy(service.id())).containsExactly("pom.xml");
         assertThat(book.take(service, "0", "server/src/main/java/com/shop/Other.java"))
             .as("a directory another task reserved holds every source file under it")
             .contains("'The whole server'");

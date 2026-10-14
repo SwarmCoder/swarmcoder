@@ -558,6 +558,14 @@ public class WorkerLoop {
             toolbox.leaveLanguageServer();
         }
 
+        // Whatever wrote it, a file another task holds is put back before the change is taken
+        // (section 112): the tools and the shell audit refused or put it back when it was made,
+        // and this is the pass over the whole checkout for anything that reached it otherwise.
+        String settled = toolbox.settleBeforeTheChangeIsTaken();
+        if (!settled.isBlank()) {
+            log.warn("Worker {}: before its change was taken:{}", workerIndex,
+                settled.replace("\n\n", " ").replace('\n', ' '));
+        }
         String diff = captureDiff(workspace);
         // Recorded on EVERY outcome, killed ones included. A candidate that died still tells the
         // operator what it had reached, which is exactly what the old kill destroyed.
