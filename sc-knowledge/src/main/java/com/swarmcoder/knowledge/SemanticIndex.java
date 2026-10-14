@@ -664,22 +664,25 @@ public final class SemanticIndex {
             if (facts == null || facts.isEmpty()) {
                 continue;
             }
-            SemanticFacts.TypeFact fact = facts.get(0);
-            StringBuilder sb = new StringBuilder(fact.isAbstract() ? "abstract " : "")
-                .append(fact.kind()).append(' ').append(fact.fqn());
-            if (!fact.assignableTo().isEmpty()) {
-                sb.append("\n  is a: ").append(String.join(", ", fact.assignableTo()));
-            }
-            if (!fact.annotations().isEmpty()) {
-                sb.append("\n  annotated: @").append(String.join(" @", fact.annotations()));
-            }
-            for (String member : fact.shape()) {
-                sb.append("\n  ").append(member);
-            }
-            sb.append("\n  declared in ").append(fact.file()).append(':').append(fact.line());
-            return sb.toString();
+            return shapeText(facts.get(0));
         }
         return "";
+    }
+
+    private static String shapeText(SemanticFacts.TypeFact fact) {
+        StringBuilder sb = new StringBuilder(fact.isAbstract() ? "abstract " : "")
+            .append(fact.kind()).append(' ').append(fact.fqn());
+        if (!fact.assignableTo().isEmpty()) {
+            sb.append("\n  is a: ").append(String.join(", ", fact.assignableTo()));
+        }
+        if (!fact.annotations().isEmpty()) {
+            sb.append("\n  annotated: @").append(String.join(" @", fact.annotations()));
+        }
+        for (String member : fact.shape()) {
+            sb.append("\n  ").append(member);
+        }
+        sb.append("\n  declared in ").append(fact.file()).append(':').append(fact.line());
+        return sb.toString();
     }
 
     /**
@@ -701,6 +704,131 @@ public final class SemanticIndex {
                 (fact.isAbstract() ? "abstract " : "") + fact.kind() + " " + fact.fqn());
         }
         return null;
+    }
+
+    /**
+     * One declaration of a type: the root and file it is in, its line, and its full name.
+     *
+     * @param kind {@code class}, {@code abstract class}, {@code interface}, ...
+     */
+    public record Declaration(String rootLabel, String file, int line, String kind, String fqn) {
+
+        /** {@code <root>/<path>}, the file as every lookup of a role prints it. */
+        public String canonical() {
+            return (rootLabel == null || rootLabel.isBlank() ? "" : rootLabel + "/") + file;
+        }
+
+        public String simpleName() {
+            return fqn.substring(Math.max(fqn.lastIndexOf('.'), fqn.lastIndexOf('$')) + 1);
+        }
+    }
+
+    /**
+     * EVERY declaration a name stands for (section 105). {@link #declarationOf} and
+     * {@link #publicShape} answer with the first type of a name; a reference library with
+     * several example applications declares the same simple name, and the same full name, once
+     * in each, and a lookup that takes the first has answered about another application than
+     * the one that was meant. A lookup asks this and, given more than one, lists them.
+     *
+     * @param name a simple name, or a full name
+     * @return by root, file and line; empty when the graph declares no such type
+     */
+    public List<Declaration> declarationsOf(String name) {
+        Set<String> wanted = new LinkedHashSet<>(resolve(name));
+        List<Declaration> found = new ArrayList<>();
+        if (wanted.isEmpty()) {
+            return found;
+        }
+        for (SemanticFacts.RootFacts facts : roots) {
+            for (SemanticFacts.TypeFact type : facts.types) {
+                if (wanted.contains(type.fqn())) {
+                    found.add(declaration(facts.label, type));
+                }
+            }
+        }
+        found.sort(Comparator.comparing(Declaration::rootLabel)
+            .thenComparing(Declaration::file).thenComparingInt(Declaration::line));
+        return found;
+    }
+
+    /**
+     * The types a Java file declares, the one of the file's own name first: what a lookup
+     * given a path instead of a name is about.
+     *
+     * @param path a file as {@code <root>/<path>}, or the end of one from a folder's start
+     * @return the types of the one file that is {@code path}; when no file is, those of every
+     *         file whose address ends with it
+     */
+    public List<Declaration> declarationsIn(String path) {
+        String asked = path == null ? "" : path.strip().replace('\\', '/');
+        while (asked.startsWith("/")) {
+            asked = asked.substring(1);
+        }
+        List<Declaration> exact = new ArrayList<>();
+        List<Declaration> ending = new ArrayList<>();
+        if (asked.isEmpty()) {
+            return exact;
+        }
+        for (SemanticFacts.RootFacts facts : roots) {
+            for (SemanticFacts.TypeFact type : facts.types) {
+                Declaration one = declaration(facts.label, type);
+                if (one.canonical().equals(asked)) {
+                    exact.add(one);
+                } else if (("/" + one.canonical()).endsWith("/" + asked)) {
+                    ending.add(one);
+                }
+            }
+        }
+        List<Declaration> found = exact.isEmpty() ? ending : exact;
+        String stem = asked.substring(asked.lastIndexOf('/') + 1).replaceFirst("\\.java$", "");
+        found.sort(Comparator.comparing(Declaration::rootLabel).thenComparing(Declaration::file)
+            .thenComparing((Declaration d) -> !d.simpleName().equals(stem))
+            .thenComparingInt(Declaration::line));
+        return found;
+    }
+
+    private static Declaration declaration(String rootLabel, SemanticFacts.TypeFact type) {
+        return new Declaration(rootLabel == null ? "" : rootLabel,
+            type.file().replace('\\', '/'), type.line(),
+            (type.isAbstract() ? "abstract " : "") + type.kind(), type.fqn());
+    }
+
+    /**
+     * How many members the compiler resolved for a declaration; 0 also for one it gave no type
+     * - a second declaration of a full name in one root - whose members are in its source only.
+     */
+    public int resolvedMembers(Declaration declared) {
+        for (SemanticFacts.RootFacts facts : roots) {
+            for (SemanticFacts.TypeFact fact : facts.types) {
+                if (declared != null && fact.fqn().equals(declared.fqn())
+                        && fact.file().replace('\\', '/').equals(declared.file())
+                        && java.util.Objects.equals(facts.label == null ? "" : facts.label,
+                            declared.rootLabel())) {
+                    return fact.shape().size();
+                }
+            }
+        }
+        return 0;
+    }
+
+    /** {@link #publicShape(String)} of one declaration; "" when the graph no longer holds it. */
+    public String publicShape(Declaration declared) {
+        if (declared == null) {
+            return "";
+        }
+        for (SemanticFacts.RootFacts facts : roots) {
+            if (!java.util.Objects.equals(facts.label == null ? "" : facts.label,
+                    declared.rootLabel())) {
+                continue;
+            }
+            for (SemanticFacts.TypeFact fact : facts.types) {
+                if (fact.fqn().equals(declared.fqn())
+                        && fact.file().replace('\\', '/').equals(declared.file())) {
+                    return shapeText(fact);
+                }
+            }
+        }
+        return "";
     }
 
     /**

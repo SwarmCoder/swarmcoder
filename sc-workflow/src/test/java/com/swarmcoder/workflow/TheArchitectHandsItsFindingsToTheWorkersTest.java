@@ -290,15 +290,20 @@ class TheArchitectHandsItsFindingsToTheWorkersTest {
                 .contains("with the tasks built on it")
                 .contains("what the compiler will not tell a worker")
                 .contains("never a file's package line and imports");
-            assertThat(llm.sessionRequests.get(2)).as("a whole long result is not kept")
-                .contains("NOT KEPT: that lookup's result has")
-                .contains("a finding carries at most " + DraftTools.FINDING_LINES)
+            // Section 105: a whole long result is handed on as the lookup that returns it,
+            // by name and without a line of it; it is still never kept as its first lines.
+            assertThat(llm.sessionRequests.get(2)).as("a whole long result carries no lines")
+                .contains("the lookup by name").contains("without its lines")
+                .contains("a finding carries at most " + DraftTools.FINDING_LINES);
+            assertThat(llm.sessionRequests.get(3))
+                .as("nor a range that is too long and of no file a lookup can be named for")
+                .contains("NOT KEPT: lines 1-" + (DraftTools.FINDING_LINES + 1) + " are "
+                    + (DraftTools.FINDING_LINES + 1) + " lines")
                 .contains("Name the lines that DO the thing");
-            assertThat(llm.sessionRequests.get(3)).as("nor a named range that is too long")
-                .contains("NOT KEPT: 1-" + (DraftTools.FINDING_LINES + 1) + " is "
-                    + (DraftTools.FINDING_LINES + 1) + " lines");
-            assertThat(design.findings()).hasSize(1);
-            assertThat(design.findings().get(0).snippet())
+            assertThat(design.findings()).hasSize(2);
+            assertThat(design.findings().get(0).hasSnippet()).isFalse();
+            assertThat(design.findings().get(0).note()).contains("[Not carried: ");
+            assertThat(design.findings().get(1).snippet())
                 .as("what is kept are the lines the architect named, not the head of the file")
                 .contains("public void register() { Registry.add(this); }")
                 .doesNotContain("package com.acme.shop");

@@ -1024,7 +1024,11 @@ public final class WorkerToolbox {
      * one. See {@code TreeQueries.wholeFileNote} and {@code DocumentQueries.wholeFileNote}.
      */
     private static String wholeFileNote(String path, String text) {
-        String code = com.swarmcoder.knowledge.TreeQueries.wholeFileNote(path, text, "shape_of");
+        // A reference file's type is asked for by the file: its name may be the name of
+        // several types there (section 105). A file of the checkout answers by its name.
+        boolean ofReference = path != null && path.replace((char) 92, '/').startsWith("/reference/");
+        String code = com.swarmcoder.knowledge.TreeQueries.wholeFileNote(path, text, "shape_of",
+            ofReference ? simple -> path.strip() : null);
         if (!code.isEmpty()) {
             return code.substring(0, code.length() - 1) + " To change it you do not need the "
                 + "file: replace_member and add_member change one member by name.]";
@@ -1826,6 +1830,10 @@ public final class WorkerToolbox {
                         argument, apiLookup::sourceInTree)
                     : null;
             String fromTree = live != null ? live : apiLookup.tree(query, argument.strip());
+            if (live != null) {
+                // The checkout's own type answered: say so when the name is others' too.
+                fromTree += apiLookup.othersNamed(argument.strip());
+            }
             if ("types_in".equals(query)) {
                 fromTree += com.swarmcoder.knowledge.CheckoutCode.notAsTheTreeIn(worktree,
                     argument, apiLookup::sourceInTree);
@@ -2239,7 +2247,9 @@ public final class WorkerToolbox {
                     "START HERE to learn about a type of this project or its reference "
                     + "material: its members with the types the compiler resolved, what it "
                     + "extends, and its file and line. A few hundred characters where the file "
-                    + "is thousands. A type of your checkout that is new or changed since "
+                    + "is thousands. Give a simple name, a full name, or the path of the "
+                    + "type's file; a name several types share is answered with those types "
+                    + "and how to ask for one. A type of your checkout that is new or changed since "
                     + "the tree was built - yours, or an earlier task's of this run - is "
                     + "answered from the file as it is NOW."
                     + (server.isEmpty() ? "" : " It lists a type that exists only in a library "
@@ -2248,8 +2258,11 @@ public final class WorkerToolbox {
                 new ToolBinding("body_of",
                     "The text of ONE method, constructor, field or type, taken out by name with "
                     + "its file and lines: Type#method, Type#Type for a constructor, "
-                    + "Type#field, Type#first,second for several members, or Type for the whole "
-                    + "type as code without comments and imports. A file of your checkout is "
+                    + "Type#field, Type#first,second for several members, Type for the whole "
+                    + "type as code without comments and imports, or Type#import for its "
+                    + "file's package and imports. Type is a simple name, a full name, or the "
+                    + "path of its file; a name several types share is answered with those "
+                    + "types and how to ask for one. A file of your checkout is "
                     + "answered as it is NOW, your own changes included. Read code this way, "
                     + "instead of reading the file.",
                     this, bodyOf),
@@ -2267,7 +2280,10 @@ public final class WorkerToolbox {
                     "What a module's build file declares - coordinates, parent, modules, "
                     + "properties, dependencies (test-scope ones with resolved versions), "
                     + "plugins with their configuration - without the file. Give the module "
-                    + "folder; an empty string lists every build file.",
+                    + "folder; an empty string lists every build file. To WRITE a build file, "
+                    + "ask for one part as the file writes it: <module>#parent, #properties, "
+                    + "#dependencies, #build, or #<artifactId> for one plugin or dependency; "
+                    + "several as #a,b.",
                     this, buildOf),
                 new ToolBinding("resources_of",
                     "A module's resource files (beans.xml, persistence descriptors, property "
