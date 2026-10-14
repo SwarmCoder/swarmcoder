@@ -61,10 +61,20 @@ public final class RedChecker {
      *                     written before its code does, and only the compiler's own lines tell the
      *                     two apart. See {@link AcceptanceCompileErrors} (brownfield harness run 43,
      *                     2026-09-26).
+     * @param unchecked    true when nothing could be checked at all because the tree holds no
+     *                     build file yet (section 107's "red by construction"): the test's own
+     *                     lines were never compiled, so it is checked again, at the latest when
+     *                     its wave starts on a tree that has build files (section 111)
      */
     public record RedCheckResult(boolean red, TestResults results, String note,
                                  List<String> missingTypes, List<String> brokenTypes,
-                                 boolean selfInflicted, String compileOutput) {
+                                 boolean selfInflicted, String compileOutput, boolean unchecked) {
+
+        public RedCheckResult(boolean red, TestResults results, String note,
+                              List<String> missingTypes, List<String> brokenTypes,
+                              boolean selfInflicted, String compileOutput) {
+            this(red, results, note, missingTypes, brokenTypes, selfInflicted, compileOutput, false);
+        }
 
         public RedCheckResult(boolean red, TestResults results, String note) {
             this(red, results, note, List.of(), List.of(), false, null);
@@ -106,17 +116,17 @@ public final class RedChecker {
             }
             List<String> kept = missingTypes.stream().filter(n -> !names.contains(n)).toList();
             return new RedCheckResult(red, results, note, kept, brokenTypes, selfInflicted,
-                compileOutput);
+                compileOutput, unchecked);
         }
 
         private RedCheckResult withBrokenTypes(List<String> brokenTypes) {
             return new RedCheckResult(red, results, note, missingTypes, brokenTypes, selfInflicted,
-                compileOutput);
+                compileOutput, unchecked);
         }
 
         private RedCheckResult asSelfInflicted() {
             return new RedCheckResult(red, results, note, missingTypes, brokenTypes, true,
-                compileOutput);
+                compileOutput, unchecked);
         }
     }
 
@@ -183,7 +193,8 @@ public final class RedChecker {
             // there is no build file, which reads like a broken machine.
             return new RedCheckResult(true, new TestResults(0, 0, 0, 0, List.of()),
                 "the tree holds no " + spec.toolchain() + " build file yet, so no acceptance "
-                + "test can be built or pass on it - red state by construction");
+                + "test can be built or pass on it - red state by construction",
+                List.of(), List.of(), false, null, true);
         }
         TestStageRunner.StageOutcome outcome = TestStageRunner.run(target, "red-check",
             spec.acceptance(), spec.acceptanceReportDirs(), spec.effectiveTimeoutSeconds(), log);

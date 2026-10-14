@@ -1425,7 +1425,14 @@ public class GreenfieldWorkflow {
                         // it already has, and resumes at this same stage once the operator has
                         // settled it. Nothing is re-swarmed.
                         log("EXECUTING - parking run: " + park.getMessage());
-                        if (park.questionAlreadyRaised()) {
+                        UUID testOf = parkedOnTheTestOf.remove(run.id());
+                        if (testOf != null && !park.questionAlreadyRaised()) {
+                            // Stopped at the start of a wave on a task's own test (section 111):
+                            // the question takes "retest" for that task, not only "retry".
+                            final Run stopped = run;
+                            parkRun(run, park.brief(),
+                                question -> offerRetest(stopped, testOf, question));
+                        } else if (park.questionAlreadyRaised()) {
                             // Tasks waiting on a BLOCKED task (harness run 39, 2026-09-25): the
                             // blocked task already raised the one question that matters, so the run
                             // is marked stopped behind it and no second question is added.
@@ -4275,6 +4282,13 @@ public class GreenfieldWorkflow {
             + "on an instruction given in answer to the stopped build's question: " + instruction;
         log("EXECUTING: " + note);
         recordTestRepair(task, note);
+        if (!engine.hasCandidateToReverify(task)) {
+            // Stopped before its wave was dispatched (section 111): nothing to verify again.
+            // The stage checks the corrected test at the start of the task's wave and builds it.
+            log("EXECUTING: task '" + task.title() + "' has no candidate yet; its corrected test "
+                + "is checked when its wave starts, and the task is built against it.");
+            return null;
+        }
         SwarmEngineImpl.TestRepairOutcome outcome = engine.resumeAfterRetest(task, run.id());
         if (outcome.stillFaulty() && outcome.brokenTestFailure() != null) {
             String stop = recorrectOrStop(run, task, graph, design, outcome, askedAgain, false,
@@ -5077,11 +5091,40 @@ public class GreenfieldWorkflow {
         if (stillToRun.isEmpty()) {
             stillToRun.addAll(wave);
         }
+        testUnderCheck.remove(run.id());
+        parkedOnTheTestOf.remove(run.id());
         String park = redCheckTasks(run, scope, claiming, waveBase,
             String.valueOf(Math.abs(String.join(",", wave.stream().map(t -> t.id().toString())
                 .toList()).hashCode())), waveBase, stillToRun, wave);
+        UUID about = testUnderCheck.remove(run.id());
+        if (park != null && about != null) {
+            // The stop is about this task's own test: its question takes the answer "retest"
+            // as well as "retry" (section 111), as a stop on a test found later does (section 86).
+            parkedOnTheTestOf.put(run.id(), about);
+        }
         return park == null ? null : park + OperatorCorrectedTests.whereToCorrect(run);
     }
+
+    /**
+     * Per run: the tasks whose tests were written before any build file existed, so that nothing
+     * has compiled their own lines yet (section 111). Each is checked at the start of its wave,
+     * which every wave after the first already does; the record makes the log say so.
+     */
+    private final Map<UUID, Set<UUID>> uncheckedTests =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Per run: the task whose acceptance test the wave-start check is looking at, while it looks;
+     * removed when the check could not be made at all (no container), which is about no test.
+     */
+    private final Map<UUID, UUID> testUnderCheck = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Per run: the task whose own test the last wave-start check stopped the run on (section
+     * 111). Read once, when the run parks, so the question offers {@code retest} for it.
+     */
+    private final Map<UUID, UUID> parkedOnTheTestOf =
+        new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * The red check of the journeys the plan's tasks claim (section 63): the tree the run starts
@@ -5337,6 +5380,9 @@ public class GreenfieldWorkflow {
                 if (task.authoredTestPaths().isEmpty()) {
                     continue; // its tests were given to the task that can pass them
                 }
+                if (waveBase != null) {
+                    testUnderCheck.put(run.id(), task.id());
+                }
                 AcceptanceOverlay.Outcome placed = AcceptanceOverlay.reduceTo(gitService, worktree,
                     task.acceptanceTestDir(), run.acceptanceTestsCommit(), task.authoredTestPaths());
                 if (!placed.missing().isEmpty()) {
@@ -5447,6 +5493,7 @@ public class GreenfieldWorkflow {
         } catch (com.swarmcoder.sandbox.DockerSandboxManager.SandboxException e) {
             // Not an absent instrument: the red check runs tests a model wrote, there was no
             // container to run them in, and this PC is not an alternative. Stop and say so.
+            testUnderCheck.remove(run.id()); // a stop about the machine, not about a test
             log("Red-check was not run: " + e.getMessage());
             return noContainerPark("The red check", e);
         } catch (Exception e) {
@@ -5695,6 +5742,12 @@ public class GreenfieldWorkflow {
         if (!draft) {
             provideDependencyNeeds(reading, task);
         }
+        // A library its module's build file does not declare, which nobody may declare: the red
+        // check gives the task that file when it can (grantUndeclaredBuildFiles; for a draft, it
+        // will when the draft is handed in), so what is left is a locked or absent build file,
+        // and no candidate can compile this test (section 111).
+        reading = reading.withUndeclaredAsBroken(
+            UndeclaredDependencies.grantable(reading, task, tree, protectedPaths));
         if (!reading.isBroken()) {
             // THE ERRORS BEHIND THE MISSING TYPES (live run 63, 2026-10-02). In a build with an
             // annotation processor javac reports a missing import and stops before it looks at a
@@ -5759,6 +5812,18 @@ public class GreenfieldWorkflow {
                                                List<Task> stillToRun) {
         RedChecker.RedCheckResult result = new RedChecker().check(target, spec,
             earlierTestsIn(target.localRoot().orElse(null), task));
+        return withoutSuppliedPackages(target.localRoot().orElse(null), result, task, testPaths,
+            stillToRun);
+    }
+
+    /**
+     * The red check's result with the missing packages a build-file task can supply taken out of
+     * its missing types - see {@link #redCheck(ExecTarget, VerifySpec, Task, Collection, List)}.
+     * Nothing is run; asked again when a task's write set has grown (section 111).
+     */
+    private RedChecker.RedCheckResult withoutSuppliedPackages(Path tree,
+            RedChecker.RedCheckResult result, Task task, Collection<String> testPaths,
+            List<Task> stillToRun) {
         if (task == null || stillToRun == null || !result.red() || !result.compileFailure()
                 || result.missingTypes().isEmpty() || testPaths.isEmpty()) {
             return result;
@@ -5777,15 +5842,56 @@ public class GreenfieldWorkflow {
             return result;
         }
         AcceptanceCompileErrors.Reading reading = MiscompiledAcceptanceTest.read(
-            target.localRoot().orElse(null), result.compileOutput(), testPaths, stillToRun);
+            tree, result.compileOutput(), testPaths, stillToRun);
         List<String> supplied = new ArrayList<>();
         for (AcceptanceCompileErrors.DependencyNeed need : reading.dependencyNeeds()) {
+            if (need.undeclared()) {
+                continue; // nobody may declare it: still missing for every question after this
+            }
             supplied.add(need.packageName());
             for (String type : need.types()) {
                 supplied.add(need.packageName() + "." + type);
             }
         }
         return result.withoutMissing(supplied);
+    }
+
+    /**
+     * Gives the task its module's build file when its test does not compile only because that
+     * file does not declare a library the test uses, and no task still to run may write it
+     * (section 111; the rule and its reasons are in {@link UndeclaredDependencies}). Asked before
+     * any verdict on the red state, so every reading after it sees a task that may add the
+     * declaration, and {@link #provideDependencyNeeds} tells that task's workers what to add.
+     *
+     * @return true when the task's write set grew
+     */
+    private boolean grantUndeclaredBuildFiles(Run run, Path tree, RedChecker.RedCheckResult result,
+                                              Task task, List<Task> stillToRun) {
+        if (tree == null || result == null || !result.red() || !result.compileFailure()
+                || task.authoredTestPaths().isEmpty()) {
+            return false;
+        }
+        AcceptanceCompileErrors.Reading reading = MiscompiledAcceptanceTest.read(tree,
+            result.compileOutput(), task.authoredTestPaths(),
+            stillToRun == null || stillToRun.isEmpty() ? List.of(task) : stillToRun);
+        List<String> granted = UndeclaredDependencies.grantable(reading, task, tree, protectedPaths);
+        if (granted.isEmpty()) {
+            return false;
+        }
+        String note = UndeclaredDependencies.note(task, reading, granted);
+        task.setWriteSet(UndeclaredDependencies.grown(task, granted));
+        try {
+            artifactStore.saveTask(task);
+        } catch (RuntimeException e) {
+            log("Could not save the grown write set of task '" + task.title() + "': "
+                + e.getMessage());
+        }
+        log("Red-check: " + note);
+        if (run != null) {
+            run.carryWarning(new CarriedWarning("what a task may write",
+                run.state() == null ? "" : run.state().name(), note, Instant.now()));
+        }
+        return true;
     }
 
     /**
@@ -5806,7 +5912,8 @@ public class GreenfieldWorkflow {
                     owner = candidate;
                 }
             }
-            String artifact = librarian == null ? null
+            String artifact = need.artifact() != null ? need.artifact()
+                : librarian == null ? null
                 : librarian.libraryTypes().declaringArtifact(need.packageName(), need.types())
                     .orElse(null);
             String instruction = dependencyInstruction(need, artifact);
@@ -6031,6 +6138,16 @@ public class GreenfieldWorkflow {
         }
         String fixAndRetry = "\n\nFix the test - look up whatever this shows you guessed - and "
             + "call compile_test again.";
+        if (result.red() && result.unchecked()) {
+            // Not "healthy" (section 111): nothing compiled a line of the draft. The live build
+            // of 2026-10-14 was told HEALTHY here and parked three waves later on its imports.
+            return new TestAuthorTools.Verdict(true, "UNCHECKED: " + result.note() + ". Nothing "
+                + "compiled the draft, so its own lines - imports, names, calls - are not checked "
+                + "yet. They are checked when this task's wave starts, on the tree that wave is "
+                + "cut from, which has build files; a fault in your own lines then comes back to "
+                + "you with the compiler's output. Look up every name you use before you hand "
+                + "it in with report_done.");
+        }
         if (result.red()) {
             String[] unrunnable = browserOnlyFailure(result);
             if (unrunnable != null) {
@@ -6146,6 +6263,31 @@ public class GreenfieldWorkflow {
                                Task task, Run run, String waveBase, List<Task> stillToRun) {
         String who = task == null ? "The acceptance tests" : "Task '" + task.title() + "': its tests";
         RedChecker.RedCheckResult result = redCheck(target, spec, task, stillToRun);
+        if (result.unchecked() && task != null) {
+            // Written before any build file existed (section 111): red by construction, and not
+            // one of its lines compiled. Said as such, and checked when its wave starts.
+            if (waveBase == null && run != null) {
+                uncheckedTests.computeIfAbsent(run.id(),
+                    id -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(task.id());
+            }
+            log("Red-check for task '" + task.title() + "': its test is UNCHECKED - "
+                + result.note() + ". Nothing has compiled its own lines; it is checked on the "
+                + "tree its wave is cut from, before that wave is dispatched"
+                + (waveBase == null ? "" : " (that tree has no build file either: its first "
+                    + "compile is its candidates' verification)"));
+            return RedGate.OK;
+        }
+        if (waveBase != null && task != null && run != null && uncheckedTests.getOrDefault(run.id(), Set.of())
+                .contains(task.id())) {
+            uncheckedTests.get(run.id()).remove(task.id());
+            log("Red-check for task '" + task.title() + "': its test was written before any build "
+                + "file existed and is compiled here for the first time, on " + waveBase);
+        }
+        if (task != null && grantUndeclaredBuildFiles(run, target.localRoot().orElse(null), result,
+                task, stillToRun)) {
+            result = withoutSuppliedPackages(target.localRoot().orElse(null), result, task,
+                task.authoredTestPaths(), stillToRun);
+        }
         if (result.red() && task != null) {
             // RED, BUT NOT A RED ANY CODE CAN TURN GREEN (harness run 37, 2026-09-25). The test ran
             // and died with UnsatisfiedLinkError, or on a browser runtime class this JVM cannot

@@ -11554,3 +11554,128 @@ check that the last stop reason is `ROUND_QUIET` now checks the ordinal),
 - FINAL_INTEGRATION of an ended build stops only between stages and inside a repair round.
 - The listener registry is static and per process. A build ended by another process is seen
   through `endedInStore` only where the swarm looks at the store.
+
+## 111. A test written before any build file existed parked its wave on its own imports, and the message blamed the test (live local build, 2026-10-14)
+
+**What happened.** A project built from an empty folder, three tasks in three waves: the shared
+module (which wrote the root build file and the shared one), the browser client, the server.
+The server task's acceptance test was written at TEST_AUTHORING, when the tree had no build file:
+its `compile_test` answered "HEALTHY", though nothing had compiled a line of it. At the start of
+the server's wave the run parked:
+
+```
+BookCrudTest.java:16: static import only from classes and interfaces
+  -> everything this line names already exists, and the test uses it in a way it does not
+     accept; no task in this plan promises to change that signature ...
+```
+
+Lines 16 and 17 were `import static org.junit.jupiter.api.Assertions.assertEquals;` and
+`...assertTrue;`, correct Java. The test author was sent that text once, could not fix it, and the
+supervisor was offered only "retry".
+
+**The real cause.** The server module's build file on the progress branch declared no dependency
+at all: only its parent and its artifact id. A worker of the shared task had written it, outside
+that task's write set, because the root build file lists the module and the reactor needs it to
+exist. So JUnit, the shared module, the database library and the CDI annotations were all
+missing from the server's test classpath. javac reports such an import as `package ... does not
+exist`, and a static import from it, on the same line, also as `static import only from classes
+and interfaces`. The server task wrote the module's whole `src/main/java`, and "could a task
+create package `org.junit.jupiter.api`?" answered yes by the fail-open reading of a source root,
+so the missing-dependency rescue (live run 64) was skipped. What was left were javac's follow-on
+errors: each name imported from those packages read as "not imported, a helper nobody wrote", and
+the static-import error read as a misuse of code that exists.
+
+**The reading now** (`AcceptanceCompileErrors.classify` with a library lookup,
+`MiscompiledAcceptanceTest.read`):
+
+- A missing package a known library holds is a missing build declaration, never a type a task
+  creates, whatever a write set holds. Known means `LibraryPackages` (section 109): the jar of an
+  artifact a build file of the tree declares or manages holds classes in it. One more source: the
+  test framework the product's acceptance tests are written in (the test author is told to write
+  JUnit 5 and assert with its `Assertions`), read from the `junit-jupiter-api` jar of the local
+  repository, declared as `org.junit.jupiter:junit-jupiter`. Packages come from jars, never from
+  the names.
+- Such a need names the build file of the test's module and the artifact. When a task still to
+  run may write that file, it is told which artifact to add (live run 64, now with the artifact).
+  When none may, the need has no owner (`Reading.undeclared()`), and it is not a broken test.
+- Errors that follow from a missing package take its verdict. "Follow" is read from the
+  compiler's file and line and from the test's own import lines: another error on the import line,
+  a type imported from the package, a member statically imported from it. A declarable dependency
+  explains all of them. A broken package makes each say "this follows from line N", never "already
+  exists". A package a task may still create explains the second error on its own import line; a
+  name imported from it keeps its own verdict, said as "imported from `p`, a package the compiler
+  could not find on this module's classpath", not "not imported". A misuse error on a line that
+  also has an absence is never called a misuse. The decision uses javac's location (file and
+  line) and the test's import lines, not the words of a message. The classifier has only the
+  build tool's printed output, so the error kinds are read from it as before.
+
+**Who adds the declaration** (`UndeclaredDependencies`,
+`GreenfieldWorkflow.grantUndeclaredBuildFiles`). The task whose test it is gets its module's
+build file added to its write set, and only that file, and its instructions say which artifact to
+declare. Asked first in the red check, at TEST_AUTHORING and at wave start, before any verdict.
+Why this and not the other two:
+
+- The test goes in the module of the task's own main sources (section 109), so that build file is
+  the one that must declare everything the task's code and test use. In this build the server
+  code needed three libraries the file did not name either, so the server task's workers had to
+  be able to write it whatever the test said.
+- A build repair of the task that wrote the file would rebuild a merged, verified wave to add a
+  line the next task is about to need.
+- The test author may write test sources only; a test-scope-only write could not add what the
+  main code needs.
+
+Workers still cannot change an acceptance test or the verification contract: `PathPolicy`
+refuses the task's acceptance test directory and `.swarmcoder/` before it reads any write set,
+and a build file is granted only when the policy, given the grown write set, allows it (a module
+the operator locked is never granted). The grant is logged and carried on the run as a warning.
+A build file that is not on the tree, or is locked, is not granted: the missing package's errors
+are then broken, saying which build file lacks which library.
+
+**A test whose own lines are wrong** still goes back to its author once, at wave start, with the
+compiler's output on the wave's tree, as before (live run 62); its `compile_test` compiles on that
+tree. Only a correction that still does not compile parks.
+
+**A park offers more than retry.** A stop at the start of a wave on one task's own test now
+offers `retest` for that task (section 86) as well as `retry`. A retest of a task that has no
+candidate yet (its wave never started) commits the corrected test and leaves the task to the
+stage, which checks the test at the start of the wave and builds it; it no longer stops on "no
+candidate to verify again".
+
+**Unchecked tests.** The red check's "red by construction" result (no build file yet) is now
+`RedCheckResult.unchecked()`. The test author's `compile_test` says "UNCHECKED", not "HEALTHY",
+and that the lines are checked when the wave starts. The red check logs each such test as
+unchecked and, at its wave start, that it is compiled there for the first time. The existing
+check at every wave after the first does the checking; nothing new runs. A first-wave task's test
+over an empty folder has no tree with build files before its candidates; its first compile is
+their verification, as before.
+
+**Tests.** `AMissingTestDependencyIsNamedAsSuchTest` (real javac): the live errors are a library
+named with its build file and artifact, never "already exists"; without library knowledge the
+follow-on errors are still not called a misuse; the task's build file is grantable while its
+test and the contract stay refused and a locked module is not granted; a task owning the build
+file is told the artifact; a real misuse of an existing type is still one.
+`ATestThatMeetsItsTreeAtWaveStartTest` (two waves, scripted model): the server's build file
+declares nothing, the server task is given it and told the artifact, nothing goes back to the
+test author, and the wave is dispatched; a test whose own line misuses a library goes back to
+its author with the compiler's output, and the park that follows offers `retest`. Also run:
+`AMissingDependencyATaskCanAddIsAHealthyRedTest`, `ACompileErrorATaskWillCureIsNotABrokenTestTest`,
+`AMisusedExistingTypeIsABrokenTestNotARedStateTest`, `AMisusedExistingTypeGoesBackToTheTestAuthorTest`,
+`AMisusedExistingTypeFoundAtWaveStartGoesBackToTheTestAuthorTest`,
+`ATestInventingALibraryMethodIsBrokenTest`, `TheRedCheckSeesPastTypesNotWrittenYetTest`,
+`AStoryAlreadyMetIsFoundAtItsFirstPassingDraftTest`, `AnAcceptanceTestGoesInTheModuleOfItsTaskTest`,
+`AProjectWithNoContractIsGivenOneTest`, `ACorrectedTestThatErrorsInItsSetUpGoesBackToItsAuthorTest`,
+`ARepairPromptListsTheLibraryTypesRealMembersTest`.
+
+**Not done, not checked.**
+
+- A package no build file of the tree declares and no jar of the local repository holds (in this
+  build, the database library's network package was in no local jar) is not recognised as a
+  library. Its imported names are then broken, said as imported from a package the classpath
+  lacks; the test goes back to its author once and the run may park, now offering `retest`.
+  The librarian's reference checkouts (`LibraryTypes.declaringArtifact`) are not asked here.
+- A sibling module the test needs (the shared module) is not a library jar; its package is read
+  as one a task may create, as before.
+- Gradle build files: library packages are not recognised (as in section 109).
+- A worker may still write a build file outside its task's write set (non-lethal, recorded).
+  That is how the server's empty build file was written; nothing here changes it.
+- Nothing was run against a model or in a container. The live run was not resumed.
