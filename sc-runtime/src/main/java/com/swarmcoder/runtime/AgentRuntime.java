@@ -309,6 +309,13 @@ public interface AgentRuntime {
     @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
     @java.lang.annotation.Target(java.lang.annotation.ElementType.METHOD)
     @interface RunAgain {
+        /**
+         * True when the tool runs the same thing whatever it is given, so ANY later call of
+         * it replaces an earlier result, not only one with the same arguments (section 114:
+         * a worker's {@code verify} runs the verification contract's commands, which no
+         * argument changes).
+         */
+        boolean whateverTheArguments() default false;
     }
 
     /**

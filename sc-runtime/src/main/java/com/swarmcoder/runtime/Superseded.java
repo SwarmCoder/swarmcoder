@@ -110,8 +110,9 @@ final class Superseded {
     static Result shorten(List<Message> messages, List<AgentRuntime.ToolBinding> tools,
                           List<Now> now) {
         Set<String> runAgain = new HashSet<>();
+        Set<String> anyArguments = new HashSet<>();
         Map<String, String> draftOf = new HashMap<>();
-        declared(tools, runAgain, draftOf);
+        declared(tools, runAgain, anyArguments, draftOf);
         if ((runAgain.isEmpty() && draftOf.isEmpty()) || messages == null || messages.isEmpty()) {
             return unchanged(messages);
         }
@@ -156,7 +157,10 @@ final class Superseded {
         Map<String, String> targetOf = new HashMap<>();
         for (Seen seen : calls) {
             if (runAgain.contains(seen.tool)) {
-                runs.computeIfAbsent(seen.tool + "\n" + seen.args, key -> new ArrayList<>())
+                // A tool that runs the same thing whatever it is given is replaced by any
+                // later call of it (section 114).
+                String asked = anyArguments.contains(seen.tool) ? "" : seen.args;
+                runs.computeIfAbsent(seen.tool + "\n" + asked, key -> new ArrayList<>())
                     .add(seen);
             }
             String parameter = draftOf.get(seen.tool);
@@ -264,7 +268,7 @@ final class Superseded {
 
     /** Which tools are run again, and which parameter of which tool carries a draft. */
     private static void declared(List<AgentRuntime.ToolBinding> tools, Set<String> runAgain,
-                                 Map<String, String> draftOf) {
+                                 Set<String> anyArguments, Map<String, String> draftOf) {
         if (tools == null) {
             return;
         }
@@ -272,8 +276,12 @@ final class Superseded {
             if (tool == null || tool.method() == null) {
                 continue;
             }
-            if (tool.method().isAnnotationPresent(AgentRuntime.RunAgain.class)) {
+            AgentRuntime.RunAgain again = tool.method().getAnnotation(AgentRuntime.RunAgain.class);
+            if (again != null) {
                 runAgain.add(tool.name());
+                if (again.whateverTheArguments()) {
+                    anyArguments.add(tool.name());
+                }
             }
             for (Parameter parameter : tool.method().getParameters()) {
                 if (parameter.getType() == String.class

@@ -510,7 +510,15 @@ public class Librarian {
         StringBuilder rendered = new StringBuilder();
         // Read once, so one brief is sized by one room even if a caller resizes mid-run.
         MaterialBudget room = workerRoom;
+        Optional<MirroredFile> mirrored = Optional.empty();
         try {
+            // The file the architect's findings are excerpts of, named first (section 114).
+            mirrored = mirroredFile(task);
+            mirrored.ifPresent(file -> {
+                log.info("task '{}' mirrors {} ({} lines, {} characters): named at the top of "
+                    + "its brief", task.title(), file.address(), file.lines(), file.chars());
+                rendered.append(file.render());
+            });
             List<LibraryDoc> all = ManifestParser.parse(repoRoot);
             libraries.addAll(all.subList(0, Math.min(all.size(), MAX_LIBRARIES)));
             prewarmDocs(libraries);
@@ -542,6 +550,9 @@ public class Librarian {
             // whether there is one. See WORKED_EXAMPLE_CHARS for what it displaces and why.
             String worked = workedExample(repoRoot, task,
                 Math.min(room.chars(WORKED_EXAMPLE_CHARS), WORKED_EXAMPLE_CEILING), change);
+            if (mirrored.isPresent() && THE_ARCHITECT_COVERED_IT.equals(worked)) {
+                worked = THE_ARCHITECT_COVERED_IT_FROM_ONE_FILE;
+            }
             boolean haveExample = !worked.isBlank();
 
             // The two documentation channels. The MAP is the catalogue — names and titles only,
@@ -825,6 +836,145 @@ public class Librarian {
         }
         return true;
     }
+
+    /**
+     * One file the architect's findings for a task are excerpts of, as a worker names it.
+     *
+     * @param address  the file as a worker's {@code read} takes it
+     * @param lines    its lines
+     * @param chars    its characters
+     * @param excerpts how many of the task's findings with code are excerpts of it
+     */
+    public record MirroredFile(String address, int lines, long chars, int excerpts) {
+
+        /** The block at the top of the task's brief (section 114). */
+        public String render() {
+            return "### The file this task mirrors\n"
+                + excerpts + " of the architect's findings in your task are excerpts of one "
+                + "file. Read it ONCE, whole, before you write, and build this task after it: "
+                + "read " + address + " - " + lines + " lines, "
+                + String.format(java.util.Locale.ROOT, "%,d", chars) + " characters. It is not "
+                + "pasted here; one read is served to every candidate of this task.\n";
+        }
+    }
+
+    /**
+     * The file a task mirrors, when the architect's findings for it are excerpts of one file
+     * (section 114): at least two of its findings with code came from lookups of that file, and
+     * more than half of them did. Read from each finding's recorded source - a file's address, or
+     * a type that the graph declares exactly once - never from its sentence. Empty otherwise.
+     *
+     * <p>Why: the client task's four candidates read the same 489-line example screen 28 times
+     * (about 1.08 million tokens carried) while their brief said no other example was pasted,
+     * and the findings they were given were excerpts of that very file. A file named once, with
+     * its size, is read once and served from the shared answer store; pasting it whole into
+     * the opening would send it again on every call.
+     */
+    public Optional<MirroredFile> mirroredFile(Task task) {
+        List<com.swarmcoder.domain.DesignFinding> findings = task == null ? List.of()
+            : task.architectFindings();
+        java.util.Map<String, Integer> fromFile = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Path> onDisk = new java.util.HashMap<>();
+        int excerpts = 0;
+        for (com.swarmcoder.domain.DesignFinding finding : findings) {
+            if (finding == null || !finding.hasSnippet()) {
+                continue;
+            }
+            excerpts++;
+            String[] file = fileOfSource(finding.source());
+            if (file == null) {
+                continue;
+            }
+            String key = file[0] + "\n" + file[1];
+            fromFile.merge(key, 1, Integer::sum);
+            onDisk.putIfAbsent(key, Path.of(file[2]));
+        }
+        String best = null;
+        int most = 0;
+        for (java.util.Map.Entry<String, Integer> entry : fromFile.entrySet()) {
+            if (entry.getValue() > most) {
+                best = entry.getKey();
+                most = entry.getValue();
+            }
+        }
+        if (best == null || most < 2 || most * 2 <= excerpts) {
+            return Optional.empty();
+        }
+        try {
+            String text = Files.readString(onDisk.get(best));
+            String[] parts = best.split("\n", 2);
+            String address = "project".equals(parts[0]) ? parts[1]
+                : "/reference/" + parts[0] + "/" + parts[1];
+            return Optional.of(new MirroredFile(address, (int) text.lines().count(),
+                text.length(), most));
+        } catch (Exception unreadable) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * {root label, path in the root, file on disk} of the file a lookup was about, or null.
+     * The lookup is {@code <tool> <argument>}; the argument is a role's address
+     * {@code <root>/<path>} with an optional {@code #member} or {@code :lines}, or a type name
+     * the graph declares once.
+     */
+    private String[] fileOfSource(String source) {
+        if (source == null || curator == null) {
+            return null;
+        }
+        String text = source.strip();
+        int space = text.indexOf(' ');
+        String argument = space < 0 ? "" : text.substring(space + 1).strip()
+            .replace((char) 92, '/');
+        int hash = argument.indexOf('#');
+        if (hash >= 0) {
+            argument = argument.substring(0, hash);
+        }
+        argument = argument.replaceFirst(":[0-9][0-9,\\s-]*$", "").strip();
+        if (argument.isEmpty()) {
+            return null;
+        }
+        if (argument.startsWith("/reference/")) {
+            argument = argument.substring("/reference/".length());
+        }
+        int slash = argument.indexOf('/');
+        if (slash > 0) {
+            String label = argument.substring(0, slash);
+            String path = argument.substring(slash + 1);
+            for (KnowledgeCurator.Root root : curator.roots()) {
+                if (root != null && label.equals(root.label()) && root.path() != null) {
+                    Path file = root.path().resolve(path);
+                    return Files.isRegularFile(file)
+                        ? new String[] {label, path, file.toString()} : null;
+                }
+            }
+            return null;
+        }
+        SemanticIndex index = curator.semanticIndex();
+        if (index == null) {
+            return null;
+        }
+        List<SemanticIndex.Declaration> declared = index.declarationsOf(argument);
+        if (declared.size() != 1) {
+            return null;
+        }
+        SemanticIndex.Declaration only = declared.get(0);
+        for (KnowledgeCurator.Root root : curator.roots()) {
+            if (root != null && only.rootLabel().equals(root.label()) && root.path() != null) {
+                Path file = root.path().resolve(only.file());
+                return Files.isRegularFile(file)
+                    ? new String[] {only.rootLabel(), only.file(), file.toString()} : null;
+            }
+        }
+        return null;
+    }
+
+    /** {@link #THE_ARCHITECT_COVERED_IT} when the file the findings come from is named above. */
+    static final String THE_ARCHITECT_COVERED_IT_FROM_ONE_FILE = "\n### How to build this is in "
+        + "your task\nThe architect looked up how this project and its framework do what this "
+        + "task builds; its findings, with the code it found, are in your task above, and the "
+        + "file they are excerpts of is named at the top of this brief. Read that file once; no "
+        + "other example is pasted here.\n";
 
     /**
      * True when every entry of the write set is a file the tree already holds: read from the

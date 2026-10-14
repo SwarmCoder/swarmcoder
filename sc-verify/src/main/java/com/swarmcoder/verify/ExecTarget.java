@@ -40,6 +40,15 @@ public interface ExecTarget {
     ExecResult exec(String command, int timeoutSeconds) throws IOException;
 
     /**
+     * True when {@link #exec} hands its command to a POSIX shell ({@code sh} or {@code bash}),
+     * so shell options such as {@code pipefail} mean something to it. False only for
+     * {@link LocalProcessExecTarget} on Windows, which runs {@code cmd.exe} (section 114).
+     */
+    default boolean posixShell() {
+        return true;
+    }
+
+    /**
      * Reads a workspace-relative file, or null if it does not exist.
      * Content beyond maxBytes is truncated.
      */

@@ -11859,3 +11859,128 @@ refuses and caps nothing that was not refused or capped before.
 - The workers' opening still says "ONLY an artifact your knowledge brief lists as available";
   it is another worker's to change.
 - Nothing was run against a model or in a container. The full suite was not run.
+
+## 114. A failing build looked passed, a plan made its first task impossible, and the workers' opening carried other tasks' facts (call-by-call audit of the workers of one local build of an empty project, 2026-10-14)
+
+**What was observed.**
+
+1. 12 of 34 worker builds piped `mvn` into `tail` or `grep` through `exec` and were answered
+   `exit=0` while the output held `[ERROR]`: a shell gives a pipeline its last stage's exit.
+   All four first-round candidates of task 1 reported done; verification
+   (`mvn -o -B -q test-compile` from the root) then failed. Section 98's cut of a repeated
+   build seldom fired, since workers varied `cd` prefixes and `tail -30`/`-40`.
+2. Task 1 was told to write a root build file listing three modules, two of which later tasks
+   create. The contract's compile from the root then fails on a listed module that does not
+   exist, whatever the candidate does. The repair round cost 395,000 tokens.
+3. The opening was 44% of all worker input. Task 3 was sent 8.1K characters of the architect's
+   findings about types other tasks build, on all 86 of its calls; every worker was sent
+   SwarmCoder's own locked files (`PathPolicy.TRUST_KERNEL`, paths of the product's
+   repository); one opening carried the same dependency line three times.
+4. The client task's four candidates read the same 489-line example screen 28 times (about
+   1.08 million tokens carried). Their brief said "no other example is pasted here"; the
+   findings they were given were excerpts of that file.
+
+**What changed.**
+
+*1. A pipeline fails when a stage fails, and `verify` runs what verification runs.*
+
+- `exec` (`WorkerToolbox`, `PipelineFailure`): a command holding a `|` that is not `||` is
+  run with `pipefail` set first, when the shell has the option (tried in a subshell, since a
+  POSIX `sh` exits on an unknown option; a shell without it prints that the exit is the last
+  stage's). The exit line says `(pipefail: a failing stage fails the command)`. Decided from
+  the command's syntax, never from what it prints. `ExecTarget.posixShell()` is false only for
+  the local target on Windows (`cmd.exe`), whose exit line says the exit is the last stage's.
+- `verify` (new worker tool, offered when the project's folder has a contract, right after
+  `exec`; the same list for every candidate): the contract's compile commands and, when the
+  task has authored acceptance tests, its acceptance commands, run through
+  `CommandPipelineVerifier` on the worker's own target from the root of the checkout, the
+  contract read from the project's folder (`VerifySpecLoader.loadTrusted`), never from the
+  checkout. Answer: `verify: PASSED` or `verify: FAILED`, the commands, the reason as
+  `Verdicts` gives it, acceptance counts, both ends of the log (3,000 characters). The
+  existing-test, rule, lint and browser stages stay verification's. It never changes the
+  contract. Each command is held to the worker's exec limit (300 s).
+- `@RunAgain(whateverTheArguments = true)` (`AgentRuntime`, `Superseded`): any later call of
+  such a tool replaces an earlier one's result, whatever the arguments. On `verify`, whose one
+  argument is ignored (it exists because a tool with no parameter is not offered by every
+  chat template).
+- The workflow rules name `verify` where they said "by running builds/tests with exec".
+
+*2. An aggregating build file lists only the modules that exist when its task ends.*
+Decided: put right in the plan, said as notes, not sent back. The plan's structure decides the
+remedy completely, and section 76 found that a planner told to fix what the check can decide
+writes its whole plan again. `ModulesAreListedAsTheyAreMade`, run by `TaskGraphValidator`
+after the type order, for every draft and the accepted plan:
+
+- For each new module build file of the plan, the `pom.xml` of the nearest folder above it
+  (planned or on disk) must list it. When the module is created by the aggregator's task or a
+  task that ends before it, nothing is done.
+- Otherwise: the module's task runs after the aggregator's (an order is added when there was
+  none), the aggregator is put in its write set (so section 112's guard lets the change
+  through), and its instructions say to add the module to the aggregator's `<modules>` when it
+  creates the module's build file. The aggregator's task is told which modules it lists (those
+  that exist when it ends, or none yet) and which it must not.
+- An aggregator on disk: a new module's task holds it and is told to add itself.
+- Two tasks of one module that both hold its build file (`BuildFilesInTheJob`) are both
+  ordered and told. The one objection: a new aggregating build file two unordered tasks both
+  write.
+- Lines are appended once; a second run changes nothing. Notes carry `module list: `.
+
+*3. The opening carries only what is the task's own.*
+
+- `ArchitectHandover.forTask`: a finding about the whole project whose recorded source is
+  about another task's work goes by its sentence and lookup only (`withoutSnippet`), after the
+  task's own findings. "Another task's work": the type or file the source names (its file
+  stem, or a type name's simple name) is delivered or written only by tasks that are not this
+  task, not tasks it waits for, and not tasks delivering a contract its own contracts name; or
+  the source's path runs through a plan module folder only such tasks write. A source that
+  names nothing of the plan leaves the finding whole. Findings about a contract (section 73's
+  steps 1, 2, 4 and 5) are unchanged. The handover line says how many went by title.
+- `SwarmDispatcher.lockedPathsOfTheProject`: the LOCKED sentence names only operator locks that
+  exist in the project's folder or cover or lie under the task's write set. Every write is
+  still checked against the whole list.
+- `SwarmDispatcher.withoutRepeatedLines`: a line of the task's instructions that repeats an
+  earlier one exactly is left out. Lines under 20 characters stay (braces in code).
+
+Measured by `AWorkersOpeningCarriesOnlyWhatIsItsOwnTest` on a test project shaped like the
+audited one (one own finding, three about client and shared types, the trust kernel plus two
+operator locks, one line said three times), the worker's shared opening without brief and
+rules: **13,846 characters before, 5,094 after** (findings about other tasks 8,468 to 358,
+locked list 428 to 18, repeated line 342 to 114).
+
+*4. The file a task mirrors is named at the top of its brief, with its size.* Decided: when at
+least two of a task's findings with code, and more than half of them, came from lookups of one
+file (`Librarian.mirroredFile`, read from each finding's recorded source: an address, or a
+type the graph declares once), the brief begins with "### The file this task mirrors ... read
+`/reference/<root>/<path>` - N lines, C characters", in section 105's named-lookup form. The
+file is not pasted: the opening is sent on every call, while a read made once is served to
+every candidate from the shared answer store. The "covered by the architect" paragraph then
+points at it instead of saying no example is pasted.
+
+**Tests.** `AWorkerRunsWhatVerificationRunsTest` (sc-swarm: the wrapped pipeline, its exit
+line, `||` left alone, `false | cat` in a real `sh` where there is one; `verify` runs the
+contract's compile and the task's acceptance and not the existing tests, answers FAILED with
+the reason and PASSED, only the compile for a task without tests, not offered without a
+contract). `WhatALaterCallReplacedIsCutToANoteTest` gained
+`aToolThatRunsTheSameThingWhateverItIsGivenIsReplacedByAnyLaterCall` (sc-runtime).
+`AnAggregatingBuildFileListsOnlyModulesThatExistTest` (sc-workflow).
+`AFindingAboutAnotherTasksWorkGoesByTitleTest` (sc-workflow) and
+`AWorkersOpeningCarriesOnlyWhatIsItsOwnTest` (sc-swarm).
+`ATaskThatMirrorsOneFileIsToldItsNameAndSizeTest` (sc-knowledge). Run with them and unchanged:
+`WorkerScopeIsUnchangedTest`, `WorkerToolboxTest`, `TaskGraphValidatorTest`,
+`TheArchitectHandsItsFindingsToTheWorkersTest`, `LibrarianTest`, `BuildFilesInTheJobTest`,
+`PlanOrdersTasksByTheirTypesTest`, `AnEdgeNoCodeNeedsDoesNotCountAsBuildingOnATaskTest`,
+`APlanDraftIsPutRightWhereItsFactsDecideTest`.
+
+**Not done, not checked.**
+
+- Nothing was run against a model or in a container. Whether workers call `verify` before
+  `report_done`, and how often the audited failure recurs, is for the next run's report.
+- A worker's `known_about` reads the project's store, not the run's architect findings
+  (section 106), and the worker lookups belong to another change; a finding sent by title
+  therefore names its own source lookup to read the rest, not `known_about`.
+- `verify` in a container runs under the worker's `bash`; verification runs under `sh`.
+- Gradle: a settings file's `include` is not checked by finding 2.
+- Two tasks of one module both told to add the module to the aggregator can both add it; the
+  merge decides.
+- The mirrored file's size is that of the reference file on disk when the brief is assembled.
+- The full suite was not run.
