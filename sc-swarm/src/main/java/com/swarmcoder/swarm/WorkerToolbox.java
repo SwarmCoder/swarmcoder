@@ -593,6 +593,7 @@ public final class WorkerToolbox {
                 : "Do not work APIs out from compiled classes. " + referenceHint
                   + " Call lookup_api with a class name or a topic and you will get the real "
                   + "documentation.")
+            + filesToWrite()
             + " If an API is genuinely beyond you, call ask_expert with the exact question — that "
             + "is what it is for and asking is not a failure. If you do not know how to start a "
             + "file, call request_skeleton with the type name."
@@ -605,12 +606,49 @@ public final class WorkerToolbox {
                 ? " This is the last warning: at "
                   + EarlyKillEnforcer.INVESTIGATION_TOOL_CALLS_BEFORE_KILL
                   + " tool calls without a change this attempt is stopped and thrown away."
-                : "");
+                // The first notice says the same counts (section 113): the second one, which
+                // said them, was followed by a write within one turn; the first, which did not,
+                // was not. Nothing here is refused or capped that was not already.
+                : " At " + EarlyKillEnforcer.INVESTIGATION_TOOL_CALLS_BEFORE_SECOND_NUDGE
+                  + " such calls in a row, reading pauses until you write; at "
+                  + EarlyKillEnforcer.INVESTIGATION_TOOL_CALLS_BEFORE_KILL
+                  + " this attempt is stopped and thrown away.");
         appendSteer(steer.strip());
         log.warn("Worker in task '{}' has made {} tool calls without changing anything ({} of them "
             + "returned nothing); steering it to start (reference material: {})",
             task.title(), calls, fruitless, referenceHint.isBlank() ? "none" : referenceHint);
         return steer;
+    }
+
+    /** How many of the task's files a steering notice names before it counts the rest. */
+    static final int FILES_NAMED_IN_A_NOTICE = 8;
+
+    /**
+     * The files this task writes, each marked when it is not in the checkout yet, for the
+     * steering notice: what to write, not only that something should be (section 113).
+     */
+    private String filesToWrite() {
+        if (task.writeSet() == null || task.writeSet().isEmpty()) {
+            return "";
+        }
+        List<String> named = new ArrayList<>();
+        int missing = 0;
+        for (String entry : new java.util.TreeSet<>(task.writeSet())) {
+            boolean there;
+            try {
+                there = Files.exists(worktree.resolve(entry.replace('\\', '/')));
+            } catch (RuntimeException notAPath) {
+                there = true;
+            }
+            missing += there ? 0 : 1;
+            if (named.size() < FILES_NAMED_IN_A_NOTICE) {
+                named.add(entry + (there ? "" : " (not there yet)"));
+            }
+        }
+        int rest = task.writeSet().size() - named.size();
+        return " Your task writes " + String.join(", ", named)
+            + (rest > 0 ? " and " + rest + " more" : "")
+            + (missing > 0 ? "; " + missing + " of them do not exist yet." : ".");
     }
 
     /**
@@ -631,7 +669,7 @@ public final class WorkerToolbox {
     }
 
     private boolean isInformative(String result) {
-        String body = bodyOf(result);
+        String body = resultBody(result);
         if (body.isBlank()) {
             return false;
         }
@@ -647,7 +685,7 @@ public final class WorkerToolbox {
     }
 
     /** The content of a tool result, with exec's status line and read's error prefix removed. */
-    private static String bodyOf(String result) {
+    private static String resultBody(String result) {
         if (result == null) {
             return "";
         }
@@ -807,7 +845,7 @@ public final class WorkerToolbox {
 
     /**
      * What a timed-out command's result says, right after the {@code exit=... (timed out)} line —
-     * the {@code (timed out)} substring stays first so {@link #bodyOf} still recognizes and
+     * the {@code (timed out)} substring stays first so {@link #resultBody} still recognizes and
      * discounts a timeout as uninformative regardless of what this sentence says.
      */
     private static String timeoutMessage(ExecResult result) {
@@ -1048,6 +1086,10 @@ public final class WorkerToolbox {
             return code.substring(0, code.length() - 1) + " To change it you do not need the "
                 + "file: replace_member and add_member change one member by name.]";
         }
+        String build = buildFileNote(path);
+        if (!build.isEmpty()) {
+            return build;
+        }
         if (!com.swarmcoder.knowledge.DocumentOutline.isDocument(path)) {
             return "";
         }
@@ -1060,6 +1102,29 @@ public final class WorkerToolbox {
         return outline.sections().size() >= 2 && note.length() * 10 <= text.length() ? note : "";
     }
 
+    /**
+     * What a whole read of a build file is answered with besides the file (section 113): the
+     * lookup of one part of it, and the lookup of which versions of a library resolve offline.
+     * Workers read 57 build files of the reference library and 46 of the project whole in one
+     * build, most of them to learn a dependency's coordinates and version.
+     */
+    static String buildFileNote(String path) {
+        if (path == null) {
+            return "";
+        }
+        String slashed = path.strip().replace((char) 92, '/');
+        int cut = slashed.lastIndexOf('/');
+        String name = slashed.substring(cut + 1);
+        if (!BUILD_FILES.contains(name)) {
+            return "";
+        }
+        String module = cut <= 0 ? "" : slashed.substring(0, cut);
+        String asked = module.isEmpty() ? "''" : module;
+        return "\n[One part of this build file is build_of " + asked + "#<part>: parent, "
+            + "properties, dependencies, build/plugins, or an artifactId. Which versions of a "
+            + "library the build can resolve offline: offline_artifacts <groupId:artifactId>.]";
+    }
+
     /** True once this worker has been told which queries answer what it asked its shell. */
     private volatile boolean shellReadNoted;
 
@@ -1067,7 +1132,9 @@ public final class WorkerToolbox {
         + "tree answers the same in fewer characters, for the reference material too: types_in "
         + "<folder or package> for what a place holds (its tests included), usages_of <Type> or "
         + "<Type>#<method> for where a name is used, body_of <Type> for one type's code without "
-        + "its comments, build_of <module> for a build file, resources_of <module> for its resource files, doc_section for a document, acceptance_test for the test your task must satisfy.]";
+        + "its comments, build_of <module> or <module>#<part> for a build file, "
+        + "offline_artifacts <groupId[:artifactId]> for the libraries and versions the offline "
+        + "repository holds, resources_of <module> for its resource files, doc_section for a document, acceptance_test for the test your task must satisfy.]";
 
     /** One line per lookup, as a role's lookups are logged: what was asked and how much came back. */
     private void logLookup(String tool, String argument, String answer) {
@@ -1845,6 +1912,9 @@ public final class WorkerToolbox {
                         argument, apiLookup::sourceInTree)
                     : null;
             String fromTree = live != null ? live : apiLookup.tree(query, argument.strip());
+            if (live == null && "shape_of".equals(query) && apiLookup.answeredNothing()) {
+                fromTree = byTheRunsBuild(query, argument.strip(), fromTree);
+            }
             if (live != null) {
                 // The checkout's own type answered: say so when the name is others' too.
                 fromTree += apiLookup.othersNamed(argument.strip());
@@ -1879,6 +1949,9 @@ public final class WorkerToolbox {
         }
         try {
             String found = apiLookup.tree(query, argument.strip());
+            if ("find_symbol".equals(query) && apiLookup.answeredNothing()) {
+                found = byTheRunsBuild(query, argument.strip(), found);
+            }
             if ("find_symbol".equals(query)) {
                 // The project's server indexes the project at the run's base; a type an earlier
                 // task of this run added is in this checkout only (run 88: 13 such searches
@@ -1895,6 +1968,48 @@ public final class WorkerToolbox {
         } catch (Exception e) {
             return query + " unavailable: " + e.getMessage();
         }
+    }
+
+    /** The build files a checkout's own language server takes its libraries from. */
+    private static final List<String> BUILD_FILES = List.of("pom.xml", "build.gradle",
+        "build.gradle.kts");
+
+    /**
+     * A library type the project's tree and server found nothing of, asked again of this
+     * worker's own checkout when that checkout holds a build file the project does not - the
+     * run's build, merged by an earlier task (section 113). The checkout's server takes its jars
+     * from that build file. {@code nothing} is kept when it does not know the type either.
+     */
+    private String byTheRunsBuild(String query, String argument, String nothing) {
+        if (!apiLookup.languageServer() || !checkoutHasItsOwnBuild()) {
+            return nothing;
+        }
+        try {
+            ApiLookup.InCheckout asked = apiLookup.inCheckout(worktree, query, argument, null,
+                relative -> "nothing is written by a lookup");
+            String found = asked == null ? null : asked.answer();
+            return found == null || found.isBlank() ? nothing
+                : found.stripTrailing() + "\n(Read from the jars the build files of your checkout "
+                    + "name: the run's build, which the project's tree does not have yet.)\n";
+        } catch (RuntimeException e) {
+            return nothing;
+        }
+    }
+
+    /** True when the root of this checkout holds a build file that is not the project's. */
+    private boolean checkoutHasItsOwnBuild() {
+        for (String name : BUILD_FILES) {
+            Path file = worktree.resolve(name);
+            try {
+                if (Files.isRegularFile(file)
+                        && !Files.readString(file).equals(apiLookup.sourceInTree(name))) {
+                    return true;
+                }
+            } catch (IOException | RuntimeException unreadable) {
+                // not a build file this lookup can use
+            }
+        }
+        return false;
     }
 
     /**
@@ -2034,7 +2149,8 @@ public final class WorkerToolbox {
         return tree("shape_of", type);
     }
 
-    public String oneBodyOf(String member) {
+    /** {@code body_of}. The method has the tool's name, so an error about a call names it. */
+    public String bodyOf(String member) {
         return tree("body_of", member);
     }
 
@@ -2048,6 +2164,15 @@ public final class WorkerToolbox {
 
     public String resourcesOf(String where) {
         return tree("resources_of", where);
+    }
+
+    /**
+     * {@code offline_artifacts}: which artifacts and versions the offline Maven repository the
+     * build resolves from holds (section 113). The parameter name is the tool's schema.
+     */
+    public String offlineArtifacts(
+            @com.swarmcoder.runtime.AgentRuntime.MayBeOmitted String artifact) {
+        return tree("offline_artifacts", artifact == null ? "" : artifact);
     }
 
     public String usagesOf(String what) {
@@ -2218,10 +2343,12 @@ public final class WorkerToolbox {
     public List<ToolBinding> bindings() {
         try {
             Method shapeOf = WorkerToolbox.class.getMethod("shapeOf", String.class);
-            Method bodyOf = WorkerToolbox.class.getMethod("oneBodyOf", String.class);
+            Method bodyOf = WorkerToolbox.class.getMethod("bodyOf", String.class);
             Method typesIn = WorkerToolbox.class.getMethod("typesIn", String.class);
             Method buildOf = WorkerToolbox.class.getMethod("buildOf", String.class);
             Method resourcesOf = WorkerToolbox.class.getMethod("resourcesOf", String.class);
+            Method offlineArtifacts = WorkerToolbox.class.getMethod("offlineArtifacts",
+                String.class);
             Method usagesOf = WorkerToolbox.class.getMethod("usagesOf", String.class);
             Method acceptanceTest = WorkerToolbox.class.getMethod("acceptanceTest", String.class);
             Method docOutline = WorkerToolbox.class.getMethod("docOutline", String.class);
@@ -2272,7 +2399,7 @@ public final class WorkerToolbox {
                     this, shapeOf),
                 new ToolBinding("body_of",
                     "The text of ONE method, constructor, field or type, taken out by name with "
-                    + "its file and lines: Type#method, Type#Type for a constructor, "
+                    + "its file and lines. member is Type#method, Type#Type for a constructor, "
                     + "Type#field, Type#first,second for several members, Type for the whole "
                     + "type as code without comments and imports, or Type#import for its "
                     + "file's package and imports. Type is a simple name, a full name, or the "
@@ -2300,6 +2427,13 @@ public final class WorkerToolbox {
                     + "#dependencies, #build, or #<artifactId> for one plugin or dependency; "
                     + "several as #a,b.",
                     this, buildOf),
+                new ToolBinding("offline_artifacts",
+                    "Which libraries the build can use: the artifacts and versions in the "
+                    + "offline Maven repository it resolves from (it has no network, so nothing "
+                    + "else resolves). artifact is a groupId for its artifacts and versions, "
+                    + "groupId:artifactId for one artifact's versions, or an artifactId alone. "
+                    + "Use this instead of find or ls on the repository.",
+                    this, offlineArtifacts),
                 new ToolBinding("resources_of",
                     "A module's resource files (beans.xml, persistence descriptors, property "
                     + "files): the module lists them with sizes; <module>/<path under the "

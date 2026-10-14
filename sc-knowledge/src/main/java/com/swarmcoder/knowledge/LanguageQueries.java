@@ -253,6 +253,20 @@ public final class LanguageQueries {
     }
 
     /**
+     * {@code find_symbol} when the server names something, else null (section 113): the caller
+     * then says where it looked instead of only "0 type(s) match".
+     */
+    public String findSymbolOrNull(String name) {
+        LspResult result = server.workspaceSymbols(name);
+        return result.hits().isEmpty() ? null : render(result);
+    }
+
+    /** How many library jars the server reads now; -1 when it has not started. */
+    public int libraryJars() {
+        return server.libraryJars();
+    }
+
+    /**
      * {@code find_symbol}, with the tree asked when the server names nothing (run 86, section
      * 58): the server answered "0 type(s) match `ZeroZDbNode`." seven times in one session for a
      * library type the tree knew by its full name from the code that uses it. One question, one

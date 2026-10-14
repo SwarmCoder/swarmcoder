@@ -449,6 +449,13 @@ public class Librarian {
         return assembleBrief(repoRoot, task, null, null);
     }
 
+    /**
+     * The heading a brief gives the reference documents under, followed by a line that begins
+     * with their count and {@code " document(s)."}: what a worker's steering notice reads the
+     * number of documents from (section 113).
+     */
+    public static final String DOCUMENTS_HEADING = "### Reference documentation you can read";
+
     /** {@code -Dswarmcoder.brief.documentMap=true}: a brief lists the documents by name again. */
     public static final String DOCUMENT_MAP_PROPERTY = "swarmcoder.brief.documentMap";
 
@@ -551,7 +558,7 @@ public class Librarian {
             long documents = mapInBrief ? 0 : curator.documents().stream()
                 .filter(entry -> entry.kind() != FileKinds.Kind.META).count();
             if (documents > 0) {
-                rendered.append("\n### Reference documentation you can read\n")
+                rendered.append("\n").append(DOCUMENTS_HEADING).append("\n")
                         .append(referenceVersions())
                         .append(versionMismatch(libraries))
                         .append(documents).append(" document(s). doc_outline with an empty "

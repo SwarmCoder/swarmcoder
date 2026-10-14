@@ -173,7 +173,17 @@ public final class JdtLanguageServer implements LspService {
     private Process process;
     private JdtServer server;
     private Future<?> listening;
-    private final Client client = new Client();
+    private Client client = new Client();
+    /**
+     * The workspace's build files and their times when the libraries were last resolved
+     * (section 113): when it changes, the libraries are resolved again and, when they differ,
+     * the server is started again on them.
+     */
+    private String buildStamp = "";
+    /** What the last walk of the workspace found of its build files. */
+    private String walkedBuildStamp = "";
+    private static final Set<String> BUILD_FILES = Set.of("pom.xml", "build.gradle",
+        "build.gradle.kts");
     /** Every Java file's last-modified time as the server was last told, to notice changes. */
     private final Map<Path, Long> known = new HashMap<>();
     private long coldStartMillis = -1;
@@ -1312,6 +1322,9 @@ public final class JdtLanguageServer implements LspService {
     /** Tells the server which Java files appeared, changed or went since it was last told. */
     private void syncChanges() {
         Map<Path, Long> now = javaFiles();
+        if (!walkedBuildStamp.equals(buildStamp) && librariesChanged()) {
+            return;   // started again on the new libraries, with every file as it is now
+        }
         List<FileEvent> events = new ArrayList<>();
         for (Map.Entry<Path, Long> entry : now.entrySet()) {
             Long before = known.get(entry.getKey());
@@ -1335,6 +1348,7 @@ public final class JdtLanguageServer implements LspService {
 
     private Map<Path, Long> javaFiles() {
         Map<Path, Long> files = new HashMap<>();
+        Map<String, String> builds = new java.util.TreeMap<>();
         try {
             Files.walkFileTree(workspaceRoot, new SimpleFileVisitor<>() {
                 @Override
@@ -1346,8 +1360,12 @@ public final class JdtLanguageServer implements LspService {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (file.getFileName().toString().endsWith(".java")) {
+                    String name = file.getFileName().toString();
+                    if (name.endsWith(".java")) {
                         files.put(file, attrs.lastModifiedTime().toMillis());
+                    } else if (BUILD_FILES.contains(name)) {
+                        builds.put(file.toString(), attrs.lastModifiedTime().toMillis() + "/"
+                            + attrs.size());
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -1360,6 +1378,7 @@ public final class JdtLanguageServer implements LspService {
         } catch (IOException e) {
             log.debug("JDT LS: could not walk {}: {}", workspaceRoot, e.getMessage());
         }
+        walkedBuildStamp = builds.toString();
         return files;
     }
 
@@ -1555,6 +1574,7 @@ public final class JdtLanguageServer implements LspService {
                 libraries = List.of();
             }
             Map<Path, Long> files = javaFiles();
+            buildStamp = walkedBuildStamp;
             List<String> sourceFolders = sourceFolders(workspaceRoot, files.keySet());
             Path project = writeProject(sourceFolders);
             Map<String, Object> settings = settings();
@@ -1644,6 +1664,51 @@ public final class JdtLanguageServer implements LspService {
         } catch (Exception e) {                                                // noqa
             log.debug("JDT LS: could not delete {}: {}", workspaceData, e.toString());
         }
+    }
+
+    /**
+     * The build files changed since the libraries were resolved: resolves them again and, when
+     * they are not the same jars, starts the server again on them (section 113). A project made
+     * from nothing has no build file when its server starts, and a server given no jar answered
+     * "no type" for every library class all run long. True when the server was started again.
+     */
+    private boolean librariesChanged() {
+        String stamp = walkedBuildStamp;
+        List<Path> jars;
+        try {
+            List<Path> resolved = librarySource == null ? null : librarySource.get();
+            jars = resolved == null ? List.of() : List.copyOf(resolved);
+        } catch (RuntimeException e) {
+            jars = libraries;
+        }
+        buildStamp = stamp;
+        if (jars.equals(libraries)) {
+            return false;
+        }
+        log.info("JDT LS: the build files of {} changed and name {} library jar(s) where the "
+            + "server read {}; starting it again on them", workspaceRoot, jars.size(),
+            libraries.size());
+        try {
+            if (server != null && process != null && process.isAlive()) {
+                server.shutdown().get(5, TimeUnit.SECONDS);
+                server.exit();
+            }
+        } catch (Exception ignored) {
+            // it is being stopped either way
+        }
+        closeQuietly();
+        client = new Client();
+        if (!ensureStarted()) {
+            throw new IllegalStateException("the language server did not start again on the "
+                + "new libraries");
+        }
+        return true;
+    }
+
+    /** How many library jars the server reads now; -1 before it has started. */
+    @Override
+    public synchronized int libraryJars() {
+        return started ? libraries.size() : -1;
     }
 
     private void closeQuietly() {

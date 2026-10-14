@@ -57,6 +57,25 @@ public final class OfflineLibraryBrief {
     private final DeclarableArtifacts.Catalog catalog;
     private final List<LibraryDoc> declaredAcrossModules;
     private final String projectRules;
+    /** True for the brief of a project no build file of which names a library yet. */
+    private final boolean noBuildYet;
+
+    /**
+     * What a worker reads when no build file names a library yet - a project made from nothing
+     * (section 113). Its rules said "only an artifact your brief lists as available", the brief
+     * listed none, and the workers searched the offline repository with find 65 times. The
+     * brief now says how to ask instead of listing it: the repository holds thousands.
+     */
+    public static final String NO_BUILD_YET = "\n### Libraries the build can use\n"
+        + "No build file of this project names a library yet, so none is listed here. The build "
+        + "resolves offline: offline_artifacts with a groupId, a groupId:artifactId or an "
+        + "artifactId gives the artifacts and versions the offline repository holds. Declare "
+        + "only those, at a version it lists.\n";
+
+    /** The brief of a project no build file of which names a library yet. */
+    public static OfflineLibraryBrief noBuildYet() {
+        return new OfflineLibraryBrief(null, List.of(), "", true);
+    }
 
     /**
      * @param catalog               every artifact managed AND present offline
@@ -68,6 +87,13 @@ public final class OfflineLibraryBrief {
      */
     public OfflineLibraryBrief(DeclarableArtifacts.Catalog catalog,
                                List<LibraryDoc> declaredAcrossModules, String projectRules) {
+        this(catalog, declaredAcrossModules, projectRules, false);
+    }
+
+    private OfflineLibraryBrief(DeclarableArtifacts.Catalog catalog,
+                                List<LibraryDoc> declaredAcrossModules, String projectRules,
+                                boolean noBuildYet) {
+        this.noBuildYet = noBuildYet;
         this.catalog = catalog;
         this.declaredAcrossModules = declaredAcrossModules == null ? List.of()
             : List.copyOf(declaredAcrossModules);
@@ -116,6 +142,9 @@ public final class OfflineLibraryBrief {
      * model to get wrong. The sentence says so, in the one line where it can be acted on.
      */
     public String render() {
+        if (noBuildYet) {
+            return NO_BUILD_YET;
+        }
         List<DeclarableArtifacts.Artifact> offered = offered();
         if (offered.isEmpty()) {
             return "";

@@ -452,7 +452,13 @@ public final class TreeQueries {
         if (index == null) {
             return NO_TREE;
         }
-        String asked = where == null ? "" : where.strip();
+        String asked = where == null ? "" : where.strip().replace((char) 92, '/');
+        if (ownRoot != null && asked.startsWith("/reference/")) {
+            // A worker's address of a reference folder or file, as its own read takes it and
+            // its other lookups print it (section 113): "/reference/<root>/<path>" is the
+            // folder <path> of the root <root>.
+            asked = asked.substring("/reference/".length());
+        }
         int from = 1;
         java.util.regex.Matcher nth = FROM_NTH.matcher(asked);
         if (nth.matches() && index.typesIn(asked).isEmpty()) {

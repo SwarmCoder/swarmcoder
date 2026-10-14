@@ -39,6 +39,10 @@ import java.util.List;
  * on the log, and five findings for the workers were not kept. A worker's {@code acceptance_test}
  * - "asked with nothing, every claimed method" - failed the same way in the same run.
  *
+ * <p>A tool of one {@code String} argument that is sent one argument under another name is run
+ * with that argument (section 113): the binding used to refuse it with an error that named the
+ * method and the parameter, which the model had not been shown by those names.
+ *
  * <p>Only a parameter that carries {@link AgentRuntime.MayBeOmitted} is filled, and only a
  * {@code String}. A tool that writes is not given an empty text it was never sent: nothing here
  * decides from a tool's name or from what an argument is called.
@@ -91,7 +95,23 @@ final class OmittedArguments {
             return null; // the binding says what is wrong with arguments it cannot read
         }
         boolean changed = false;
-        for (Parameter parameter : binding.method().getParameters()) {
+        Parameter[] parameters = binding.method().getParameters();
+        // A tool of ONE argument sent its one argument under another name (section 113: a
+        // worker's body_of, whose description spoke of "Type" and "Type#method" and never of
+        // `member`, was refused three times for a missing `member` of `oneBodyOf`). There is
+        // only one thing the argument can be, so it is that; a call with several arguments is
+        // left as it is.
+        if (parameters.length == 1 && parameters[0].getType() == String.class
+                && !object.has(parameters[0].getName()) && object.size() == 1) {
+            String sentAs = object.fieldNames().next();
+            JsonNode value = object.get(sentAs);
+            if (value != null && value.isValueNode() && !value.isNull()) {
+                object.remove(sentAs);
+                object.put(parameters[0].getName(), value.asText());
+                return object.toString();
+            }
+        }
+        for (Parameter parameter : parameters) {
             if (parameter.getType() == String.class
                     && parameter.isAnnotationPresent(AgentRuntime.MayBeOmitted.class)
                     && (!object.has(parameter.getName())

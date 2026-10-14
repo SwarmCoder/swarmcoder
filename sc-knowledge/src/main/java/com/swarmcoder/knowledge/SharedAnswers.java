@@ -561,7 +561,7 @@ public final class SharedAnswers {
      * given to its asker and not kept: with the store kept between starts it would otherwise
      * be served long after the tool was back.
      */
-    static void unsettled() {
+    public static void unsettled() {
         Reading read = READING.get();
         if (read != null) {
             read.unsettled = true;

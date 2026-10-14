@@ -130,6 +130,16 @@ public interface ApiLookup {
         return false;
     }
 
+    /**
+     * True when the answer {@link #tree} gave last on this thread found no type of the name in
+     * anything it read (section 113): a {@code shape_of} or {@code find_symbol} of a library
+     * class, in a project whose own build the tree and the project's server do not have yet.
+     * The toolbox then asks its own checkout's server, which reads the run's build files.
+     */
+    default boolean answeredNothing() {
+        return false;
+    }
+
     /** What a refactoring or a check in a worker's own checkout answered, and what it wrote. */
     record InCheckout(String answer, java.util.List<String> filesWritten) {}
 
