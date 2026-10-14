@@ -431,6 +431,10 @@ public final class SupervisorDesk implements SupervisorService {
         for (String line : run.reuseRecord()) {
             facts.append(' ').append(line);
         }
+        // The contract the build was verified by, and where it came from (section 107).
+        if (!nn(run.verificationContract()).isEmpty()) {
+            facts.append(' ').append(run.verificationContract().replace('\n', ' '));
+        }
         if (unchanged) {
             facts.append(" No change was needed: the code the build started from already meets "
                 + "every check of this story, so the delivered commit changes no code. "
@@ -1460,6 +1464,8 @@ public final class SupervisorDesk implements SupervisorService {
         }
         return "Its last build ended at the " + run.state() + " stage"
             + (nn(run.parkReason()).isEmpty() ? "." : ": " + clip(run.parkReason(), 400))
+            + (nn(run.verificationContract()).isEmpty() ? ""
+                : " " + run.verificationContract().replace('\n', ' '))
             + " Why: run_diagnosis run_id=" + run.id();
     }
 

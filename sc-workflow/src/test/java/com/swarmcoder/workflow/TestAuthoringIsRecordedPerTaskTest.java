@@ -122,6 +122,11 @@ class TestAuthoringIsRecordedPerTaskTest {
     void tasksAreAuthoredSideBySideAndEachTaskIsRecordedAsItGoes() throws Exception {
         Path repo = dir.resolve("repo");
         assertThat(GitService.ensureRepo(repo)).isTrue();
+        // Its tasks claim checks, so the run has to have a contract to go on (section 107).
+        // This one names no acceptance command: the stage's own work is what is looked at.
+        java.nio.file.Files.createDirectories(repo.resolve(".swarmcoder"));
+        java.nio.file.Files.writeString(repo.resolve(".swarmcoder/verify.yaml"),
+            "toolchain: gradle\ncompile:\n  - \"echo ok\"\ntimeoutSeconds: 60\n");
 
         UUID bookId = UUID.randomUUID();
         UUID enablerId = UUID.randomUUID();

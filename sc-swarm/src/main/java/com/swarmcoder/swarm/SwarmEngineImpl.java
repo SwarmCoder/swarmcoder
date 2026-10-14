@@ -104,7 +104,7 @@ public class SwarmEngineImpl implements SwarmEngine {
     private final InferenceScheduler inferenceScheduler;
     private final GitService gitService;
     private final SwarmDispatcher dispatcher;
-    private final Verifier verifier;
+    private Verifier verifier;
     private final CloudGate cloudGate;
     /** Rendered ACTIVE guidelines for the shared prefix (spec §5.3); null = none. */
     private final Supplier<String> guidelinesProvider;
@@ -268,6 +268,11 @@ public class SwarmEngineImpl implements SwarmEngine {
     ReservationBook reservationsOf(UUID runId) {
         return runId == null ? null
             : reservations.computeIfAbsent(runId, id -> ReservationBook.of(wavesOf(id)));
+    }
+
+    /** For tests: a verifier that records what it was given instead of running a build. */
+    void setVerifier(Verifier verifier) {
+        this.verifier = verifier;
     }
 
     /** For tests: a probe whose answers the test controls. */
@@ -552,6 +557,14 @@ public class SwarmEngineImpl implements SwarmEngine {
             return run;
         }
 
+        // Before any candidate is started: is there a contract to verify one by? (section 107)
+        String noContract = contractGate(run, graph);
+        if (noContract != null) {
+            log.error("Run {} stops before any candidate is started: {}", run.id(),
+                noContract.lines().findFirst().orElse(noContract));
+            throw new RunMustPark(noContract);
+        }
+
         // Before anything is built: is there a model server to build against?
         requireWorkerEndpoint();
 
@@ -768,6 +781,45 @@ public class SwarmEngineImpl implements SwarmEngine {
                     + "the host repository, which is correct but slower", e.toString());
             }
         });
+    }
+
+    /**
+     * Null when candidates may be started; otherwise why the run stops first (section 107).
+     *
+     * <p>A live build made a project from an empty folder and ran to its final integration
+     * with no verification contract: 23 candidates were passed on unverified and winners were
+     * chosen with nothing compiled. Here the contract is provided before the first candidate -
+     * the project's own file, or the standard one of its build system, which SwarmCoder writes
+     * from the build files in the project's folder or the ones the plan names - and a run
+     * whose tasks still owe proof does not start a candidate without one. A contract file
+     * that is there and cannot be read stops the run whatever is owed.
+     */
+    private String contractGate(Run run, TaskGraph graph) {
+        if (gitService == null || !gitService.isEnabled() || gitService.repoPath() == null) {
+            return null; // no project folder: nothing is built or verified anywhere
+        }
+        int checks = 0;
+        int tests = 0;
+        List<String> planned = new ArrayList<>();
+        for (Task task : graph.tasks()) {
+            if (task.writeSet() != null) {
+                planned.addAll(task.writeSet());
+            }
+            if (task.selectedCandidateId() != null) {
+                continue; // already has its winner; nothing more of it is verified here
+            }
+            checks += artifactStore.describeClaimedChecks(task).size();
+            tests += task.authoredTestPaths().size();
+        }
+        com.swarmcoder.verify.ContractInUse contract =
+            com.swarmcoder.verify.GeneratedContract.provide(gitService.repoPath(), planned);
+        List<String> lines = contract.describe();
+        String record = String.join("\n", lines);
+        if (!record.equals(run.verificationContract())) {
+            lines.forEach(line -> log.info("Run {}: {}", run.id(), line));
+            run.setVerificationContract(record);
+        }
+        return contract.refusal(checks, tests, "the work of this run");
     }
 
     /**
@@ -4009,9 +4061,10 @@ public class SwarmEngineImpl implements SwarmEngine {
 
     /**
      * Runs the verification pipeline for one candidate in its worktree and stamps
-     * SURVIVED/FAILED from {@link Verdicts#survived}. Candidates without a workspace or
-     * without a {@code .swarmcoder/verify.yaml} pass through unverified — loudly. This is a
-     * temporary M1 allowance; per architecture §8.1 unverifiable tasks must not swarm at all.
+     * SURVIVED/FAILED from {@link Verdicts#survived}. A candidate with no workspace passes
+     * through unverified, loudly. One with no {@code .swarmcoder/verify.yaml} does so only
+     * when its task claims no check and has no acceptance test (the M1 allowance); when proof
+     * is owed, or the file is there and cannot be read, it fails (section 107).
      *
      * <p><b>The M1 allowance does not extend to house rules.</b> A repository with no verification
      * contract still gets its declared rule checks run (author decision, §21) — otherwise the one
@@ -4093,12 +4146,38 @@ public class SwarmEngineImpl implements SwarmEngine {
         }
         // The spec comes from the OPERATOR'S tree, not the candidate's: a worker that can write
         // .swarmcoder/verify.yaml would otherwise rewrite the commands that judge it.
-        Optional<VerifySpec> spec = VerifySpecLoader.loadTrusted(
-            gitService == null ? null : gitService.repoPath(), result.workspace());
-        if (spec.isEmpty()) {
-            log.warn("Candidate {}: no {} in workspace — UNVERIFIED", sol.id(), VerifySpecLoader.SPEC_PATH);
+        // With none there, SwarmCoder writes the standard contract of the build system whose
+        // build file this tree holds - the file's name is all that is read from the tree - and
+        // a candidate that owes proof is never passed on unverified (section 107).
+        Path trustedRoot = gitService == null ? null : gitService.repoPath();
+        com.swarmcoder.verify.ContractInUse contract =
+            VerifySpecLoader.inUse(trustedRoot, result.workspace());
+        if (!contract.present() && !contract.thereAndUnreadable() && trustedRoot != null) {
+            contract = com.swarmcoder.verify.GeneratedContract.provide(trustedRoot,
+                com.swarmcoder.verify.GeneratedContract.buildFilesIn(result.workspace()));
+            if (contract.present()) {
+                contract.describe().forEach(line -> log.info("Task '{}': {}", task.title(), line));
+            }
+        }
+        if (!contract.present()) {
+            String refusal = contract.refusal(artifactStore.describeClaimedChecks(task).size(),
+                task.authoredTestPaths().size(), "the candidate of '" + task.title() + "'");
+            if (refusal != null) {
+                // The report exists only to carry the reason: nothing was built or run.
+                VerificationReport report = new VerificationReport(UUID.randomUUID(), true, true,
+                    null, null, null, null, java.time.Duration.ZERO, "", null);
+                recordVerdict(report, refusal);
+                log.error("Candidate {} FAILED verification: {}", sol.id(), refusal);
+                return new CandidateSolution(sol.id(), sol.taskId(), sol.workerIndex(),
+                    sol.branch(), sol.sampling(), sol.diffUnified(), report, sol.cluster(),
+                    sol.judge(), CandidateState.FAILED, KillReason.NO_ACCEPTANCE_EVIDENCE)
+                    .carryingAuditFrom(sol);
+            }
+            log.warn("Candidate {}: NOT verified - there is no {} and its task claims no check "
+                + "and has no acceptance test", sol.id(), VerifySpecLoader.SPEC_PATH);
             return guidelineChecksOnly(task, sol, result, guidelineChecks);
         }
+        Optional<VerifySpec> spec = Optional.of(contract.spec());
         // The tests this task claims, and only those, into the tree about to be verified. The
         // worktree was cut from the run's pinned base, which predates every acceptance test, so
         // without this the acceptance stage selects nothing and reads as green (§17.1 in the other
