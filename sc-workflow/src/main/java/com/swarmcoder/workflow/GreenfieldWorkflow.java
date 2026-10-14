@@ -1054,9 +1054,10 @@ public class GreenfieldWorkflow {
                         }
                         TaskGraph candidate = result.graph();
                         // A project with no build yet: the place follows the build files this
-                        // plan names, not the repository root (section 107).
-                        withAcceptanceTestDir(candidate, ContractFromTheStart
-                            .acceptanceLocation(layout, candidate).protectedDir());
+                        // plan names, not the repository root (section 107), per task the
+                        // module its own main sources are written to (section 109).
+                        withAcceptanceTestDirs(candidate, ContractFromTheStart
+                            .acceptancePlaces(layout, candidate, repoPath));
                         // What each task starts with is computed from the contracts it
                         // delivers and the project's own types, not guessed (section 73).
                         // Before validation, so what is checked is what runs.
@@ -4692,13 +4693,21 @@ public class GreenfieldWorkflow {
      * the path that existed to rescue a failed plan. The fallback itself is gone (2026-09-03): a
      * plan that claims a slice it did not actually decompose is worse than PLAN parking and saying
      * so, so there is now exactly one graph source and nothing left to drift.
+     *
+     * <p>Per task, the place {@link ContractFromTheStart#acceptancePlaces} chose: in a project
+     * whose build is still to be written, the module the task's own main sources go to (section
+     * 109).
      */
-    private static TaskGraph withAcceptanceTestDir(TaskGraph graph, String dir) {
-        if (graph == null || dir == null || dir.isBlank()) {
+    private static TaskGraph withAcceptanceTestDirs(TaskGraph graph,
+                                                    ContractFromTheStart.Places places) {
+        if (graph == null || graph.tasks() == null) {
             return graph;
         }
         for (Task task : graph.tasks()) {
-            task.setAcceptanceTestDir(dir);
+            String dir = places.of(task).protectedDir();
+            if (dir != null && !dir.isBlank()) {
+                task.setAcceptanceTestDir(dir);
+            }
         }
         return graph;
     }
@@ -5971,7 +5980,8 @@ public class GreenfieldWorkflow {
                     + AcceptanceTestStartup.reask(startup) + fixAndRetry);
             }
             List<String> undeliverable = atWaveStart
-                ? (UndeliverableType.park(task, stillToRun, result.missingTypes()) == null
+                ? (UndeliverableType.park(task, stillToRun, result.missingTypes(),
+                    tree, DeclarableArtifacts.defaultLocalRepository()) == null
                     ? List.of() : result.missingTypes())
                 : TypeDeliverability.undeliverable(result.missingTypes(), stillToRun);
             if (!undeliverable.isEmpty()) {
@@ -6133,7 +6143,9 @@ public class GreenfieldWorkflow {
             // time the two are separable, because the plan says who may still write what. Asked
             // BEFORE the swarm is dispatched: the whole cost of run 13 was finding this out after.
             if (waveBase != null && task != null) {
-                String undeliverable = UndeliverableType.park(task, stillToRun, result.missingTypes());
+                String undeliverable = UndeliverableType.park(task, stillToRun,
+                    result.missingTypes(), target.localRoot().orElse(null),
+                    DeclarableArtifacts.defaultLocalRepository());
                 if (undeliverable != null) {
                     log("Red-check STOP for task '" + task.title() + "': its tests need "
                         + result.missingTypes() + ", and nothing left to run can create "
@@ -6543,7 +6555,9 @@ public class GreenfieldWorkflow {
                 }
             }
             if (waveBase != null && second.red()) {
-                String nobodyDelivers = UndeliverableType.park(task, planTasks, second.missingTypes());
+                String nobodyDelivers = UndeliverableType.park(task, planTasks,
+                    second.missingTypes(), redcheckWorktree,
+                    DeclarableArtifacts.defaultLocalRepository());
                 if (nobodyDelivers != null) {
                     return nobodyDelivers;
                 }
@@ -7244,8 +7258,8 @@ public class GreenfieldWorkflow {
             public ArchitectClient.PlanDraft planChecked(TaskGraph draft, DesignDocument design) {
                 StoryScope scope = scopeFor(run);
                 BuildLayout.Layout layout = repoLayout();
-                withAcceptanceTestDir(draft,
-                    ContractFromTheStart.acceptanceLocation(layout, draft).protectedDir());
+                withAcceptanceTestDirs(draft,
+                    ContractFromTheStart.acceptancePlaces(layout, draft, repoPath));
                 ComputedReservation.apply(draft, layout, repoPath);
                 BuildFilesInTheJob.expandWriteSets(draft, layout, repoPath);
                 TaskGraphValidator.Verdict verdict = connectingWhatItAdds(

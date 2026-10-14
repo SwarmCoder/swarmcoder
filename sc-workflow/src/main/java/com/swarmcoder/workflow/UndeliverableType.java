@@ -18,10 +18,14 @@
 package com.swarmcoder.workflow;
 
 import com.swarmcoder.domain.Task;
+import com.swarmcoder.verify.AcceptanceTestLocation;
 import com.swarmcoder.verify.TypeDeliverability;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A wave's tests do not compile because a type is missing. Which of the two things is that?
@@ -58,6 +62,21 @@ public final class UndeliverableType {
      * @param missing   the fully-qualified types the compiler said do not exist
      */
     public static String park(Task task, List<Task> remaining, List<String> missing) {
+        return park(task, remaining, missing, null, null);
+    }
+
+    /**
+     * As {@link #park(Task, List, List)}, telling library packages apart (section 109): a name
+     * that is a package of a library is not a type a task delivers. When the build file of the
+     * module the task's tests are in may still be written by this task or one still to run, the
+     * library can still be declared there and the name does not stop the run; otherwise the
+     * message says which build file declares the library and which does not.
+     *
+     * @param tree            the tree the tests did not compile on; null when not known
+     * @param localRepository the local Maven repository the jars are read from; null for none
+     */
+    static String park(Task task, List<Task> remaining, List<String> missing, Path tree,
+                       Path localRepository) {
         if (task == null || missing == null || missing.isEmpty()) {
             return null;
         }
@@ -68,6 +87,22 @@ public final class UndeliverableType {
         List<String> undeliverable = TypeDeliverability.undeliverable(missing, stillToRun);
         if (undeliverable.isEmpty()) {
             return null;
+        }
+        Map<String, LibraryPackages.Found> libraries =
+            LibraryPackages.among(tree, undeliverable, localRepository);
+        if (!libraries.isEmpty()) {
+            String module = AcceptanceTestLocation.moduleOf(task.acceptanceTestDir());
+            String buildFile = module.isEmpty() ? "pom.xml" : module + "/pom.xml";
+            boolean declarable = mayWrite(task, buildFile);
+            for (Task later : stillToRun) {
+                declarable |= mayWrite(later, buildFile);
+            }
+            List<String> projectNames = undeliverable.stream()
+                .filter(name -> !libraries.containsKey(name)).toList();
+            if (declarable && projectNames.isEmpty()) {
+                return null; // a task still to run may declare the library in that build file
+            }
+            return libraryMessage(task, projectNames, libraries, module, buildFile, declarable);
         }
         StringBuilder sb = new StringBuilder("Task '").append(task.title()).append("': its tests need ");
         for (int i = 0; i < undeliverable.size(); i++) {
@@ -87,6 +122,89 @@ public final class UndeliverableType {
                 + "contract, so a task is made to deliver it, or correct the acceptance tests to "
                 + "use the types this plan actually builds. Then resume the run.");
         return sb.toString();
+    }
+
+    /**
+     * The message when some of the missing names are library packages: which library, which
+     * build file declares it, and that the build file of the test's own module does not.
+     */
+    private static String libraryMessage(Task task, List<String> projectNames,
+                                         Map<String, LibraryPackages.Found> libraries,
+                                         String module, String buildFile, boolean declarable) {
+        String where = module.isEmpty() ? "the repository root" : module;
+        StringBuilder sb = new StringBuilder("Task '").append(task.title())
+            .append("': its acceptance tests, in ").append(where).append(", do not compile.");
+        Map<String, List<String>> byArtifact = new LinkedHashMap<>();
+        for (LibraryPackages.Found found : libraries.values()) {
+            byArtifact.computeIfAbsent(found.artifact(), a -> new ArrayList<>()).add(found.name());
+        }
+        boolean placement = false;
+        for (Map.Entry<String, List<String>> library : byArtifact.entrySet()) {
+            List<String> names = library.getValue();
+            List<String> declaredBy = libraries.get(names.get(0)).declaredBy();
+            sb.append("\n\n").append(quoted(names))
+                .append(names.size() == 1 ? " is a package" : " are packages")
+                .append(" of the library ").append(library.getKey())
+                .append(", not a type a task delivers. ");
+            if (declaredBy.isEmpty()) {
+                sb.append("It is declared by no build file this task or an earlier one writes.");
+            } else {
+                placement = true;
+                sb.append("It is declared by ").append(String.join(", ", declaredBy))
+                    .append(", and not by ").append(buildFile)
+                    .append(", the build file of the module the tests are in.");
+            }
+        }
+        if (!projectNames.isEmpty()) {
+            sb.append("\n\n").append(quoted(projectNames))
+                .append(projectNames.size() == 1 ? " is" : " are")
+                .append(" delivered by no task, and '").append(task.title())
+                .append("' cannot create ").append(projectNames.size() == 1 ? "it" : "them")
+                .append(". This task may only write ").append(sorted(task.writeSet()))
+                .append('.');
+        }
+        sb.append("\n\nDispatching a swarm now would fail every candidate for a tree that none "
+            + "of them broke.");
+        if (!declarable) {
+            sb.append(" No task that has yet to run may write ").append(buildFile).append('.');
+        }
+        sb.append("\n\nDecide which side is wrong: ");
+        if (placement) {
+            sb.append("the tests are in the wrong module (they belong in the module whose build "
+                + "file declares the library), or ").append(buildFile)
+                .append(" must declare it.");
+        } else {
+            sb.append(buildFile).append(" must declare the library, or the tests must not "
+                + "use it.");
+        }
+        if (!projectNames.isEmpty()) {
+            sb.append(" For the other names: add them to the design as contracts, or correct "
+                + "the tests to use the types this plan builds.");
+        }
+        return sb.append(" Then resume the run.").toString();
+    }
+
+    private static String quoted(List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (String name : names) {
+            sb.append(sb.isEmpty() ? "" : ", ").append('`').append(name).append('`');
+        }
+        return sb.toString();
+    }
+
+    /** Whether a task's write set holds this path: the path itself or a directory above it. */
+    private static boolean mayWrite(Task task, String path) {
+        if (task == null || task.writeSet() == null) {
+            return false;
+        }
+        for (String raw : task.writeSet()) {
+            String entry = raw == null ? "" : raw.strip().replace('\\', '/')
+                .replaceAll("^(\\./)+", "").replaceAll("/+$", "");
+            if (!entry.isEmpty() && (entry.equals(path) || path.startsWith(entry + "/"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String sorted(java.util.Set<String> writeSet) {
