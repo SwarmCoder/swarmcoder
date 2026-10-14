@@ -163,6 +163,12 @@ public final class SupersededRuns {
         } catch (Exception e) {
             throw new IllegalStateException("Could not end the earlier builds of " + story.key(), e);
         }
+        // Whatever is still working on an ended build is told now, after the store says so
+        // (section 110): a build used to be ended in the store only, and its swarm went on to
+        // its next wave with places on the model server.
+        for (UUID runId : ended) {
+            tellWhoIsWorkingOn(runId);
+        }
         if (!ended.isEmpty() || !closed.isEmpty()) {
             log.info("Story {}: ended {} earlier build(s) {} and closed {} open question(s) — {}",
                 story.key(), ended.size(), ended, closed.size(), reason);
@@ -177,6 +183,59 @@ public final class SupersededRuns {
             }
         }
         return List.copyOf(ended);
+    }
+
+    /** What is to be told when a run is ended here, by run (section 110). */
+    private static final java.util.Map<UUID, List<Runnable>> WORKING_ON =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Has {@code whenEnded} called, on the thread that ends the run, when {@link #supersede} ends
+     * {@code runId}. For whatever is working on the run in this process (its swarm), which must
+     * stop at once rather than at the end of its stage. The action must not block.
+     *
+     * @return what takes the action off again; called when the work on the run is over
+     */
+    public static Runnable whenEnded(UUID runId, Runnable whenEnded) {
+        if (runId == null || whenEnded == null) {
+            return () -> { };
+        }
+        WORKING_ON.computeIfAbsent(runId, id -> new java.util.concurrent.CopyOnWriteArrayList<>())
+            .add(whenEnded);
+        return () -> WORKING_ON.computeIfPresent(runId, (id, actions) -> {
+            actions.remove(whenEnded);
+            return actions.isEmpty() ? null : actions;
+        });
+    }
+
+    private static void tellWhoIsWorkingOn(UUID runId) {
+        List<Runnable> actions = WORKING_ON.get(runId);
+        if (actions == null) {
+            return;
+        }
+        for (Runnable action : actions) {
+            try {
+                action.run();
+            } catch (RuntimeException e) {
+                // What could not be told stops at its next look at the store.
+                log.warn("Could not tell the work on run {} that it was ended: {}", runId,
+                    e.toString());
+            }
+        }
+    }
+
+    /**
+     * True when the store has the run ended undelivered (aborted or abandoned) - by
+     * {@link #supersede}, or by a person. For work in progress on a run that asks whether to go
+     * on: the run object a thread holds is older than the one the store has.
+     */
+    public static boolean endedInStore(ArtifactStore store, UUID runId) {
+        if (store == null || runId == null) {
+            return false;
+        }
+        Run stored = store.root().runs.get(runId);
+        return stored != null && (stored.state() == RunState.ABORTED
+            || stored.state() == RunState.ABANDONED);
     }
 
     /**

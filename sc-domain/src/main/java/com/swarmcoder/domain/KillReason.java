@@ -112,7 +112,14 @@ public enum KillReason {
      * each worker's own stop. Whatever it had changed is verified. Appended last: the enum is
      * stored by ordinal.
      */
-    ROUND_QUIET;
+    ROUND_QUIET,
+    /**
+     * Its build was ended from outside while it was in its session: the story was sent back,
+     * started again or dropped (section 110). Says nothing about this worker's code, and its
+     * change is not verified - nothing of an ended build is used. Appended last: the enum is
+     * stored by ordinal.
+     */
+    BUILD_ENDED;
 
     /**
      * Why this worker stopped, in the operator's words rather than the constant's name.
@@ -163,6 +170,8 @@ public enum KillReason {
                 + "whatever it had changed was verified";
             case PLAN_FAULT -> "the plan gave its task a test that needs code a later task "
                 + "writes, so no attempt on this task could pass and this one was stopped";
+            case BUILD_ENDED -> "its build was ended - the story was sent back, started again "
+                + "or dropped - so it was stopped rather than finished";
             case PLACE_NEEDED -> "it was a spare attempt, and its place on the model server was "
                 + "needed for a task that had no attempt running, so it was stopped";
         };

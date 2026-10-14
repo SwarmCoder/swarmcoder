@@ -11460,3 +11460,97 @@ not stopped. Also run: `ARunOwingProofHasItsContractBeforeAnythingIsBuiltTest`.
 - A library's transitive dependencies are not read. A package that comes only through another
   library is not recognised as a library package.
 - Nothing was run against a model or in a container.
+
+## 110. A build that was ended went on building, and its story's next build made the plan and tests again (live local build, 2026-10-14)
+
+**What was observed.** A story was sent back while its build was in EXECUTING, just after wave 1
+of 4 had merged. The log said the build was ended ("ended 1 earlier build(s) ... S1 was sent
+back"). Then the same build merged wave 1, ran a compile check in a container and dispatched
+wave 2 to the model server. The story's new build said at INTAKE "Plan: made again, because the
+earlier build has not stopped yet and is still writing to its plan and its tasks", and the same
+for the tests.
+
+**Cause.** `SupersededRuns.supersede` ended a build in the store only: it put an `ABORTED` copy of
+the run in the store and closed its questions. Nothing told the thread executing the run.
+
+- The swarm (`SwarmEngineImpl.executeWaves`) never looked at the store. Between waves, between
+  candidates and during a model call it went on as if nothing had happened. Its candidates kept
+  their places on the model server until they ended by themselves.
+- The workflow found out only when it next saved the run (`RunPersister.save` refuses to write
+  over an ended run, section 82). That was after the whole of EXECUTING.
+- Section 82 had left this open on purpose: "Stopping the workers at once needs a cancel the
+  swarm does not have." The cancel existed by then (`GroupSignal`, `AgentSession.cancel`). It was
+  only used for one task's spare candidates.
+- So the ended build's thread stayed in `GreenfieldWorkflow.driving` for its whole stage. The
+  next build's INTAKE (section 99, decision 5) then kept only the design.
+- Dropping a story (`cancelStory`) ended no build at all.
+
+**What changed.**
+
+1. *The store tells whoever is working on an ended run.* `SupersededRuns.whenEnded(runId, action)`
+   registers an action. `supersede` calls it, on its own thread, right after the store has the
+   run ended. `SupersededRuns.endedInStore` reads the same fact from the store, for a path that
+   tells nobody.
+2. *The swarm stops at once* (`SwarmEngineImpl.endRun`, registered by `executeRun`).
+   - No candidate waiting for a place is started (`CandidateGroup.withdrawWaiting`).
+   - Every candidate and repair worker in its session is stopped through its `GroupSignal` with
+     the new reason `KillReason.BUILD_ENDED`. The signal cancels the session, which abandons the
+     model request in flight. The place is given back as the worker ends, so work waiting for a
+     place gets it straight away. No concurrency setting changed.
+   - The run's own thread stops at its next look (`stopIfEnded`, which throws `RunEnded`). It looks
+     before each wave, after each wave and before its merge, before the compile check of the
+     merged tree, before a task is dispatched, every 100 ms while a task's first candidates run,
+     before and after a repair round, and before the judge is asked. An ended build merges nothing
+     more, verifies nothing more and asks no model anything more.
+   - A candidate of an ended build that ends now is archived as stopped (`BUILD_ENDED`) and not
+     verified. `StoppedWork` does not verify a `BUILD_ENDED` worker's change.
+   - A repair round outside EXECUTING (after a failed final integration) looks at the store every
+     tenth of a second and stops the same way.
+3. *Left to finish, and why.* A tool command a worker is running (for example a build in its
+   container) finishes its command before the worker stops: the session does not interrupt a
+   tool, so a half-written file is never left (`KoogAgentRuntime.cancel`). A verification already
+   under way also finishes. It has no cancel path, and its worktree is removed only after it ends.
+   Both are bounded by their own time limits, and neither holds a place on the model server.
+4. *The workflow stops without writing.* `GreenfieldWorkflow.drive` catches `RunEnded`, logs it
+   and returns. The run leaves `driving` once its swarm's threads have ended.
+5. *The next build waits for the stop, up to a bound* (`GreenfieldWorkflow.earlierOnceStopped`).
+   When the earlier build was at EXECUTING and is not both ended in the store and free of every
+   thread, INTAKE waits for that, then decides from the stored run. The bound is 600 s, set with
+   `-Dswarmcoder.intake.earlierBuildStopSeconds`. Why wait and not redo:
+   - The stop at EXECUTING is now quick and certain. Model requests are cancelled at once; what
+     is left is a tool command or a verification, each with its own time limit.
+   - Waiting holds no model place. Redoing costs a planner and a test author session.
+   - The wait also covers `BacklogServiceImpl.start`. That hands the new build to its engine
+     before it ends the earlier one, so INTAKE could otherwise see a build that was not ended
+     yet, with no recorded last stage, and keep nothing.
+   - A build ended at an earlier stage is not waited for. A design, plan or test session still
+     runs to its end (section 82), which is neither quick nor certain. There the decision stays
+     as section 99 made it.
+6. *Dropping a story ends its builds.* `BacklogServiceImpl.cancelStory` calls `supersede` with
+   "(story) was dropped." Every unfinished build becomes ABORTED, its swarm stops as above, its
+   questions are closed, and it is not picked up again at the next start.
+
+**Stored differently.** `KillReason.BUILD_ENDED`, appended last (ordinal 19). No other stored
+field.
+
+**Tests.** New: `AnEndedBuildStopsAtOnceTest` (sc-swarm). A two-wave plan; the build is sent back
+while a wave-1 candidate is in its session. Checked: the session is cancelled with `BUILD_ENDED`,
+`executeRun` throws `RunEnded`, no session is opened for the wave-2 task, what ran is archived
+`KILLED`/`BUILD_ENDED` without a verification, and nothing is merged.
+`ANewBuildWaitsForItsEndedBuildToStopTest` (sc-workflow). The earlier build is in its swarm. The
+new build is started and the earlier one is ended 300 ms later; its swarm takes a further second
+to stop. The new build takes over the earlier build's design, plan and tests, and its record does
+not say "has not stopped yet". Also run: `ARepairRoundFillsThePlacesAndFollowsProgressTest` (its
+check that the last stop reason is `ROUND_QUIET` now checks the ordinal),
+`ARebuiltStoryStartsFromItsEarlierBuildTest`, `OnlyAStorysCurrentBuildIsDrivenTest`,
+`BacklogServiceTest`.
+
+**Not done, not checked.**
+
+- Not run live, against a model server or in a container.
+- A design, plan or test session of an ended build is not cancelled. It runs to the end of its
+  stage, as before. The planning roles have no cancel path.
+- A verification in flight is not stopped (see point 3).
+- FINAL_INTEGRATION of an ended build stops only between stages and inside a repair round.
+- The listener registry is static and per process. A build ended by another process is seen
+  through `endedInStore` only where the swarm looks at the store.

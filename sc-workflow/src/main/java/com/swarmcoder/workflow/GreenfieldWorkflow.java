@@ -420,6 +420,7 @@ public class GreenfieldWorkflow {
         if (earlier == null) {
             return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
         }
+        earlier = earlierOnceStopped(earlier);
         DesignDocument design = earlier.designId() == null ? null
             : artifactStore.root().designs.get(earlier.designId());
         TaskGraph graph = earlier.taskGraphId() == null ? null
@@ -468,6 +469,61 @@ public class GreenfieldWorkflow {
                 return transition(run, RunState.DESIGN, run.designId(), run.taskGraphId());
             }
         }
+    }
+
+    /** How long INTAKE waits for an earlier build that is building to stop (section 110). */
+    static final String EARLIER_BUILD_STOP_WAIT_PROPERTY = "swarmcoder.intake.earlierBuildStopSeconds";
+    private static final long EARLIER_BUILD_STOP_WAIT_SECONDS = 600;
+
+    /**
+     * The earlier build as the store has it once it has really stopped (section 110), or as it
+     * is when waiting would not be quick.
+     *
+     * <p>An earlier build that was building (EXECUTING) when it was ended stops at once: nothing
+     * further is started in it and its candidates' model requests are cancelled. What it still
+     * finishes is the tool command or the verification already under way, each bounded by its
+     * own time limit. Waiting for that costs no place on the model server, and what it buys is
+     * the earlier build's plan, tests and finished tasks, which otherwise a planner and a test
+     * author make again. So INTAKE waits, up to a bound, for the build to be ended in the store
+     * and for no thread of this workflow to be in it. A build ended at an earlier stage is
+     * not waited for: a design, plan or test session runs to its end (section 82), which is
+     * neither quick nor certain, and the decision then keeps the design only, as before.
+     */
+    private Run earlierOnceStopped(Run earlier) {
+        UUID id = earlier.id();
+        Run stored = artifactStore.root().runs.get(id);
+        Run now = stored == null ? earlier : stored;
+        boolean ended = com.swarmcoder.store.SupersededRuns.isEnded(now.state());
+        if (ended && !driving.contains(id)) {
+            return now;
+        }
+        RunState reached = ended ? now.lastStage() : now.state();
+        if (reached != RunState.EXECUTING) {
+            return now;
+        }
+        long bound = Long.getLong(EARLIER_BUILD_STOP_WAIT_PROPERTY, EARLIER_BUILD_STOP_WAIT_SECONDS);
+        long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(bound);
+        long started = System.currentTimeMillis();
+        log("INTAKE: the earlier build " + id + " was building and has not stopped yet; waiting "
+            + "up to " + bound + " s for it to stop, so its plan, tests and finished tasks can be "
+            + "taken over.");
+        while (System.nanoTime() < until) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            stored = artifactStore.root().runs.get(id);
+            now = stored == null ? earlier : stored;
+            if (com.swarmcoder.store.SupersededRuns.isEnded(now.state()) && !driving.contains(id)) {
+                log("INTAKE: the earlier build " + id + " stopped after "
+                    + (System.currentTimeMillis() - started) / 1000 + " s.");
+                return now;
+            }
+        }
+        log("INTAKE: the earlier build " + id + " had not stopped after " + bound + " s.");
+        return now;
     }
 
     /**
@@ -558,6 +614,14 @@ public class GreenfieldWorkflow {
                     return; // shutting down — the run resumes from this state on next startup
                 }
                 continue;
+            } catch (com.swarmcoder.runtime.RunEnded ended) {
+                // Its story was sent back, started again or dropped while the swarm was
+                // building it (section 110). The swarm has started nothing further and its
+                // candidates were cancelled; the store already has the run ended, so nothing is
+                // written and nothing is asked. Returning ends the drive, and with it this
+                // run's place in `driving`, which the story's next build waits for at INTAKE.
+                log("Run " + run.id() + ": " + ended.getMessage() + ".");
+                return;
             } catch (CloudGate.BudgetExhaustedException spent) {
                 // A cloud role's call passed a limit. The gate has raised the BUDGET_EXTENSION
                 // decision; the stage stays where it is and is tried again when it is answered.

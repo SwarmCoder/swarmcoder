@@ -251,9 +251,8 @@ class ARepairRoundFillsThePlacesAndFollowsProgressTest {
 
     @Test
     void theNewStopReasonIsAppendedAndItsWorkIsVerified() {
-        KillReason[] all = KillReason.values();
-        assertThat(all[all.length - 1]).as("stored by ordinal: appended last")
-            .isEqualTo(KillReason.ROUND_QUIET);
+        // Stored by ordinal: appended after PLAN_FAULT, and nothing was put in front of it since.
+        assertThat(KillReason.ROUND_QUIET.ordinal()).isEqualTo(18);
         assertThat(KillReason.ROUND_TIME_UP.ordinal()).isEqualTo(16);
         assertThat(KillReason.PLAN_FAULT.ordinal()).isEqualTo(17);
         assertThat(StoppedWork.worthVerifying(KillReason.ROUND_QUIET, "diff --git a/x b/x\n+x\n"))

@@ -27,6 +27,7 @@ import com.swarmcoder.inference.EndpointReachability;
 import com.swarmcoder.inference.InferenceScheduler;
 import com.swarmcoder.inference.VllmClient;
 import com.swarmcoder.runtime.AgentRuntime;
+import com.swarmcoder.runtime.RunEnded;
 import com.swarmcoder.runtime.RunMustPark;
 import com.swarmcoder.runtime.SwarmEngine;
 import com.swarmcoder.runtime.TestRepairNeeded;
@@ -536,15 +537,91 @@ public class SwarmEngineImpl implements SwarmEngine {
     @Override
     public Run executeRun(Run run) {
         runsInFlight.put(run.id(), run);
+        // Told the moment the store ends this build (section 110): its story was sent back,
+        // started again or dropped. Until then the build was ended in the store only, and its
+        // swarm went on to its next wave with places on the model server.
+        Runnable notListening = com.swarmcoder.store.SupersededRuns.whenEnded(run.id(),
+            () -> endRun(run.id()));
         try {
+            stopIfEnded(run.id(), "before its swarm started");
             return executeWaves(run);
+        } catch (CompletionException wrapped) {
+            if (wrapped.getCause() instanceof RunEnded ended) {
+                throw ended;
+            }
+            throw wrapped;
         } finally {
+            notListening.run();
             // Candidates that were told to stop wind down behind their tasks; the run is not
             // over until they have, because their worktrees and records are written as they end.
             awaitCandidatesStillEnding(run.id());
             groupsOfRun.remove(run.id());
+            repairSignalsOfRun.remove(run.id());
             runsInFlight.remove(run.id());
             reservations.remove(run.id());
+            endedRuns.remove(run.id());
+        }
+    }
+
+    /** Runs being executed here whose build was ended from outside (section 110). */
+    private final Set<UUID> endedRuns = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** The stop signal of every repair round of each run in flight, for {@link #endRun}. */
+    private final Map<UUID, java.util.Queue<GroupSignal>> repairSignalsOfRun =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The build {@code runId} was ended from outside while this engine executes it (section 110).
+     * Nothing waiting for a place is started, every candidate and repair worker in its session
+     * is cancelled at once through its signal (the model request in flight is abandoned, see
+     * {@code AgentSession.cancel}), and the run's own thread stops at its next look
+     * ({@link #stopIfEnded}). Their places are given back as each one ends, so work waiting for
+     * a place gets it straight away. Does not block: called on the thread that ended the build.
+     */
+    public void endRun(UUID runId) {
+        if (runId == null || !runsInFlight.containsKey(runId) || !endedRuns.add(runId)) {
+            return;
+        }
+        List<Integer> withdrawn = new ArrayList<>();
+        List<Integer> stopped = new ArrayList<>();
+        java.util.Queue<CandidateGroup> groups = groupsOfRun.get(runId);
+        if (groups != null) {
+            for (CandidateGroup group : groups) {
+                withdrawn.addAll(group.withdrawWaiting());
+                stopped.addAll(group.stopRunning(KillReason.BUILD_ENDED));
+            }
+        }
+        int repairs = 0;
+        java.util.Queue<GroupSignal> signals = repairSignalsOfRun.get(runId);
+        if (signals != null) {
+            for (GroupSignal signal : signals) {
+                if (signal.stop(KillReason.BUILD_ENDED)) {
+                    repairs++;
+                }
+            }
+        }
+        log.info("Run {} was ended from outside: no further wave or candidate is started; "
+            + "{} candidate(s) in session are cancelled, {} waiting are not started, {} repair "
+            + "round(s) are stopped.", runId, stopped.size(), withdrawn.size(), repairs);
+    }
+
+    /** Whether the build was ended from outside: told by the store, or read from it. */
+    private boolean runEnded(UUID runId) {
+        if (endedRuns.contains(runId)) {
+            return true;
+        }
+        if (com.swarmcoder.store.SupersededRuns.endedInStore(artifactStore, runId)) {
+            // Ended by a path that told nobody: the same stop.
+            endRun(runId);
+            return true;
+        }
+        return false;
+    }
+
+    /** Stops the run's own thread when its build was ended from outside. */
+    private void stopIfEnded(UUID runId, String where) {
+        if (runId != null && runEnded(runId)) {
+            throw new RunEnded(runId, where);
         }
     }
 
@@ -594,6 +671,8 @@ public class SwarmEngineImpl implements SwarmEngine {
         // BLOCKED). See WaitingOnDependencies.
         WaitingOnDependencies gate = new WaitingOnDependencies(graph);
         for (int index = 0; index < waves.size(); index++) {
+            // An ended build starts no further wave (section 110).
+            stopIfEnded(run.id(), "before wave " + (index + 1) + " of " + waves.size());
             List<Task> planned = waves.get(index);
             List<Task> wave = gate.dispatchable(planned);
             if (wave.size() < planned.size()) {
@@ -666,6 +745,9 @@ public class SwarmEngineImpl implements SwarmEngine {
                     siblingRepairClaims.keySet().removeIf(key -> key.startsWith(run.id() + "|"));
                 }
             }
+            // Nor merges what its wave chose: the build that follows it takes the chosen
+            // candidates over from the archive and merges them itself (section 99).
+            stopIfEnded(run.id(), "after wave " + (index + 1) + " of " + waves.size());
             if (index == waves.size() - 1) {
                 break; // nothing comes after it, so there is no next base to build
             }
@@ -700,6 +782,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             // is measured on that tree: it is what an error in a file a candidate did not touch
             // is read against (live run 74).
             if (testsAgain || (index + 1 < waves.size() && !winners.isEmpty())) {
+                stopIfEnded(run.id(), "after the merge of wave " + (index + 1));
                 establishOnBaseTree(run, false, testsAgain);
             }
         }
@@ -1434,8 +1517,11 @@ public class SwarmEngineImpl implements SwarmEngine {
                 }
                 boolean late;
                 boolean sayVerifying = false;
+                // A candidate of an ended build is not verified (section 110): nothing of the
+                // build is used, and its verification would take a container for nothing.
+                boolean buildEnded = runEnded(runId);
                 synchronized (round) {
-                    late = round.closed;
+                    late = round.closed || buildEnded;
                     if (!late) {
                         round.verifying++;
                         allResults.add(ended.result());
@@ -1444,7 +1530,8 @@ public class SwarmEngineImpl implements SwarmEngine {
                     }
                 }
                 if (late) {
-                    endedBehindItsTask(task, ended.result());
+                    endedBehindItsTask(task, ended.result(),
+                        buildEnded ? KillReason.BUILD_ENDED : KillReason.SUPERSEDED);
                     return;
                 }
                 if (sayVerifying) {
@@ -1487,14 +1574,20 @@ public class SwarmEngineImpl implements SwarmEngine {
 
         boolean stoppedForOthers = false;
         boolean stoppedForThePlan = false;
+        boolean buildEnded = false;
         boolean withdrewWaiting = false;
         int failedSoFar = 0;
         // Looked at every tenth of a second rather than waited for on the monitor: this is a
         // virtual thread, and it may be here for as long as the workers take.
         boolean over = false;
         while (!over) {
+            // Looked at before the round's lock: it may read the store.
+            boolean endedNow = runEnded(runId);
             synchronized (round) {
-                if (round.failure != null) {
+                if (endedNow) {
+                    buildEnded = true;
+                    over = true; // section 110: the build is over, and so is its task
+                } else if (round.failure != null) {
                     over = true;
                 } else {
                     if (round.passed && !withdrewWaiting) {
@@ -1553,8 +1646,17 @@ public class SwarmEngineImpl implements SwarmEngine {
             }
         }
         List<Integer> withdrawn = group.withdrawWaiting();
-        List<Integer> stopped = group.stopRunning(
-            stoppedForThePlan ? KillReason.PLAN_FAULT : KillReason.SUPERSEDED);
+        List<Integer> stopped = group.stopRunning(buildEnded ? KillReason.BUILD_ENDED
+            : stoppedForThePlan ? KillReason.PLAN_FAULT : KillReason.SUPERSEDED);
+        if (buildEnded) {
+            log.info("Task '{}': its build was ended from outside - worker(s) {} are cancelled, "
+                + "worker(s) {} are not started.", task.title(), stopped, withdrawn);
+            // The task's clean-up removes every worktree, so nothing of it may still be working
+            // in one; a verification already under way finishes first (it has no cancel), and
+            // what ends from here on is archived unverified.
+            group.awaitThreads();
+            throw new RunEnded(runId, "while task '" + task.title() + "' was being built");
+        }
         if (stoppedForThePlan && (!withdrawn.isEmpty() || !stopped.isEmpty())) {
             log.warn("Task '{}': a verified candidate failed only on the task's own protected "
                 + "acceptance test, which needs a type a task not yet run writes. No other "
@@ -1587,7 +1689,7 @@ public class SwarmEngineImpl implements SwarmEngine {
      * passed" is a fact about the run - and its worktree is removed here, since the task's own
      * clean-up has already been and gone.
      */
-    private void endedBehindItsTask(Task task, WorkerResult result) {
+    private void endedBehindItsTask(Task task, WorkerResult result, KillReason why) {
         CandidateSolution candidate = result.candidate();
         if (candidate.state() == CandidateState.SURVIVED) {
             // It finished in the very turn it was told to stop. Nobody verified it and nobody
@@ -1595,7 +1697,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             candidate = new CandidateSolution(candidate.id(), candidate.taskId(),
                 candidate.workerIndex(), candidate.branch(), candidate.sampling(),
                 candidate.diffUnified(), null, null, null, CandidateState.KILLED,
-                KillReason.SUPERSEDED).carryingAuditFrom(candidate);
+                why).carryingAuditFrom(candidate);
         }
         log.info("Task '{}': worker {} ended behind its task ({}) and is archived as that.",
             task.title(), candidate.workerIndex(),
@@ -1641,6 +1743,8 @@ public class SwarmEngineImpl implements SwarmEngine {
                 + "dispatching again", task.title());
             return null;
         }
+        // An ended build starts no candidate (section 110).
+        stopIfEnded(runId, "before task '" + task.title() + "' was dispatched");
         log.info("Processing task: {}", task.title());
 
         List<WorkerResult> allResults = Collections.synchronizedList(new ArrayList<>());
@@ -1683,6 +1787,7 @@ public class SwarmEngineImpl implements SwarmEngine {
             // records that the task needs no change. Red: the candidate carries the report, and
             // everything below reads what was measured.
             CandidateSolution unchanged = null;
+            stopIfEnded(runId, "after the first candidates of task '" + task.title() + "'");
             if (survivors.isEmpty()) {
                 failIfLostToOutage(task, verified);
                 unchanged = measureUnchangedTree(task, runId, startPoint, verified, allResults,
@@ -1804,9 +1909,11 @@ public class SwarmEngineImpl implements SwarmEngine {
                     archiveCandidates(archivePool, null);
                     return null;
                 }
+                stopIfEnded(runId, "before the repair round of task '" + task.title() + "'");
                 final long repairStarted = System.currentTimeMillis();
                 List<CandidateSolution> repaired = repairRound(task, runId, verified, allResults,
                     knowledgeBrief, guidelines, guidelineChecks);
+                stopIfEnded(runId, "after the repair round of task '" + task.title() + "'");
                 com.swarmcoder.inference.RunMeter.span("repair round|" + task.id(), repairStarted);
                 archivePool.addAll(repaired);
                 survivors = filterSurvived(repaired);
@@ -1840,6 +1947,8 @@ public class SwarmEngineImpl implements SwarmEngine {
                 }
             }
 
+            // The judge is a model: an ended build does not ask it.
+            stopIfEnded(runId, "before the candidates of task '" + task.title() + "' were judged");
             return finishTask(task, runId, survivors, archivePool, knowledgeBrief, guidelines,
                 guidelineChecks, allResults);
         } finally {
@@ -1992,6 +2101,12 @@ public class SwarmEngineImpl implements SwarmEngine {
         // and the difference is the whole of what the operator was missing.
         markTaskState(task, TaskState.REPAIRING);
         GroupSignal signal = new GroupSignal();
+        // Stopped with the build when it is ended from outside (section 110).
+        repairSignalsOfRun.computeIfAbsent(runId,
+            id -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(signal);
+        if (runEnded(runId)) {
+            signal.stop(KillReason.BUILD_ENDED);
+        }
         List<CandidateSolution> repaired = Collections.synchronizedList(new ArrayList<>());
         // Repair workers are workers: the rules for the task's part of the project (section 65).
         String workerRulesText = rulesForWorkersOf(task, guidelines);
@@ -2021,6 +2136,9 @@ public class SwarmEngineImpl implements SwarmEngine {
                             return; // never started: its round was over first
                         }
                         allResults.add(result);
+                        if (signal.reason() == KillReason.BUILD_ENDED) {
+                            return; // an ended build verifies nothing (section 110)
+                        }
                         CandidateSolution candidate = verifyOne(task, runId, result, guidelineChecks);
                         round.verdict();
                         repaired.add(candidate);
@@ -2047,6 +2165,10 @@ public class SwarmEngineImpl implements SwarmEngine {
                     all.get(ROUND_LOOKS_AGAIN_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
                     break;
                 } catch (java.util.concurrent.TimeoutException notYet) {
+                    if (signal.reason() == KillReason.BUILD_ENDED || runEnded(runId)) {
+                        signal.stop(KillReason.BUILD_ENDED);
+                        break; // the join below waits for the workers' threads to end
+                    }
                     long perTurn = pace.millisPerTurn();
                     RepairRound.Ended why = round.due(perTurn);
                     if (why == null) {
@@ -2086,6 +2208,10 @@ public class SwarmEngineImpl implements SwarmEngine {
             }
             all.join();
         } finally {
+            repairSignalsOfRun.computeIfPresent(runId, (id, signals) -> {
+                signals.remove(signal);
+                return signals.isEmpty() ? null : signals;
+            });
             // Said for every round, however it ended (section 91): places, workers, turns,
             // minutes and why.
             RepairRound.Outcome outcome = round.finished(!filterSurvived(repaired).isEmpty());
@@ -3964,7 +4090,8 @@ public class SwarmEngineImpl implements SwarmEngine {
         brief.append("\nRe-decompose the task, fix the environment, or adjust the acceptance tests, "
             + "then re-run (spec §11.5).");
 
-        if (com.swarmcoder.store.SupersededRuns.isSuperseded(artifactStore, runId)) {
+        if (com.swarmcoder.store.SupersededRuns.isSuperseded(artifactStore, runId)
+                || com.swarmcoder.store.SupersededRuns.endedInStore(artifactStore, runId)) {
             // The story was sent back or started again while this build was still working: an
             // earlier build asks nothing.
             log.info("Task '{}': run {} is an earlier build of its story — its question is not "
