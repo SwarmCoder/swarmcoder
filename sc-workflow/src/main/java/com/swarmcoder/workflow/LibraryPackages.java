@@ -71,6 +71,16 @@ final class LibraryPackages {
      */
     record Found(String name, String artifact, List<String> declaredBy) {}
 
+    /**
+     * The test framework the product's acceptance tests are written in: the test author is told
+     * to write JUnit 5 tests and to assert with JUnit's own {@code Assertions}. Each entry is the
+     * artifact whose jar holds the packages a test imports, and the artifact a build file
+     * declares to get it with the engine that runs it.
+     */
+    static final List<String[]> ACCEPTANCE_TEST_FRAMEWORK = List.<String[]>of(
+        new String[] {"org.junit.jupiter:junit-jupiter-api", "org.junit.jupiter:junit-jupiter"},
+        new String[] {"org.junit.jupiter:junit-jupiter-params", "org.junit.jupiter:junit-jupiter"});
+
     /** Never null; the names that are library packages, in the order given. */
     static Map<String, Found> among(Path tree, List<String> names, Path localRepository) {
         Map<String, Found> found = new LinkedHashMap<>();
@@ -120,6 +130,30 @@ final class LibraryPackages {
                 if (packages.contains(name) || dot > 0 && packages.contains(name.substring(0, dot))) {
                     found.put(name, new Found(name, artifact.getKey(),
                         List.copyOf(declaredBy.getOrDefault(artifact.getKey(), List.of()))));
+                }
+            }
+        }
+        // The framework every acceptance test is written in, which no build file may declare yet
+        // (section 111: a module's build file written before its tests, with no test dependency
+        // at all). Read from its jar like any other library, never from the names.
+        for (String[] framework : ACCEPTANCE_TEST_FRAMEWORK) {
+            Set<String> packages = null;
+            for (String name : names) {
+                if (name == null || found.containsKey(name)) {
+                    continue;
+                }
+                if (packages == null) {
+                    packages = packagesOf(jarOf(localRepository, framework[0], null));
+                }
+                int dot = name.lastIndexOf('.');
+                if (packages.contains(name) || dot > 0 && packages.contains(name.substring(0, dot))) {
+                    List<String> by = new ArrayList<>(declaredBy.getOrDefault(framework[1], List.of()));
+                    for (String pom : declaredBy.getOrDefault(framework[0], List.of())) {
+                        if (!by.contains(pom)) {
+                            by.add(pom);
+                        }
+                    }
+                    found.put(name, new Found(name, framework[1], List.copyOf(by)));
                 }
             }
         }

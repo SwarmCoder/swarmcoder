@@ -2501,6 +2501,21 @@ public class SwarmEngineImpl implements SwarmEngine {
     }
 
     /**
+     * Whether the task has a candidate with a branch to verify again: false for a task whose
+     * wave was never dispatched, such as one stopped by the check at the start of its wave
+     * (section 111). Its corrected test is then simply built against.
+     */
+    public boolean hasCandidateToReverify(Task task) {
+        for (Lazy<Object> lazy : artifactStore.root().candidateArchives.values()) {
+            if (Lazy.get(lazy) instanceof CandidateSolution candidate
+                    && task.id().equals(candidate.taskId()) && candidate.branch() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * @param blockWhenNoneSurvive true to record the task BLOCKED and raise its question when
      *                             no candidate passes the corrected test for a reason of its own
      */

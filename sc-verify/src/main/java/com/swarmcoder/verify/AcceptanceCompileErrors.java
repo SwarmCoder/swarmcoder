@@ -203,14 +203,32 @@ public final class AcceptanceCompileErrors {
      *                    be read; may be empty
      * @param moduleDir   the directory of the module the test is in, repo-relative; "" for the root
      * @param buildFile   the module's build file, repo-relative, as it appears in the write sets
-     * @param owners      every task still to run that may write {@code buildFile}, in plan order
+     * @param owners      every task still to run that may write {@code buildFile}, in plan order;
+     *                    empty when none may (section 111): the declaration is missing and is
+     *                    nobody's job yet - see {@link #undeclared()}
+     * @param artifact    {@code groupId:artifactId} of the library known to hold the package, or
+     *                    null when that is not known
      */
     public record DependencyNeed(String packageName, List<String> types, String moduleDir,
-                                 String buildFile, List<Task> owners) {
+                                 String buildFile, List<Task> owners, String artifact) {
 
         public DependencyNeed {
             types = types == null ? List.of() : List.copyOf(types);
             owners = owners == null ? List.of() : List.copyOf(owners);
+        }
+
+        public DependencyNeed(String packageName, List<String> types, String moduleDir,
+                              String buildFile, List<Task> owners) {
+            this(packageName, types, moduleDir, buildFile, owners, null);
+        }
+
+        /**
+         * True when the package belongs to a known library and no task still to run may write
+         * the build file of the test's module (section 111). The test's lines are not what is
+         * wrong; a build declaration is missing, and the caller decides who may add it.
+         */
+        public boolean undeclared() {
+            return owners.isEmpty();
         }
     }
 
@@ -241,6 +259,54 @@ public final class AcceptanceCompileErrors {
         /** True when at least one error in the test files is one no task can ever fix. */
         public boolean isBroken() {
             return !broken.isEmpty();
+        }
+
+        /**
+         * The missing library declarations no task still to run may add (section 111). Their
+         * errors are not in {@link #broken}: the test's lines are right, and the build file of
+         * its module is short of a dependency. A caller that does not act on these has a test
+         * that will not compile for any candidate.
+         */
+        public List<DependencyNeed> undeclared() {
+            return dependencyNeeds.stream().filter(DependencyNeed::undeclared).toList();
+        }
+
+        /**
+         * This reading with every {@link #undeclared()} need's missing-package errors counted as
+         * broken, each saying which build file lacks which library: for a caller that could not
+         * give anybody that build file. Unchanged when there is no such need.
+         *
+         * @param grantable the build files the caller can still give the task; their needs stay
+         *                  healthy
+         */
+        public Reading withUndeclaredAsBroken(Collection<String> grantable) {
+            List<DependencyNeed> undeclared = undeclared().stream()
+                .filter(need -> grantable == null || !grantable.contains(need.buildFile()))
+                .toList();
+            if (undeclared.isEmpty()) {
+                return this;
+            }
+            List<Broken> all = new ArrayList<>(broken);
+            for (CompileError error : inTestFiles) {
+                if (error.kind() != Kind.MISSING_PACKAGE) {
+                    continue;
+                }
+                for (DependencyNeed need : undeclared) {
+                    if (need.packageName().equals(error.owner())) {
+                        all.add(new Broken(error, "`" + need.packageName() + "` is a package of "
+                            + (need.artifact() == null ? "a library" : "the library "
+                                + need.artifact())
+                            + ", not a type a task delivers. " + need.buildFile() + ", the build "
+                            + "file of the module the test is in, does not declare it, and no task "
+                            + "still to run may write that file: a build declaration is missing. "
+                            + "Either that file must declare the library, or the test must not "
+                            + "use it"));
+                        break;
+                    }
+                }
+            }
+            return new Reading(inTestFiles, all, dependencyNeeds.stream()
+                .filter(need -> !undeclared.contains(need)).toList());
         }
 
         /**
@@ -501,6 +567,43 @@ public final class AcceptanceCompileErrors {
                                    PlannedChanges changes, Function<CompileError, String> sourceLine,
                                    Predicate<String> sourceInProject,
                                    BiPredicate<String, String> packageInModule) {
+        return classify(output, testFiles, stillToRun, changes, sourceLine, sourceInProject,
+            packageInModule, null);
+    }
+
+    /**
+     * {@link #classify(String, Collection, List, PlannedChanges, Function, Predicate, BiPredicate)},
+     * also told which missing packages belong to a known library (section 111).
+     *
+     * <p><b>Why (live local build, 2026-10-14).</b> A server task's test imported JUnit and two
+     * libraries its module's build file did not declare. The task wrote the whole
+     * {@code src/main/java} of the module, so "could a task create package
+     * {@code org.junit.jupiter.api}?" answered yes by the fail-open reading of a source root, and
+     * the missing-dependency rescue was skipped. What was left were javac's follow-on errors:
+     * every name imported from those packages "not imported", and the static imports from them
+     * "static import only from classes and interfaces", read as a misuse of code that exists. The
+     * run parked with "everything this line names already exists". Now:
+     * <ul>
+     *   <li>a missing package a known library holds is a missing build declaration, never a type a
+     *       task creates, whatever a write set may hold. When no task still to run may write the
+     *       build file it is still not a broken test: it is a {@link DependencyNeed} with no owner,
+     *       {@link Reading#undeclared()}, for the caller to give to somebody;</li>
+     *   <li>every error that follows from a missing package - another error on the same import
+     *       line, a name imported from it, a member statically imported from it - takes that
+     *       package's verdict. When the package is not broken neither are they; when it is, they
+     *       say they follow from it, and are never called a misuse of something that exists.</li>
+     * </ul>
+     * Same line means the compiler's file and line, both read from its structured location, not
+     * from the words of the message.
+     *
+     * @param libraryArtifact a missing package to the {@code groupId:artifactId} of a library that
+     *                        holds it, or null when no known library does; null means "not known"
+     */
+    public static Reading classify(String output, Collection<String> testFiles, List<Task> stillToRun,
+                                   PlannedChanges changes, Function<CompileError, String> sourceLine,
+                                   Predicate<String> sourceInProject,
+                                   BiPredicate<String, String> packageInModule,
+                                   Function<String, String> libraryArtifact) {
         List<CompileError> inTests = new ArrayList<>();
         for (CompileError error : parse(output)) {
             if (inTestFiles(error.file(), testFiles)) {
@@ -511,7 +614,7 @@ public final class AcceptanceCompileErrors {
         PlannedChanges planned = changes == null ? PlannedChanges.NONE : changes;
         Set<CompileError> supplied = new LinkedHashSet<>();
         List<DependencyNeed> needs = dependencyNeeds(inTests, testFiles, tasks, planned, sourceLine,
-            packageInModule, supplied);
+            packageInModule, libraryArtifact, supplied);
         // Types the compiler could not find and a task will create. javac reports the import, and
         // then every static use of the type (`Qso_Rules.validate(..)`) as a missing VARIABLE of
         // the test class; that second error is the same absence, not a second fault.
@@ -522,39 +625,170 @@ public final class AcceptanceCompileErrors {
                 pendingTypes.add(error.symbolName());
             }
         }
-        List<Broken> broken = new ArrayList<>();
+        Map<CompileError, String> verdicts = new LinkedHashMap<>();
         for (CompileError error : inTests) {
             if (supplied.contains(error)) {
+                verdicts.put(error, null);
                 continue;
             }
             if (error.kind() == Kind.UNRESOLVED_NAME && pendingTypes.contains(error.symbolName())) {
+                verdicts.put(error, null);
                 continue;
             }
-            String why = null;
-            if (error.kind() == Kind.MISSING_MEMBER) {
-                boolean noSourceHere = hasNoSourceHere(error.owner(), sourceInProject);
-                if (memberDeliverable(error.owner(), tasks, !noSourceHere)) {
-                    continue; // a task delivers or writes that type: it may add the member
-                }
-                if (noSourceHere) {
-                    if (writesBeside(error.owner(), tasks)) {
-                        // No hand-written source, in a package a task writes a file in: a type
-                        // the build generates from that file (harness run 72: Qso_Rules, made
-                        // from Qso). Whether the task's change gives it the member is not
-                        // something a reading of the compiler's words can establish.
-                        continue;
-                    }
-                    why = libraryOwner(error);
-                }
-            }
-            if (why == null) {
-                why = whyNoTaskCanFix(error, tasks, planned, sourceLine);
-            }
-            if (why != null) {
-                broken.add(new Broken(error, why));
+            verdicts.put(error, ownVerdict(error, tasks, planned, sourceLine, sourceInProject));
+        }
+        followMissingPackages(inTests, verdicts, sourceLine, supplied);
+        List<Broken> broken = new ArrayList<>();
+        for (Map.Entry<CompileError, String> verdict : verdicts.entrySet()) {
+            if (verdict.getValue() != null) {
+                broken.add(new Broken(verdict.getKey(), verdict.getValue()));
             }
         }
         return new Reading(inTests, broken, needs);
+    }
+
+    /** Null when some task still to run can make this one error go away; otherwise why none can. */
+    private static String ownVerdict(CompileError error, List<Task> tasks, PlannedChanges planned,
+                                     Function<CompileError, String> sourceLine,
+                                     Predicate<String> sourceInProject) {
+        String why = null;
+        if (error.kind() == Kind.MISSING_MEMBER) {
+            boolean noSourceHere = hasNoSourceHere(error.owner(), sourceInProject);
+            if (memberDeliverable(error.owner(), tasks, !noSourceHere)) {
+                return null; // a task delivers or writes that type: it may add the member
+            }
+            if (noSourceHere) {
+                if (writesBeside(error.owner(), tasks)) {
+                    // No hand-written source, in a package a task writes a file in: a type
+                    // the build generates from that file (harness run 72: Qso_Rules, made
+                    // from Qso). Whether the task's change gives it the member is not
+                    // something a reading of the compiler's words can establish.
+                    return null;
+                }
+                why = libraryOwner(error);
+            }
+        }
+        if (why == null) {
+            why = whyNoTaskCanFix(error, tasks, planned, sourceLine);
+        }
+        return why;
+    }
+
+    /** {@code import [static] a.b.C[.m|.*];}: group 1 the word static, 2 the name, 3 the wildcard. */
+    private static final Pattern ANY_IMPORT =
+        Pattern.compile("^\\s*import\\s+(static\\s+)?([\\w.]+?)(\\.\\*)?\\s*;.*$");
+
+    /**
+     * Gives every error that FOLLOWS from a missing package that package's verdict (section 111).
+     * javac reports a package it cannot find on the import line, and then, as errors of their own:
+     * a second error on that same line ({@code static import only from classes and interfaces}
+     * for a static import), every use of a type imported from it, and every use of a member
+     * statically imported from it. None of those is a separate fault. When the package is a
+     * dependency somebody can declare, none of them is broken; when the package is broken, each
+     * says it follows from it. When a task may still create the package, a second error on its
+     * import line is not broken either, and a name imported from it keeps its own verdict - the
+     * plan must deliver that name (a mistyped sub-package of the module's own code stays broken),
+     * but is never called "not imported". A misuse error on a line that also carries an absence
+     * of any kind is treated the same way: nothing on that line has been shown to exist.
+     */
+    private static void followMissingPackages(List<CompileError> inTests,
+                                              Map<CompileError, String> verdicts,
+                                              Function<CompileError, String> sourceLine,
+                                              Set<CompileError> supplied) {
+        // file -> name -> the missing-package errors it was imported through
+        Map<String, Map<String, List<CompileError>>> imported = new LinkedHashMap<>();
+        Map<String, List<CompileError>> staticWildcards = new LinkedHashMap<>();
+        Map<String, List<CompileError>> typeWildcards = new LinkedHashMap<>();
+        for (CompileError error : inTests) {
+            if (error.kind() != Kind.MISSING_PACKAGE || error.owner() == null) {
+                continue;
+            }
+            String src = sourceLine == null ? null : sourceLine.apply(error);
+            Matcher imp = src == null ? null : ANY_IMPORT.matcher(src);
+            if (imp == null || !imp.matches()) {
+                continue;
+            }
+            boolean isStatic = imp.group(1) != null;
+            boolean wildcard = imp.group(3) != null;
+            String name = imp.group(2);
+            String pkg = error.owner();
+            if (name.equals(pkg)) {
+                if (wildcard && !isStatic) {
+                    typeWildcards.computeIfAbsent(error.file(), k -> new ArrayList<>()).add(error);
+                }
+                continue;
+            }
+            if (!name.startsWith(pkg + ".")) {
+                continue;
+            }
+            String[] rest = name.substring(pkg.length() + 1).split("\\.");
+            Map<String, List<CompileError>> names =
+                imported.computeIfAbsent(error.file(), k -> new LinkedHashMap<>());
+            names.computeIfAbsent(rest[0], k -> new ArrayList<>()).add(error);
+            if (isStatic && wildcard) {
+                staticWildcards.computeIfAbsent(error.file(), k -> new ArrayList<>()).add(error);
+            } else if (isStatic && rest.length > 1) {
+                names.computeIfAbsent(rest[rest.length - 1], k -> new ArrayList<>()).add(error);
+            }
+        }
+        for (CompileError error : inTests) {
+            if (verdicts.get(error) == null) {
+                continue; // already not broken: nothing to explain
+            }
+            List<CompileError> causes = new ArrayList<>();
+            for (CompileError other : inTests) {
+                if (other != error && other.line() > 0 && other.line() == error.line()
+                        && other.file().equals(error.file()) && isAbsence(other.kind())
+                        && (other.kind() == Kind.MISSING_PACKAGE || error.kind() == Kind.MISUSE)) {
+                    causes.add(other);
+                }
+            }
+            if (error.kind() == Kind.UNRESOLVED_NAME && error.symbolName() != null) {
+                causes.addAll(imported.getOrDefault(error.file(), Map.of())
+                    .getOrDefault(error.symbolName(), List.of()));
+                if (isTypeWord(error.symbolKind())) {
+                    causes.addAll(typeWildcards.getOrDefault(error.file(), List.of()));
+                } else {
+                    causes.addAll(staticWildcards.getOrDefault(error.file(), List.of()));
+                }
+            }
+            if (causes.isEmpty()) {
+                continue;
+            }
+            CompileError brokenCause = null;
+            CompileError healthyCause = null;
+            boolean anySupplied = false;
+            for (CompileError cause : causes) {
+                if (supplied.contains(cause)) {
+                    anySupplied = true;
+                } else if (verdicts.get(cause) == null) {
+                    healthyCause = healthyCause == null ? cause : healthyCause;
+                } else if (brokenCause == null) {
+                    brokenCause = cause;
+                }
+            }
+            if (anySupplied || healthyCause != null && error.kind() == Kind.MISUSE) {
+                // A dependency somebody can declare explains everything that follows from it.
+                // A package a task may still create explains a second error on its own import
+                // line, and not by itself a name the plan delivers nowhere.
+                verdicts.put(error, null);
+            } else if (healthyCause != null) {
+                verdicts.put(error, "`" + error.symbolName() + "` is imported from `"
+                    + healthyCause.owner() + "` (line " + healthyCause.line() + "), a package "
+                    + "the compiler could not find on this module's classpath. No library a build "
+                    + "file of this tree declares holds it, and nothing in this plan delivers a "
+                    + "type or member of that name there");
+            } else {
+                verdicts.put(error, "this follows from line " + brokenCause.line() + " ("
+                    + brokenCause.message() + "): the compiler could not find what this line "
+                    + "names, so it is not a misuse of anything that exists - put that right and "
+                    + "this error goes with it");
+            }
+        }
+    }
+
+    private static boolean isAbsence(Kind kind) {
+        return kind != Kind.MISUSE;
     }
 
     private static final String[] BUILD_FILE_NAMES = {"pom.xml", "build.gradle", "build.gradle.kts"};
@@ -564,7 +798,7 @@ public final class AcceptanceCompileErrors {
 
     /** One need while it is being collected: its types grow as more imports are read. */
     private record Collected(String packageName, Set<String> types, String moduleDir,
-                             String buildFile, List<Task> owners) {}
+                             String buildFile, List<Task> owners, String artifact) {}
 
     /**
      * The dependencies the test's missing packages are, and (in {@code supplied}) every error they
@@ -574,7 +808,7 @@ public final class AcceptanceCompileErrors {
     private static List<DependencyNeed> dependencyNeeds(List<CompileError> inTests,
             Collection<String> testFiles, List<Task> tasks, PlannedChanges planned,
             Function<CompileError, String> sourceLine, BiPredicate<String, String> packageInModule,
-            Set<CompileError> supplied) {
+            Function<String, String> libraryArtifact, Set<CompileError> supplied) {
         Map<String, Collected> byKey = new LinkedHashMap<>();
         Map<String, Set<String>> importedByFile = new LinkedHashMap<>();
         Set<String> wildcardFiles = new LinkedHashSet<>();
@@ -582,7 +816,11 @@ public final class AcceptanceCompileErrors {
             if (error.kind() != Kind.MISSING_PACKAGE || error.owner() == null) {
                 continue;
             }
-            if (whyNoTaskCanFix(error, tasks, planned, sourceLine) == null) {
+            // A package a known library holds is a build declaration, never a type a task creates,
+            // whatever a write set may hold (section 111: a task owning a whole source root read
+            // as able to create org.junit.jupiter.api).
+            String artifact = libraryArtifact == null ? null : libraryArtifact.apply(error.owner());
+            if (artifact == null && whyNoTaskCanFix(error, tasks, planned, sourceLine) == null) {
                 continue; // a task already creates it: nothing to rescue
             }
             String testFile = testFileOf(error.file(), testFiles);
@@ -590,7 +828,8 @@ public final class AcceptanceCompileErrors {
             if (moduleDir == null) {
                 continue;
             }
-            if (packageInModule != null && packageInModule.test(moduleDir, error.owner())) {
+            if (artifact == null && packageInModule != null
+                    && packageInModule.test(moduleDir, error.owner())) {
                 continue;
             }
             String buildFile = null;
@@ -607,7 +846,12 @@ public final class AcceptanceCompileErrors {
                 }
             }
             if (buildFile == null) {
-                continue;
+                if (artifact == null) {
+                    continue;
+                }
+                // Nobody still to run may write it: an undeclared dependency, not a broken test.
+                // Known libraries are read from Maven build files only (LibraryPackages).
+                buildFile = moduleDir.isEmpty() ? "pom.xml" : moduleDir + "/pom.xml";
             }
             supplied.add(error);
             String src = sourceLine == null ? null : sourceLine.apply(error);
@@ -626,7 +870,8 @@ public final class AcceptanceCompileErrors {
             }
             final String file = buildFile;
             Collected entry = byKey.computeIfAbsent(error.owner() + "|" + file,
-                k -> new Collected(error.owner(), new LinkedHashSet<>(), moduleDir, file, owners));
+                k -> new Collected(error.owner(), new LinkedHashSet<>(), moduleDir, file, owners,
+                    artifact));
             if (imported != null) {
                 entry.types().add(imported);
             }
@@ -644,7 +889,7 @@ public final class AcceptanceCompileErrors {
         List<DependencyNeed> needs = new ArrayList<>();
         for (Collected c : byKey.values()) {
             needs.add(new DependencyNeed(c.packageName(), List.copyOf(c.types()), c.moduleDir(),
-                c.buildFile(), c.owners()));
+                c.buildFile(), c.owners(), c.artifact()));
         }
         return needs;
     }

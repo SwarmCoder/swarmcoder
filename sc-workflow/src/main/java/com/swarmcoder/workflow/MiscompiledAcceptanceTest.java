@@ -20,6 +20,7 @@ package com.swarmcoder.workflow;
 import com.swarmcoder.domain.ApiContract;
 import com.swarmcoder.domain.Task;
 import com.swarmcoder.knowledge.ContractDelivery;
+import com.swarmcoder.knowledge.DeclarableArtifacts;
 import com.swarmcoder.knowledge.JavaSourceFacts;
 import com.swarmcoder.knowledge.LibraryTypes;
 import com.swarmcoder.knowledge.ProjectTypes;
@@ -84,12 +85,47 @@ final class MiscompiledAcceptanceTest {
      */
     static Reading read(Path tree, String compileOutput, Collection<String> testPaths,
                         List<Task> stillToRun) {
+        return read(tree, compileOutput, testPaths, stillToRun,
+            DeclarableArtifacts.defaultLocalRepository());
+    }
+
+    /**
+     * As {@link #read(Path, String, Collection, List)}, with the local Maven repository the jars of
+     * known libraries are read from (section 111): a missing package one of them holds is a
+     * missing build declaration, not a type a task creates. Null reads no library.
+     */
+    static Reading read(Path tree, String compileOutput, Collection<String> testPaths,
+                        List<Task> stillToRun, Path localRepository) {
         if (compileOutput == null || compileOutput.isBlank()) {
             return new Reading(List.of(), List.of());
         }
         return AcceptanceCompileErrors.classify(compileOutput, testPaths, stillToRun,
             plannedChanges(tree, stillToRun), sourceLines(tree, testPaths), sourceInTree(tree),
-            packageInModule(tree));
+            packageInModule(tree), libraryArtifact(tree, localRepository));
+    }
+
+    /**
+     * A missing package to the {@code groupId:artifactId} of the library that holds it, read by
+     * {@link LibraryPackages} from the tree's build files and the local repository's jars; null
+     * for a package no known library holds. Null altogether when there is nothing to read.
+     */
+    static Function<String, String> libraryArtifact(Path tree, Path localRepository) {
+        if (tree == null || localRepository == null || !Files.isDirectory(tree)
+                || !Files.isDirectory(localRepository)) {
+            return null;
+        }
+        Map<String, String> known = new java.util.HashMap<>();
+        return pkg -> {
+            if (pkg == null || pkg.isBlank()) {
+                return null;
+            }
+            if (!known.containsKey(pkg)) {
+                LibraryPackages.Found found =
+                    LibraryPackages.among(tree, List.of(pkg), localRepository).get(pkg);
+                known.put(pkg, found == null ? null : found.artifact());
+            }
+            return known.get(pkg);
+        };
     }
 
     /**
