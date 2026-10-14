@@ -91,8 +91,8 @@ class AWorkerUsesTheLanguageServerTest {
         List<String> names = new WorkerToolbox(checkout, task(), withServer).bindings().stream()
             .map(ToolBinding::name).toList();
 
-        assertThat(names.subList(0, 23)).containsExactly("acceptance_test", "shape_of", "body_of", "types_in",
-            "usages_of", "build_of", "resources_of", "implementations_of", "supertypes_of", "callers_of",
+        assertThat(names.subList(0, 24)).containsExactly("acceptance_test", "shape_of", "body_of", "types_in",
+            "usages_of", "build_of", "offline_artifacts", "resources_of", "implementations_of", "supertypes_of", "callers_of",
             "find_symbol", "doc_of", "problems_in", "rename_symbol", "organize_imports",
             "doc_outline", "doc_section", "doc_search", "replace_member", "add_member", "remove_member",
             "exec",
