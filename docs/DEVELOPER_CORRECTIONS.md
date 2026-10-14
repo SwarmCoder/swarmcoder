@@ -10780,3 +10780,91 @@ library type nobody asks for is not. Run with it and unchanged:
   that adds such a class with no annotation named in its task can still be sent back there.
 - The repeated-stop sentence has no test; it is one comparison.
 - Nothing was run against a model. The full test suite was not run; the classes above were.
+
+## 104. A final integration taken up after a restart called three merges "verified green" in three seconds and then stopped the story for want of proof (live local build, 2026-10-14)
+
+**What happened.** A build stood at FINAL_INTEGRATION with a question open. The application
+was restarted, and `RunResumer` took the run up at that stage. Within three seconds the
+integration was made again from the run's tests commit, three tasks were merged, each was
+logged "integration verified green", and the run was reported integrated. Then: "criterion
+R1:C1 UNKNOWN [no acceptance results were reported]", the story BLOCKED, the build ended, and
+"Why no result exists: no verification of a merged tree was made in this build." A real
+verification of that project takes minutes.
+
+**What was looked for and is not there.** A kept verdict. Nothing in `FinalIntegrator`,
+`GreenfieldWorkflow`, `RunResumer` or `CommandPipelineVerifier` keeps a verification result
+by tree or by commit, in memory or in the store. A resumed stage does not reuse anything: it
+cuts the integration branch again and calls the verification after every merge, as a first
+pass does. So no verdict was restored without its results.
+
+**The cause.** `FinalIntegrator.verifyIntegration` began with: no verification contract
+(`.swarmcoder/verify.yaml`) can be read, so return "no report, no failure". That is the
+allowance of milestone 1 for a project that has no contract. It asked nothing about what the
+run had to prove. It is the only way that method returns without building anything, and the
+only way the stage can end with no report, which is what the delivery's own sentence says
+happened. Three things followed from it:
+
+1. The line "integration verified green" was written after every merge whether or not a
+   verification had been made.
+2. The result carried no report. The delivery decision then falls back to the chosen
+   candidates' own reports; these were absent too, so every criterion had nothing to be read
+   from.
+3. The stage counted as passed, so the run went on to the delivery decision, which ended the
+   build. A build that has ended is not taken up again.
+
+`VerifySpecLoader.load` also answers "no contract" for a file that is there and does not
+parse. A contract with a mistake in it switched verification off in the same way.
+
+**Not established.** Why the contract could not be read at that moment in the live build, and
+why the chosen candidates had no reports of their own. The contract is read from the
+project's own checkout first and from the integration tree second, and it does not have to be
+committed, so a checkout that lost the file between the two passes gives exactly this. The
+live build's log was not available to this change. The fix does not depend on the answer.
+
+**The decision: verify again, never restore.** A resumed final integration is made from the
+start and verified in full, which is what the code already did when it could. Keeping the
+earlier report with a verdict and restoring it for an identical tree was the alternative. It
+needs a persisted report per tree, a proof that the tree, the contract, the tests due and the
+baseline are all the same, and a rule for when they are not; it saves minutes at one stage
+per restart. Running again needs none of that and cannot be wrong about what it stands on.
+
+**The fix.**
+
+- `FinalIntegrator.verifyIntegration`: when no contract can be read and proof is owed - the
+  task or tasks claim a check, or an acceptance test file is due on the tree - the merge
+  fails with "NOTHING WAS VERIFIED": where the contract was looked for and what was found at
+  each place, how many checks and which test files have no result, and what to do. The run
+  stops at FINAL_INTEGRATION with a question, as for any failed verification, and is made
+  again when it is taken up. The task is not marked done.
+- A contract file that is there and cannot be read fails the stage whatever the run claims.
+- The allowance stays for the case it was made for: no contract file anywhere, no claimed
+  check, no acceptance test due. That merge is now logged "NOT verified", at warning level.
+- `VerifySpecLoader.unreadable` and `whyNone` tell an absent file from an unreadable one.
+- The same method serves the verification of an unchanged tree (a story nothing had to be
+  built for, section 89) and the pass for tasks that needed no change; both are covered.
+
+**Tests.** `AResumedFinalIntegrationKeepsItsProofTest`: one story with one check, one task
+with a chosen candidate that has no report of its own, a run at FINAL_INTEGRATION on a real
+repository. With no contract the run stops at the stage, names the missing file, the claimed
+check and the test file, its task is not done, and nothing says a verification "was not
+made" after a delivery decision. The store is closed, a contract that does not parse is
+shown to be told from an absent one, a readable contract is written, the store is opened
+again and `RunResumer` takes the run up: the merged tree is built and tested, the story is
+delivered with one acceptance test passed, the earlier attempt is kept as a branch and no
+question is left open. Run with it and unchanged: `FinalIntegratorTest`,
+`FinalIntegrationDecidesTheStoryOutcomeTest`.
+
+**Not done, not checked.**
+
+- The other places that read the contract keep the allowance: a candidate with no contract
+  is still left unverified by the swarm engine (`SwarmEngineImpl`), the compile check between
+  waves (`WaveIntegrator`) and the delivery onto the project's branch (`StoryDelivery`) each
+  load it themselves. They do not share this code and were not changed. An unparseable
+  contract is still "no contract" to them.
+- When the file in the project's checkout does not parse, `loadTrusted` still falls back to
+  the copy in the tree being verified, which a worker can write. Final integration now
+  refuses that case; the other callers do not.
+- The contract a run was verified by is not kept with the run, so a run cannot be verified
+  after its project's contract is gone; it waits for the file instead.
+- The case "file there and unreadable, nothing claimed" has no test of its own.
+- Nothing was run against a model. The full test suite was not run; the classes above were.
