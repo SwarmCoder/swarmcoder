@@ -60,13 +60,13 @@ class WorkerScopeIsUnchangedTest {
      * 53 and 55) — none of which searches requirements.
      */
     @Test
-    void aWorkerHasElevenToolsAndNoneOfThemSearchesRequirements() {
+    void aWorkerHasTwentyFourToolsAndNoneOfThemSearchesRequirements() {
         WorkerToolbox toolbox = new WorkerToolbox(repo, task());
 
         List<String> names = toolbox.bindings().stream().map(ToolBinding::name).toList();
 
         assertThat(names).containsExactly(
-            "acceptance_test", "shape_of", "body_of", "types_in", "usages_of", "build_of", "resources_of", "doc_outline", "doc_section",
+            "acceptance_test", "shape_of", "body_of", "types_in", "usages_of", "build_of", "offline_artifacts", "resources_of", "doc_outline", "doc_section",
             "doc_search", "replace_member", "add_member", "remove_member",
             "exec", "read", "apply_diff", "write_file", "lookup_api", "ask_expert",
             "request_skeleton", "find_example", "dispute_rule", "report_done");
