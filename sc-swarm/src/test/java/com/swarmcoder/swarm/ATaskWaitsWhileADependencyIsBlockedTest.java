@@ -36,6 +36,7 @@ import com.swarmcoder.domain.WorkflowKind;
 import com.swarmcoder.git.GitService;
 import com.swarmcoder.inference.InferenceScheduler;
 import com.swarmcoder.inference.VllmClient;
+import com.swarmcoder.knowledge.ReachableCode;
 import com.swarmcoder.runtime.AgentRuntime;
 import com.swarmcoder.runtime.CloudGate;
 import com.swarmcoder.runtime.KoogAgentRuntime;
@@ -44,6 +45,8 @@ import com.swarmcoder.runtime.ModelProfileRegistry;
 import com.swarmcoder.runtime.RunMustPark;
 import com.swarmcoder.store.ArtifactStore;
 import org.eclipse.serializer.reference.Lazy;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -83,6 +86,21 @@ class ATaskWaitsWhileADependencyIsBlockedTest {
     private static final String LIST = "src/main/BookList.java";
     /** What B's test needs and nobody ever writes: B can never pass. */
     private static final String NOWHERE = "src/main/Nowhere.java";
+
+    /**
+     * The scripted workers add small classes that no entry point of this fixture uses; whether
+     * they are reachable is not what this test is about (section 62 has its own tests), and a
+     * reachability objection would raise a second question about a different task.
+     */
+    @BeforeEach
+    void reachabilityIsNotWhatThisTestIsAbout() {
+        System.setProperty(ReachableCode.SWITCH, "off");
+    }
+
+    @AfterEach
+    void reachabilityIsBackOn() {
+        System.clearProperty(ReachableCode.SWITCH);
+    }
 
     @TempDir
     Path repoDir;
