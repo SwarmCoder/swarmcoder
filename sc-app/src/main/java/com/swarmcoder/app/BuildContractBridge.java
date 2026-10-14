@@ -150,10 +150,11 @@ final class BuildContractBridge implements ConsoleContext.BuildContracts {
                 + "have one — point the project at whichever one holds the code you want changed: ")
                .append(String.join(", ", detection.subprojects())).append('.');
         }
-        out.append("\n\nYou can still start runs. What you lose is the check: with no contract, "
-            + "nothing builds or tests the attempts the swarm is choosing between, so every one "
-            + "comes back marked unverified and the winner is picked on a reading of the code "
-            + "alone. Writing .swarmcoder/verify.yaml by hand fixes that.");
+        out.append("\n\nYou can still start a build. For a Maven or Gradle project that does "
+            + "not exist yet, SwarmCoder writes the contract itself once the plan names the "
+            + "build files. For anything else, a build whose story has checks to prove stops "
+            + "before it starts any work and asks for the contract; writing "
+            + ".swarmcoder/verify.yaml by hand answers that.");
         return out.toString();
     }
 

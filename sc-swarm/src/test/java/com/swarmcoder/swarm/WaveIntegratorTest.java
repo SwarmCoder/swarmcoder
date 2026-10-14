@@ -159,6 +159,52 @@ class WaveIntegratorTest {
         }
     }
 
+    /**
+     * Section 107: the compile check between waves reads the contract by the rule of section
+     * 104. A contract file that is there and cannot be read used to count as "no contract" and
+     * the next wave was dispatched onto a tree nobody compiled.
+     */
+    @Test
+    void aContractThatCannotBeReadParksTheWaveInsteadOfPassingItUncompiled() throws Exception {
+        initRepo(false);
+        Files.writeString(repo.resolve(".swarmcoder/verify.yaml"), "compile: [\"unclosed\n");
+
+        WaveIntegrator.Result result = new WaveIntegrator(new GitService(repo)).integrateWave(
+            UUID.randomUUID(), base, List.of(winner(first), winner(second)),
+            new LinkedHashMap<>());
+
+        assertThat(result.ok()).isFalse();
+        assertThat(result.failure()).contains("NOTHING CAN BE VERIFIED")
+            .contains("is there and cannot be read");
+    }
+
+    /**
+     * The winners' branches carry a contract; the project's own folder has none. The copy on
+     * the merged tree is one a worker could have written, so it is not the contract: a winner
+     * that owes proof stops the wave, and winners that owe nothing pass as they always did.
+     */
+    @Test
+    void aContractOnlyTheMergedTreeHoldsIsNotUsedAndAWinnerOwingProofStopsTheWave()
+            throws Exception {
+        initRepo(false);
+        Files.delete(repo.resolve(".swarmcoder/verify.yaml"));
+
+        WaveIntegrator.Result owingNothing = new WaveIntegrator(new GitService(repo))
+            .integrateWave(UUID.randomUUID(), base, List.of(winner(first), winner(second)),
+                new LinkedHashMap<>());
+        assertThat(owingNothing.ok()).as(String.valueOf(owingNothing.failure())).isTrue();
+
+        first.setCriteria(List.of(new com.swarmcoder.domain.AcceptanceCriterion(
+            UUID.randomUUID(), "the first thing works", "swarm.accept.FirstTest#works")));
+        WaveIntegrator.Result owingProof = new WaveIntegrator(new GitService(repo))
+            .integrateWave(UUID.randomUUID(), base, List.of(winner(first), winner(second)),
+                new LinkedHashMap<>());
+
+        assertThat(owingProof.ok()).isFalse();
+        assertThat(owingProof.failure()).contains("There is no verification contract")
+            .contains("a copy there is never used").contains("1 check(s) are claimed");
+    }
+
     // --- the repository --------------------------------------------------------------------------
 
     /**

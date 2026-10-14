@@ -1053,7 +1053,10 @@ public class GreenfieldWorkflow {
                             continue;
                         }
                         TaskGraph candidate = result.graph();
-                        withAcceptanceTestDir(candidate, acceptance.protectedDir());
+                        // A project with no build yet: the place follows the build files this
+                        // plan names, not the repository root (section 107).
+                        withAcceptanceTestDir(candidate, ContractFromTheStart
+                            .acceptanceLocation(layout, candidate).protectedDir());
                         // What each task starts with is computed from the contracts it
                         // delivers and the project's own types, not guessed (section 73).
                         // Before validation, so what is checked is what runs.
@@ -1244,6 +1247,11 @@ public class GreenfieldWorkflow {
                 case TEST_AUTHORING -> {
                     log("Processing TEST_AUTHORING...");
                     handOverAgainOnce(run, "TEST_AUTHORING");
+                    // Before a test is written or a candidate started: the contract this
+                    // run is verified by (section 107).
+                    if (stoppedForWantOfAContract(run, "TEST_AUTHORING")) {
+                        return null; // stays in TEST_AUTHORING
+                    }
                     // The test author writes executable acceptance tests into the protected
                     // dir BEFORE any worker runs (spec §14) — committed on the run's OWN ref,
                     // swarm/tests/<runId>, cut from the pinned base. Not on the delivery branch:
@@ -1295,6 +1303,9 @@ public class GreenfieldWorkflow {
                     log("Processing EXECUTING...");
                     settleJourneyOwnersOnce(run, "EXECUTING");
                     handOverAgainOnce(run, "EXECUTING");
+                    if (!run.nothingToBuild() && stoppedForWantOfAContract(run, "EXECUTING")) {
+                        return null; // stays in EXECUTING
+                    }
                     if (run.nothingToBuild()) {
                         log("EXECUTING - nothing is built: every check of this run was already "
                             + "satisfied by the code it started from, so no worker is started. "
@@ -7200,7 +7211,8 @@ public class GreenfieldWorkflow {
             public ArchitectClient.PlanDraft planChecked(TaskGraph draft, DesignDocument design) {
                 StoryScope scope = scopeFor(run);
                 BuildLayout.Layout layout = repoLayout();
-                withAcceptanceTestDir(draft, AcceptanceTestLocation.resolve(layout).protectedDir());
+                withAcceptanceTestDir(draft,
+                    ContractFromTheStart.acceptanceLocation(layout, draft).protectedDir());
                 ComputedReservation.apply(draft, layout, repoPath);
                 BuildFilesInTheJob.expandWriteSets(draft, layout, repoPath);
                 TaskGraphValidator.Verdict verdict = connectingWhatItAdds(
@@ -7490,6 +7502,39 @@ public class GreenfieldWorkflow {
             return null;
         }
         return artifactStore.getStory(run.storyId());
+    }
+
+    /**
+     * Provides the verification contract of this run when the project has none, records which
+     * contract is in use on the run, and stops the run with a question when it owes proof and
+     * no contract can be had (section 107; see {@link ContractFromTheStart}). False when the
+     * run goes on. A run with no project folder is not looked at.
+     */
+    private boolean stoppedForWantOfAContract(Run run, String stage) {
+        if (repoPath == null || gitService == null || !gitService.isEnabled()) {
+            return false;
+        }
+        TaskGraph graph = run.taskGraphId() == null ? null
+            : artifactStore.root().taskGraphs.get(run.taskGraphId());
+        ContractFromTheStart.Gate gate = ContractFromTheStart.gate(repoPath, graph, artifactStore);
+        List<String> lines = gate.contract().describe();
+        String record = String.join("\n", lines);
+        if (!record.equals(run.verificationContract())) {
+            lines.forEach(line -> log(stage + ": " + line));
+            run.setVerificationContract(record);
+            persister.save(run);
+        }
+        if (gate.refusal() == null) {
+            return false;
+        }
+        if (hasOpenQuestion(run)) {
+            return true; // the question is already asked; the run waits for its answer
+        }
+        log(stage + " - parking run before any candidate is started: "
+            + gate.refusal().lines().findFirst().orElse(""));
+        parkRun(run, gate.refusal());
+        persister.save(run);
+        return true;
     }
 
     private void parkRun(Run run, String reason) {

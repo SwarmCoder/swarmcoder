@@ -280,9 +280,33 @@ public final class WaveIntegrator {
      * clearing is working-tree only; nothing is committed here.
      */
     private String compiles(Path worktree, List<Winner> winners) {
-        Optional<VerifySpec> spec = VerifySpecLoader.loadTrusted(git.repoPath(), worktree);
-        if (spec.isEmpty() || spec.get().compile() == null || spec.get().compile().isEmpty()) {
-            return null; // no verification contract — the same allowance as everywhere else
+        // No contract passes only when no winner owes proof, and a contract file that is there
+        // and cannot be read never passes (section 107, the rule of section 104).
+        com.swarmcoder.verify.ContractInUse contract =
+            VerifySpecLoader.inUse(git.repoPath(), worktree);
+        if (!contract.present()) {
+            int checks = 0;
+            int tests = 0;
+            for (Winner winner : winners) {
+                Task task = winner.task();
+                if (task == null) {
+                    continue;
+                }
+                checks += (int) task.criterionIds().stream().filter(java.util.Objects::nonNull)
+                    .count() + (task.criteria() == null ? 0 : task.criteria().size());
+                tests += task.authoredTestPaths().size();
+            }
+            String refusal = contract.refusal(checks, tests, "the tree this wave's winners make");
+            if (refusal == null) {
+                log.warn("The tree of this wave's winners was NOT compiled: there is no {} and "
+                    + "no winner claims a check or has an acceptance test",
+                    VerifySpecLoader.SPEC_PATH);
+            }
+            return refusal;
+        }
+        Optional<VerifySpec> spec = Optional.of(contract.spec());
+        if (spec.get().compile() == null || spec.get().compile().isEmpty()) {
+            return null; // the contract names no compile command
         }
         for (Winner winner : winners) {
             try {

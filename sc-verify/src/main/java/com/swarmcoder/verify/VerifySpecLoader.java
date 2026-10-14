@@ -44,13 +44,55 @@ public final class VerifySpecLoader {
      * against is the candidate's.
      */
     public static java.util.Optional<VerifySpec> loadTrusted(Path trustedRoot, Path workspaceRoot) {
+        // With a trusted root, that root is the only place the contract is read from (section
+        // 107). The copy in the tree being verified used to be the fallback when the trusted
+        // root had none - or had one that did not parse - and that copy is the one file a
+        // worker's own command can write. A project with no contract in its own folder has
+        // none; SwarmCoder writes one there when it can tell how the project is built.
         if (trustedRoot != null) {
-            java.util.Optional<VerifySpec> trusted = load(trustedRoot);
-            if (trusted.isPresent()) {
-                return trusted;
-            }
+            return load(trustedRoot);
         }
-        return load(workspaceRoot);
+        return workspaceRoot == null ? Optional.empty() : load(workspaceRoot);
+    }
+
+    /**
+     * The contract {@link #loadTrusted} gives, with where it came from and - when there is
+     * none - whether the file is absent or is there and cannot be read (section 107).
+     */
+    public static ContractInUse inUse(Path trustedRoot, Path workspaceRoot) {
+        Path root = trustedRoot != null ? trustedRoot : workspaceRoot;
+        String looked = whyNone(trustedRoot, workspaceRoot);
+        if (root == null) {
+            return new ContractInUse(null, null, null, null, looked);
+        }
+        String unreadable = unreadable(root);
+        if (unreadable != null) {
+            return new ContractInUse(null, null, null, unreadable, looked);
+        }
+        Optional<VerifySpec> spec = load(root);
+        if (spec.isEmpty()) {
+            return new ContractInUse(null, null, null, null, looked);
+        }
+        String basis = generatedFrom(root);
+        return new ContractInUse(spec.get(),
+            basis == null ? ContractInUse.PROJECT_FILE : ContractInUse.GENERATED, basis, null,
+            looked);
+    }
+
+    /** The key a contract SwarmCoder wrote itself carries; its value says what it was made from. */
+    public static final String GENERATED_KEY = "generated";
+
+    /** What a generated contract was generated from; null for a contract a person wrote. */
+    private static String generatedFrom(Path root) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode tree =
+                YAML.readTree(Files.readString(root.resolve(SPEC_PATH)));
+            com.fasterxml.jackson.databind.JsonNode key =
+                tree == null ? null : tree.get(GENERATED_KEY);
+            return key == null || key.isNull() || key.asText().isBlank() ? null : key.asText();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
     }
 
     /**
@@ -67,7 +109,9 @@ public final class VerifySpecLoader {
         }
         if (workspaceRoot != null && !workspaceRoot.equals(trustedRoot)) {
             why.append(why.length() == 0 ? "" : "; ").append("in the tree being verified ")
-                .append(stateOf(workspaceRoot));
+                .append(stateOf(workspaceRoot))
+                .append(trustedRoot == null ? "" : " (a copy there is never used: the code "
+                    + "being verified could have written it)");
         }
         return why.length() == 0 ? "no place to look for it was given" : why.toString();
     }
@@ -85,7 +129,9 @@ public final class VerifySpecLoader {
             return null;
         }
         try {
-            parse(Files.readString(specFile));
+            if (parse(Files.readString(specFile)) == null) {
+                return "the file holds no contract";
+            }
             return null;
         } catch (IOException | RuntimeException e) {
             String message = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -115,8 +161,8 @@ public final class VerifySpecLoader {
             return Optional.empty();
         }
         try {
-            return Optional.of(parse(Files.readString(specFile)));
-        } catch (IOException e) {
+            return Optional.ofNullable(parse(Files.readString(specFile)));
+        } catch (IOException | RuntimeException e) {
             log.warn("Unreadable {} in {}: {}", SPEC_PATH, workspaceRoot, e.getMessage());
             return Optional.empty();
         }

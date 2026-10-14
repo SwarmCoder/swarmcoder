@@ -10868,3 +10868,129 @@ question is left open. Run with it and unchanged: `FinalIntegratorTest`,
   after its project's contract is gone; it waits for the file instead.
 - The case "file there and unreadable, nothing claimed" has no test of its own.
 - Nothing was run against a model. The full test suite was not run; the classes above were.
+
+## 107. A project made over an empty folder was built to its final integration with nothing verified (live local build, 2026-10-14)
+
+**What happened.** A project was created over an empty folder and its first story built from
+nothing, which the product must support. The folder never had `.swarmcoder/verify.yaml`. The
+build ran from its plan to its final integration without one: 23 candidates were logged "no
+.swarmcoder/verify.yaml in workspace — UNVERIFIED", winners were chosen with nothing compiled
+or tested, and about 15 million tokens later the story ended "no acceptance results were
+reported". Section 104 fails the final merge in that case, which is the last stage.
+
+**What existed.** The product could already propose a contract and write it, and nothing in a
+run called it:
+
+- `ToolchainDetector` reads the build files of a folder and proposes commands;
+  `ToolchainDetector.render` writes the file's text. It is called from three places: the
+  Console's build-contract dialog (`BuildContractBridge`, through `ControlService` and
+  `BuildContractDto`), the command-line on-ramp (`OnrampCli`), and `TargetRepository.register`,
+  which only the test harness uses. Each is started by a person.
+- It reads build files. An empty folder has none, so it answers "no build file recognised"
+  and proposes nothing, by design: it never guesses.
+- Its Maven proposal has no `-o`; a hand-written contract was what recorded that.
+- Every reader of the contract takes it from the project's own folder
+  (`VerifySpecLoader.loadTrusted`), and the file there does not have to be committed
+  (`GitService.APPLICATION_FILES`).
+
+Earlier projects worked because their starting files shipped a contract written by hand.
+
+**When the contract is now provided, and why then.** Right after the plan is accepted, as the
+first thing TEST_AUTHORING does, and again as the first thing EXECUTING and the swarm engine
+do (a run taken up again, a repair round, an engine driven without the workflow).
+
+- Before the plan, the build system of an empty project is only in the design's and the
+  technical requirements' prose. Telling it from prose is a match on words.
+- The plan is the first structured statement: its tasks name the build files they create in
+  their write sets (`pom.xml`, `server/pom.xml`). A build file's name is the build system.
+- The first build file on the run's tree comes later than the red check of the acceptance
+  tests and later than the start of the first candidates. It is kept as the last resort only
+  for a run that owes nothing: at a candidate's verification, the names of the build files
+  in its tree are enough to write the contract.
+- A folder that already holds a build file decides before the plan does.
+
+**How.** `GeneratedContract` (sc-verify) holds the standard commands of Maven and Gradle as
+constants and takes only build-file names. `GeneratedContract.provide` writes the file into
+the project's own folder when there is none; a contract that is there, readable or not, is
+never replaced. No model writes any of it. The file carries a `generated:` key saying what it
+was made from. The Maven commands hold what a known-good contract recorded:
+
+- `mvn -o -B -q test-compile`, `mvn -o -B -q test -Dtest=swarm/accept/**
+  -Dsurefire.failIfNoSpecifiedTests=false`, `mvn -o -B -q test`: offline, batch, quiet,
+  acceptance tests selected by the path of the protected package, run from the repository
+  root.
+- Report directories are `{module}/target/surefire-reports` and `.../failsafe-reports`.
+  `{module}` is every directory of the tree that holds a build file at the moment the stage
+  runs (`GeneratedContract.reportDirsOn`, called by `TestStageRunner`). The modules of a
+  project built from nothing are not there when the contract is written, so they cannot be
+  listed in it.
+
+**Where the acceptance tests go.** With no build to read, they went to
+`src/test/java/swarm/accept` at the repository root. A plan that names the build files of
+several modules makes the root an aggregator, which compiles nothing; tests there are run by
+nobody. `ContractFromTheStart.acceptanceLocation` now places them from the same planned build
+files: a directory with a build file and another beneath it is an aggregator, every other is
+a module that compiles, and among several the one whose tasks come after the tasks of the
+most other modules is chosen (`AcceptanceTestLocation.resolve` on that layout). The contract
+selects by path in every module, so the two agree.
+
+**The red check on a tree with no build yet.** With a contract, the red check runs before the
+first wave on the empty start tree, where the build tool only reports that there is no build
+file. That reads as a broken machine and would stop every project built from nothing.
+`RedChecker` answers "red by construction" without running anything when the contract reads
+its reports per module and the tree's root holds no build file of its build system. A
+contract written by hand is run as before.
+
+**The gates.** One rule, in `ContractInUse.refusal`: a contract file that is there and cannot
+be read always fails; no contract passes only when no check is claimed and no acceptance test
+is due.
+
+- TEST_AUTHORING and EXECUTING (`GreenfieldWorkflow.stoppedForWantOfAContract`): the run is
+  parked at its stage with a question that says what is missing and how to supply it, before
+  a test is written or a candidate started.
+- `SwarmEngineImpl.executeWaves` (`contractGate`): the same, before the first candidate.
+- `SwarmEngineImpl.verifyFinished`: a candidate with no contract and proof owed is FAILED
+  with the reason in its report. It is never passed on unverified.
+- `WaveIntegrator.compiles` and `StoryDelivery`: the same rule. The delivery has its own
+  sentence, since "the project no longer passes" would be untrue.
+- `VerifySpecLoader.loadTrusted` reads the project's own folder and nothing else when one is
+  given. The copy in the tree being verified was the fallback when the folder had none or
+  had one that did not parse, and that copy is the one file a worker's own command can
+  write. This closes the second item section 104 left open.
+
+**What the supervisor sees.** `Run.verificationContract`: two lines, where the contract came
+from (project file, or generated and from what) and its compile, acceptance and existing
+commands. Written to the run's log when it is first known or changes, and shown in the
+supervisor's last-build line and delivery facts (`SupervisorDesk`).
+
+**Tests.** `AProjectWithNoContractIsGivenOneTest` (sc-verify),
+`AnEmptyProjectIsVerifiedFromItsFirstCandidateTest` and two cases added to
+`WaveIntegratorTest` (sc-swarm), `ARunOwingProofHasItsContractBeforeAnythingIsBuiltTest` and
+`ADeliveryIsNotMadeOnAContractThatCannotBeReadTest` (sc-workflow).
+`TestAuthoringIsRecordedPerTaskTest` and `TheTestsOfSeveralTasksAreWrittenAtTheSameTimeTest`
+ran a stage with claimed checks and no contract; their fixtures now have one.
+
+**Not done, not checked.**
+
+- Nothing was run against a model or in a container, and no generated contract has built a
+  real project. The Gradle commands are the detector's with `--offline`; they are untested.
+- The full test suite was not run. A test elsewhere that drives a run with claimed checks
+  over a repository with no contract will now stop at the gate and needs a contract in its
+  fixture.
+- A generated contract has no browser block. A story of a from-nothing project that changes
+  a screen still stops at "the contract cannot start the application".
+- `ToolchainDetector`'s own Maven proposal (the Console dialog, the on-ramp) still has no
+  `-o` and still lists report directories per module at the time it is made.
+- A plan that names no build file at all, over an empty folder, parks the run. The supervisor
+  then has to write the contract by hand; the dialog proposes nothing for an empty folder.
+- The module chosen for the acceptance tests of a planned reactor follows the order of the
+  plan's tasks, not the modules' real dependencies, which do not exist yet. When the chosen
+  module's build file does not depend on the others, the tests fail to compile there, which
+  is seen at the first verification.
+- The planner's brief still names the repository root as the acceptance module for an empty
+  project; only the directory stamped on the tasks was changed.
+- A contract that stops reading while candidates work fails those candidates and the task
+  then gets its repair round, which cannot help. The run is not parked at that moment.
+- `run_diagnosis` does not show the contract line; it reads the run through its own
+  transfer objects.
+- A run with no project folder at all is not gated, as before.

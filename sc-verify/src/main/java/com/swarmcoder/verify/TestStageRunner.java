@@ -42,7 +42,11 @@ final class TestStageRunner {
     record StageOutcome(TestResults results, boolean reportsFound, boolean infrastructureError) {}
 
     static StageOutcome run(ExecTarget target, String stage, List<String> commands,
-                            List<String> reportDirs, int timeoutSeconds, StringBuilder fullLog) {
+                            List<String> declaredReportDirs, int timeoutSeconds,
+                            StringBuilder fullLog) {
+        // A generated contract names its report directories per module; which modules there
+        // are is read from the tree now (section 107).
+        List<String> reportDirs = GeneratedContract.reportDirsOn(target, declaredReportDirs);
         try {
             for (String dir : reportDirs) {
                 target.deleteDir(dir);

@@ -135,12 +135,55 @@ public final class RedChecker {
      * {@code pkg.Class#method}; they must stay green on this tree, and a failure among them is not
      * the red the story's own tests are there to show.
      */
+    /**
+     * True when the contract is one whose test reports are read per module of the tree as it
+     * stands ({@link GeneratedContract#EVERY_MODULE} - the contract SwarmCoder writes for a
+     * project that may not exist yet) and the tree's root holds no build file of its build
+     * system. False for every other contract, and when the tree cannot be read: the stage
+     * then runs.
+     */
+    static boolean noBuildYet(ExecTarget target, VerifySpec spec) {
+        if (spec.acceptanceReportDirs().stream()
+                .noneMatch(dir -> dir != null && dir.startsWith(GeneratedContract.EVERY_MODULE))) {
+            return false;
+        }
+        String toolchain = spec.toolchain() == null ? "" : spec.toolchain().toLowerCase();
+        List<String> files = switch (toolchain) {
+            case "maven" -> List.of("pom.xml");
+            case "gradle" -> List.of("build.gradle", "build.gradle.kts", "settings.gradle",
+                "settings.gradle.kts");
+            default -> List.of();
+        };
+        if (files.isEmpty()) {
+            return false;
+        }
+        try {
+            for (String file : files) {
+                if (target.readFile(file, 1) != null) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (java.io.IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     public RedCheckResult check(ExecTarget target, VerifySpec spec,
                                 java.util.Set<String> earlierTestIds) {
         StringBuilder log = new StringBuilder();
         if (spec.acceptance() == null || spec.acceptance().isEmpty()) {
             return new RedCheckResult(false, new TestResults(0, 0, 0, 0, List.of()),
                 "no acceptance commands configured — nothing to red-check");
+        }
+        if (noBuildYet(target, spec)) {
+            // A project built from nothing (section 107): the tree holds no build file of the
+            // contract's build system, so nothing on it can compile or run a test. Every test
+            // is red for want of the whole build; running the command would only report that
+            // there is no build file, which reads like a broken machine.
+            return new RedCheckResult(true, new TestResults(0, 0, 0, 0, List.of()),
+                "the tree holds no " + spec.toolchain() + " build file yet, so no acceptance "
+                + "test can be built or pass on it - red state by construction");
         }
         TestStageRunner.StageOutcome outcome = TestStageRunner.run(target, "red-check",
             spec.acceptance(), spec.acceptanceReportDirs(), spec.effectiveTimeoutSeconds(), log);

@@ -171,6 +171,11 @@ public final class StoryDelivery {
                     + "combine them. Nothing was changed on " + base + ", and this needs a person:\n"
                     + e.getMessage());
             }
+            String noContract = contractRefusal(worktree, story);
+            if (noContract != null) {
+                return new Result(null, "the work for " + key + " was not put on " + base
+                    + ". " + noContract + " Nothing was changed on " + base + ".");
+            }
             String red = verify(worktree, story);
             if (red != null) {
                 return new Result(null, "the work for " + key + " passed on its own, but once "
@@ -209,12 +214,59 @@ public final class StoryDelivery {
         return story == null || story.key() == null ? "a story" : story.key();
     }
 
-    private String verify(Path worktree, Story story) {
-        java.util.Optional<VerifySpec> spec =
-            VerifySpecLoader.loadTrusted(git.repoPath(), worktree);
-        if (spec.isEmpty()) {
-            return null;    // no verification contract — the same allowance the integrator makes
+    /** Every task built for this story, from the store or from the plans of its runs. */
+    private List<Task> tasksOf(Story story) {
+        if (story == null) {
+            return List.of();
         }
+        List<Task> tasks = store.storyTasks(story.id());
+        if (tasks != null && !tasks.isEmpty()) {
+            return tasks;
+        }
+        List<Task> found = new java.util.ArrayList<>();
+        for (UUID runId : story.runIds()) {
+            com.swarmcoder.domain.Run run = store.root().runs.get(runId);
+            TaskGraph graph = run == null || run.taskGraphId() == null
+                ? null : store.root().taskGraphs.get(run.taskGraphId());
+            if (graph != null && graph.tasks() != null) {
+                found.addAll(graph.tasks());
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Null when the merged tree can be verified or owes nothing; otherwise why it is not
+     * delivered. The rule of section 104, here too (section 107): a contract file that is
+     * there and cannot be read never passes, and no contract passes only when the story's
+     * tasks claim no check and have no acceptance test.
+     */
+    private String contractRefusal(Path worktree, Story story) {
+        com.swarmcoder.verify.ContractInUse contract =
+            VerifySpecLoader.inUse(git.repoPath(), worktree);
+        if (contract.present()) {
+            return null;
+        }
+        int checks = 0;
+        int tests = 0;
+        for (Task task : tasksOf(story)) {
+            checks += store.describeClaimedChecks(task).size();
+            tests += task.authoredTestPaths().size();
+        }
+        return contract.refusal(checks, tests, "the delivery of " + keyOf(story),
+            "then accept the story again.");
+    }
+
+    private String verify(Path worktree, Story story) {
+        com.swarmcoder.verify.ContractInUse contract =
+            VerifySpecLoader.inUse(git.repoPath(), worktree);
+        if (!contract.present()) {
+            // contractRefusal let this through: there is no contract and nothing is owed
+            log.warn("The delivery of {} was NOT verified: there is no {} and the story claims "
+                + "no check and has no acceptance test", keyOf(story), VerifySpecLoader.SPEC_PATH);
+            return null;
+        }
+        java.util.Optional<VerifySpec> spec = java.util.Optional.of(contract.spec());
         Task subject = anyTaskOf(story);
         VerificationReport report;
         try (BuildBoxes.Box box = boxes.open(worktree, "Delivery of " + keyOf(story),
